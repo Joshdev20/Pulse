@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getToken } from './api'
+import { apiUrl, getToken } from './api'
 
 /**
  * Load protected media into a blob URL.
@@ -32,7 +32,7 @@ function filenameFrom(header: string | null): string | null {
 
 async function fetchAsset(path: string): Promise<MediaAsset> {
   const token = getToken()
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   })
   if (!response.ok) throw new Error(`Media request failed with ${response.status}`)

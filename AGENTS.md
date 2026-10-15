@@ -161,3 +161,36 @@ the public URL returns 502 until the dev server is bound to 12000.
   creation — while reads (`git ls-remote`, the API) still succeed. Install or adjust it at
   https://github.com/apps/openhands-ai/installations/new, and verify with `git push --dry-run`
   before assuming a push will work.
+- The app is split for deployment: `frontend/` on Vercel, `backend/` on a long-lived
+  container host (Render/Railway/Fly). See `docs/DEPLOY.md`. Do not put the backend on
+  Vercel: SQLite and uploads live on local disk, the rate limiter counts in process memory,
+  WebSockets are capped at 300s with no cross-instance fan-out, and the request body cap is
+  4.5 MB while uploads allow 32 MB. The Redis bus coordinates worker *processes*, not
+  unrelated serverless instances, so moving the backend there drops DMs and notifications.
+- The frontend talks to the backend through `VITE_API_BASE` (see `frontend/.env.example`).
+  Unset means same-origin, which is what the Vite dev proxy and a single-container deploy
+  need; set means absolute URLs to the API host. It is inlined by Vite at **build** time, so
+  changing it needs a rebuild. All HTTP goes through `apiUrl()` in `src/lib/api.ts` and the
+  socket derives its URL from the same variable in `RealtimeContext.tsx` — use those helpers
+  rather than hardcoding a host or path.
+- `CORS_ORIGIN_REGEX` (default `https://[a-zA-Z0-9-]+(\.vercel\.app)$`) is matched in
+  addition to `CORS_ORIGINS`, so preview deployments work without listing each hostname.
+  It is anchored, so `evil-vercel.app.attacker.com` is rejected — keep it anchored.
+- `AUTO_SEED=true` seeds demo content on first boot when the database is empty (`seed()`
+  returns early if users exist, so restarts are safe). Demo deploys only.
+- `database.py` normalizes `postgres://` and bare `postgresql://` URLs to
+  `postgresql+psycopg://`. Hosts hand out the first, SQLAlchemy 2 dropped it, and the second
+  selects psycopg2 rather than the psycopg 3 driver this project installs. It also sets
+  `pool_pre_ping` and `pool_recycle=280` for Postgres, because a pooler closes idle
+  connections and a stale one surfaces as a confusing error on the next request.
+- `manager.start()` pings Redis before starting the bus listener and leaves `_bus_active`
+  False when it is unreachable. Without that check a configured-but-absent Redis (the
+  production default is `localhost:6379`) started a listener that failed once a second and
+  logged a full traceback each time — 88 errors in 45 seconds in a container test. The
+  listener also backs off exponentially to a 30s ceiling. Keep both: a single-process hub is
+  the correct behaviour when the bus is optional and missing.
+- Uploads are written to `UPLOAD_DIR`. On a host with an ephemeral filesystem this must
+  point at a mounted volume (e.g. `/data/uploads`) or uploaded media is lost on redeploy.
+- `requirements-prod.txt` is for deployed images and excludes tests; `requirements-dev.txt`
+  extends `requirements.txt` with pytest. pip does not parse docstrings, so comments in
+  these files must start with `#` — a `"""..."""` header breaks the build.

@@ -41,8 +41,10 @@ AUTH_TIMEOUT_SECONDS = 10.0
 BUS_CHANNEL = "pulse:ws"
 PROCESS_ID = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
-# Delay before retrying a dropped bus connection.
-BUS_RETRY_SECONDS = 1.0
+# Delay before retrying a dropped bus connection, growing to a ceiling so a
+# Redis outage does not turn into a once-per-second log storm.
+BUS_RETRY_MIN_SECONDS = 1.0
+BUS_RETRY_MAX_SECONDS = 30.0
 
 
 class ConnectionManager:
@@ -50,6 +52,9 @@ class ConnectionManager:
         self._sockets: dict[int, set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
         self._bus_task: asyncio.Task | None = None
+        # Whether the cross-process bus is usable. False when Redis is not
+        # configured, or is configured but unreachable at startup.
+        self._bus_active = False
 
     async def connect(self, user_id: int, socket: WebSocket) -> None:
         """Register an already-accepted socket for ``user_id``."""
@@ -71,13 +76,40 @@ class ConnectionManager:
         return {user_id for user_id, peers in self._sockets.items() if peers}
 
     async def start(self) -> None:
-        """Begin listening on the cross-process bus. No-op without Redis."""
+        """Begin listening on the cross-process bus. No-op without Redis.
+
+        Reachability is checked once here rather than assumed. A configured but
+        absent Redis would otherwise start a listener that fails on every retry,
+        filling the log with tracebacks for a feature that is optional by
+        design; a single-process hub is the correct behaviour in that case.
+        """
         if not settings.redis_url or self._bus_task is not None:
             return
+        if not await self._bus_reachable():
+            logger.info(
+                "Redis unavailable at %s; realtime fan-out is single-process",
+                settings.redis_url,
+            )
+            return
+        self._bus_active = True
         self._bus_task = asyncio.create_task(self._listen())
+
+    async def _bus_reachable(self) -> bool:
+        try:
+            import redis.asyncio as aioredis
+
+            client = aioredis.from_url(settings.redis_url, socket_connect_timeout=0.5)
+            try:
+                await client.ping()
+                return True
+            finally:
+                await client.aclose()
+        except Exception:  # noqa: BLE001 - any failure means "treat as absent"
+            return False
 
     async def stop(self) -> None:
         """Stop the bus listener, if one is running."""
+        self._bus_active = False
         task, self._bus_task = self._bus_task, None
         if task is None:
             return
@@ -117,7 +149,7 @@ class ConnectionManager:
 
     async def _announce(self, user_id: int, payload: dict[str, Any]) -> None:
         """Put the payload on the bus for the other processes. Best-effort."""
-        if not settings.redis_url:
+        if not self._bus_active:
             return
         try:
             import redis.asyncio as aioredis
@@ -140,11 +172,14 @@ class ConnectionManager:
         """Deliver payloads announced by other processes, reconnecting on failure."""
         import redis.asyncio as aioredis
 
+        delay = BUS_RETRY_MIN_SECONDS
         while True:
             try:
                 client = aioredis.from_url(settings.redis_url, decode_responses=True)
                 pubsub = client.pubsub()
                 await pubsub.subscribe(BUS_CHANNEL)
+                # A connection that came up resets the backoff.
+                delay = BUS_RETRY_MIN_SECONDS
                 try:
                     async for message in pubsub.listen():
                         if message.get("type") != "message":
@@ -156,8 +191,9 @@ class ConnectionManager:
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - Redis may be restarting
-                logger.warning("realtime bus disconnected; retrying", exc_info=True)
-                await asyncio.sleep(BUS_RETRY_SECONDS)
+                logger.warning("realtime bus disconnected; retrying in %.1fs", delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, BUS_RETRY_MAX_SECONDS)
 
     async def _on_bus_message(self, raw: str) -> None:
         try:

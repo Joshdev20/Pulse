@@ -19,7 +19,17 @@ class Settings(BaseSettings):
     # Comma separated list of origins allowed to call the API.
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    # Match any `*.vercel.app` origin in addition to `cors_origins`. Preview
+    # deployments get a new hostname on every push, so listing them one by one
+    # is not workable; this covers the production alias and every preview.
+    cors_origin_regex: str = r"https://[a-zA-Z0-9-]+(\.vercel\.app)$"
+
+    # Seed the demo users and posts on first boot when the database is empty.
+    # Intended for a demo deploy; leave off for anything with real data.
+    auto_seed: bool = False
+
     # Uploads are written here and served back through an authenticated route.
+    # On a host with a persistent disk, point this at the mount (e.g. /data/uploads).
     upload_dir: str = "./uploads"
     max_upload_mb: int = 32
 
@@ -47,6 +57,11 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def cors_origin_pattern(self) -> str | None:
+        """The regex CORS matches in addition to the explicit origin list."""
+        return self.cors_origin_regex.strip() or None
 
 
 @lru_cache

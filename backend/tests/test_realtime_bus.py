@@ -104,3 +104,33 @@ async def test_bus_is_not_started_without_redis(manager, monkeypatch):
     monkeypatch.setattr(realtime.settings, "redis_url", None)
     await manager.start()
     assert manager._bus_task is None
+
+
+async def test_bus_is_not_started_when_redis_is_unreachable(manager, monkeypatch):
+    """A configured but absent Redis must not start a retry-forever listener.
+
+    The default configuration points at localhost:6379, so a host without Redis
+    used to spawn a listener that failed every second and logged a full
+    traceback each time, for a feature that is optional by design.
+    """
+    # Port 1 is never listening, so the connection is refused immediately.
+    monkeypatch.setattr(realtime.settings, "redis_url", "redis://127.0.0.1:1/0")
+
+    await manager.start()
+
+    assert manager._bus_task is None
+    assert manager._bus_active is False
+
+
+async def test_publish_still_works_locally_when_redis_is_unreachable(manager, monkeypatch):
+    """Delivery to local sockets must be unaffected by a missing bus."""
+    monkeypatch.setattr(realtime.settings, "redis_url", "redis://127.0.0.1:1/0")
+    await manager.start()
+
+    socket = FakeSocket()
+    await manager.connect(4, socket)
+
+    await manager.publish(4, {"type": "message", "body": "local only"})
+
+    assert len(socket.sent) == 1
+    assert json.loads(socket.sent[0])["body"] == "local only"

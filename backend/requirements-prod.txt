@@ -1,0 +1,20 @@
+# Dependency versions for a hosted deploy.
+#
+# Tests are deliberately excluded here; they live in requirements-dev.txt so the
+# deployed image stays small. pip does not understand docstrings, so comments
+# must use '#'.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+PyJWT==2.10.1
+email-validator==2.2.0
+httpx==0.28.1
+redis==8.1.0
+
+# Postgres driver for a hosted database. SQLite needs nothing extra, so this is
+# unused in local development but required when DATABASE_URL points at Postgres.
+psycopg[binary]==3.2.3
