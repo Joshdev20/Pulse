@@ -3,7 +3,7 @@ import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react
 import { AppShell } from './components/Layout'
 import { Composer } from './components/Composer'
 import { Modal, Spinner } from './components/UI'
-import { AuthProvider, useAuth } from './context/AuthContext'
+import { useAuth } from './context/AuthContext'
 import { RealtimeProvider } from './context/RealtimeContext'
 import { HomePage } from './pages/HomePage'
 import { ExplorePage } from './pages/ExplorePage'
@@ -88,49 +88,49 @@ function ComposerPage() {
 }
 
 export function App() {
+  // AuthProvider lives in main.tsx, above the router. Mounting it here too
+  // would run a second, unused session check and double every auth request.
   return (
-    <AuthProvider>
-      <Routes>
-        <Route
-          path="/login"
-          element={
-            <RedirectIfAuthed>
-              <LoginPage />
-            </RedirectIfAuthed>
-          }
-        />
-        <Route
-          path="/register"
-          element={
-            <RedirectIfAuthed>
-              <RegisterPage />
-            </RedirectIfAuthed>
-          }
-        />
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          <RedirectIfAuthed>
+            <LoginPage />
+          </RedirectIfAuthed>
+        }
+      />
+      <Route
+        path="/register"
+        element={
+          <RedirectIfAuthed>
+            <RegisterPage />
+          </RedirectIfAuthed>
+        }
+      />
 
-        {/* Everything below requires a session. */}
-        <Route element={<RequireAuth />}>
-          <Route
-            element={
-              <RealtimeProvider>
-                <Layout />
-              </RealtimeProvider>
-            }
-          >
-            <Route path="/" element={<HomePage />} />
-            <Route path="/explore" element={<ExplorePage />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/p/:postId" element={<PostDetailPage />} />
-            <Route path="/u/:username" element={<ProfilePage />} />
-            <Route path="/notifications" element={<NotificationsPage />} />
-            <Route path="/messages" element={<MessagesPage />} />
-            <Route path="/messages/:conversationId" element={<MessagesPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/compose" element={<ComposerPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Route>
+      {/* Everything below requires a session. */}
+      <Route element={<RequireAuth />}>
+        <Route
+          element={
+            <RealtimeProvider>
+              <Layout />
+            </RealtimeProvider>
+          }
+        >
+          <Route path="/" element={<HomePage />} />
+          <Route path="/explore" element={<ExplorePage />} />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/p/:postId" element={<PostDetailPage />} />
+          <Route path="/u/:username" element={<ProfilePage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
+          <Route path="/messages" element={<MessagesPage />} />
+          <Route path="/messages/:conversationId" element={<MessagesPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/compose" element={<ComposerPage />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
-      </Routes>
-    </AuthProvider>
+      </Route>
+    </Routes>
   )
 }
