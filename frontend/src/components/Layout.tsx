@@ -6,55 +6,43 @@ import {
   ComposeIcon,
   HomeIcon,
   LogoutIcon,
+  MailIcon,
   SearchIcon,
   SparkIcon,
   TrendIcon,
   UserIcon,
+  WifiOffIcon,
 } from './Icons'
 import { useAuth } from '../context/AuthContext'
+import { useRealtime, useUnreadMessages, useUnreadNotifications } from '../context/RealtimeContext'
 import { api } from '../lib/api'
 import { formatCount } from '../lib/format'
 import type { Stats, TrendingTag, User } from '../lib/types'
 
 const NAV = [
-  { to: '/', label: 'Home', icon: HomeIcon, end: true },
-  { to: '/explore', label: 'Explore', icon: SearchIcon, end: false },
-  { to: '/notifications', label: 'Notifications', icon: BellIcon, end: false, badge: true },
-  { to: '/search', label: 'Search', icon: UserIcon, end: false },
-]
+  { to: '/', label: 'Home', icon: HomeIcon, end: true, badge: null },
+  { to: '/explore', label: 'Explore', icon: SearchIcon, end: false, badge: null },
+  { to: '/notifications', label: 'Notifications', icon: BellIcon, end: false, badge: 'notifications' },
+  { to: '/messages', label: 'Messages', icon: MailIcon, end: false, badge: 'messages' },
+  { to: '/search', label: 'Search', icon: UserIcon, end: false, badge: null },
+] as const
 
-export function useUnreadCount(): number {
-  const { user } = useAuth()
-  const [count, setCount] = useState(0)
+/** Live counts for the sidebar badges, driven by realtime events. */
+function useBadges(): { notifications: number; messages: number } {
+  const { count: notifications } = useUnreadNotifications()
+  const { count: messages } = useUnreadMessages()
+  return { notifications, messages }
+}
 
-  useEffect(() => {
-    if (!user) {
-      setCount(0)
-      return
-    }
-    let active = true
-    const load = () => {
-      api
-        .unreadCount()
-        .then((result) => {
-          if (active) setCount(result.count)
-        })
-        .catch(() => undefined)
-    }
-    load()
-    const timer = window.setInterval(load, 30_000)
-    return () => {
-      active = false
-      window.clearInterval(timer)
-    }
-  }, [user])
-
-  return count
+function Badge({ value, className }: { value: number; className: string }) {
+  if (value <= 0) return null
+  return <span className={className}>{value > 99 ? '99+' : value}</span>
 }
 
 export function Sidebar({ onCompose }: { onCompose: () => void }) {
   const { user, logout } = useAuth()
-  const unread = useUnreadCount()
+  const badges = useBadges()
+  const { connected } = useRealtime()
 
   return (
     <aside className="sidebar">
@@ -67,16 +55,24 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
 
       <nav className="nav" aria-label="Primary">
         {NAV.map(({ to, label, icon: Icon, end, badge }) => (
-          <NavLink key={to} to={to} end={end} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+          >
             <span className="nav-icon">
               <Icon size={23} />
-              {badge && unread > 0 && <span className="nav-badge">{unread > 99 ? '99+' : unread}</span>}
+              {badge && <Badge value={badges[badge]} className="nav-badge" />}
             </span>
             <span>{label}</span>
           </NavLink>
         ))}
         {user && (
-          <NavLink to={`/u/${user.username}`} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+          <NavLink
+            to={`/u/${user.username}`}
+            className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+          >
             <span className="nav-icon">
               <UserIcon size={23} />
             </span>
@@ -85,11 +81,22 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
         )}
       </nav>
 
-      <button type="button" className="btn btn-primary btn-block" style={{ marginTop: 14 }} onClick={onCompose}>
+      <button
+        type="button"
+        className="btn btn-primary btn-block"
+        style={{ marginTop: 14 }}
+        onClick={onCompose}
+      >
         <ComposeIcon size={17} /> Post
       </button>
 
       <div className="sidebar-spacer" />
+
+      {!connected && (
+        <p className="conn-note" title="Live updates are paused. Pulse will reconnect automatically.">
+          <WifiOffIcon size={14} /> Reconnecting
+        </p>
+      )}
 
       {user && (
         <div className="sidebar-user">
@@ -100,7 +107,13 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
             <div className="sidebar-user-name">{user.display_name}</div>
             <div className="sidebar-user-handle">@{user.username}</div>
           </Link>
-          <button type="button" className="icon-btn danger" onClick={logout} title="Sign out" aria-label="Sign out">
+          <button
+            type="button"
+            className="icon-btn danger"
+            onClick={logout}
+            title="Sign out"
+            aria-label="Sign out"
+          >
             <LogoutIcon size={18} />
           </button>
         </div>
@@ -111,15 +124,21 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
 
 export function MobileNav() {
   const { user } = useAuth()
-  const unread = useUnreadCount()
-  const items = user ? NAV : NAV.slice(0, 2)
+  const badges = useBadges()
 
   return (
     <nav className="mobile-bar" aria-label="Primary">
-      {items.map(({ to, label, icon: Icon, end, badge }) => (
-        <NavLink key={to} to={to} end={end} className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}>
-          <Icon size={21} />
-          {badge && unread > 0 && <span className="mobile-nav-badge">{unread > 9 ? '9+' : unread}</span>}
+      {NAV.map(({ to, label, icon: Icon, end, badge }) => (
+        <NavLink
+          key={to}
+          to={to}
+          end={end}
+          className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
+        >
+          <span className="mobile-nav-icon">
+            <Icon size={21} />
+            {badge && <Badge value={badges[badge]} className="mobile-nav-badge" />}
+          </span>
           <span>{label}</span>
         </NavLink>
       ))}

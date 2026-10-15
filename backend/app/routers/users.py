@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 
 from ..deps import CurrentUser, DbSession, OptionalUser, serialize_posts, serialize_user, serialize_users
 from ..models import Comment, Follow, Like, Notification, Post, User
+from ..realtime import manager
 from ..schemas import Page, SuggestedUser, UserPublic, UserUpdate, Stats
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -127,7 +128,7 @@ def user_likes(
 
 
 @router.post("/{username}/follow", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
-def follow_user(username: str, db: DbSession, user: CurrentUser) -> UserPublic:
+async def follow_user(username: str, db: DbSession, user: CurrentUser) -> UserPublic:
     target = _get_user_or_404(db, username)
     if target.id == user.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot follow yourself")
@@ -136,7 +137,23 @@ def follow_user(username: str, db: DbSession, user: CurrentUser) -> UserPublic:
     )
     if existing is None:
         db.add(Follow(follower_id=user.id, following_id=target.id))
-        db.add(Notification(user_id=target.id, actor_id=user.id, kind="follow"))
+        notification = Notification(user_id=target.id, actor_id=user.id, kind="follow")
+        db.add(notification)
+        db.flush()
+        await manager.publish(
+            target.id,
+            {
+                "type": "notification",
+                "notification": {
+                    "id": notification.id,
+                    "kind": "follow",
+                    "read": False,
+                    "created_at": notification.created_at,
+                    "post_id": None,
+                    "actor_id": user.id,
+                },
+            },
+        )
         db.commit()
         db.refresh(target)
     return serialize_user(db, target, user)

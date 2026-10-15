@@ -8,13 +8,31 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import Follow, Like, Post, User
-from .schemas import PostOut, UserPublic
+from .models import Follow, Like, Media, Post, User
+from .schemas import MediaOut, PostOut, UserPublic
 from .security import decode_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 DbSession = Annotated[Session, Depends(get_db)]
+
+MEDIA_URL = "/api/media/{id}"
+
+
+def serialize_media(items: list[Media]) -> list[MediaOut]:
+    return [
+        MediaOut(
+            id=item.id,
+            kind=item.kind,
+            content_type=item.content_type,
+            size_bytes=item.size_bytes,
+            width=item.width,
+            height=item.height,
+            alt_text=item.alt_text,
+            url=MEDIA_URL.format(id=item.id),
+        )
+        for item in items
+    ]
 
 
 def _user_from_token(token: str, db: Session) -> User | None:
@@ -184,6 +202,7 @@ def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) 
             edited_at=post.edited_at,
             author=users[post.author_id],
             tags=post.tags,
+            media=serialize_media(post.media),
             like_count=like_counts.get(post.id, 0),
             comment_count=comment_counts.get(post.id, 0),
             liked_by_me=post.id in liked_ids,

@@ -108,6 +108,13 @@ class Post(Base):
     )
     likes: Mapped[list["Like"]] = relationship(back_populates="post", cascade="all, delete-orphan")
     tags: Mapped[list[Tag]] = relationship(secondary=post_tags, back_populates="posts", lazy="selectin")
+    media: Mapped[list["Media"]] = relationship(
+        primaryjoin="Media.post_id == Post.id",
+        foreign_keys="Media.post_id",
+        cascade="all, delete-orphan",
+        order_by="Media.id",
+        lazy="selectin",
+    )
 
 
 class Comment(Base):
@@ -153,3 +160,82 @@ class Notification(Base):
 
     user: Mapped[User] = relationship(foreign_keys=[user_id])
     actor: Mapped[User | None] = relationship(foreign_keys=[actor_id])
+
+
+class Media(Base):
+    """An uploaded file. ``stored_name`` is server-generated, never client input."""
+
+    __tablename__ = "media"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    stored_name: Mapped[str] = mapped_column(String(80), unique=True)
+    content_type: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(16))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    alt_text: Mapped[str] = mapped_column(String(280), default="")
+    post_id: Mapped[int | None] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    owner: Mapped[User] = relationship()
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Denormalised so the inbox can sort without joining every message.
+    last_message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+    participants: Mapped[list["ConversationParticipant"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan"
+    )
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan"
+    )
+
+
+class ConversationParticipant(Base):
+    __tablename__ = "conversation_participants"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "user_id", name="uq_participant"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="participants")
+    user: Mapped[User] = relationship()
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    sender_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    body: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="messages")
+    sender: Mapped[User] = relationship()
+    media: Mapped[list[Media]] = relationship(
+        primaryjoin="Media.message_id == Message.id",
+        foreign_keys="Media.message_id",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )

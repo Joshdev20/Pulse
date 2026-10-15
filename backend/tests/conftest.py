@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
+from app.middleware import RateLimitMiddleware  # noqa: E402
 
 
 @pytest.fixture
@@ -31,6 +32,11 @@ def client():
             yield db
         finally:
             db.close()
+
+    # The rate limiter is process-wide, so a shared instance would leak state
+    # between tests. Disable it here and cover it directly in test_media.py.
+    middleware = [m for m in app.user_middleware if m.cls is not RateLimitMiddleware]
+    app.user_middleware = middleware
 
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:

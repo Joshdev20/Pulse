@@ -4,7 +4,8 @@ import { PostCard } from '../components/PostCard'
 import { Avatar } from '../components/Avatar'
 import { FollowButton } from '../components/FollowButton'
 import { EditPostModal } from '../components/EditPostModal'
-import { EmptyState, ErrorState, FeedSkeleton, Spinner } from '../components/UI'
+import { EmptyState, ErrorState, FeedSkeleton } from '../components/UI'
+import { InfiniteFeed } from '../components/InfiniteFeed'
 import { SearchIcon, SparkIcon, TrendIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
@@ -53,30 +54,30 @@ export function ExplorePage() {
         <div>
           {feed.loading && <FeedSkeleton rows={5} />}
           {!feed.loading && feed.error && <ErrorState message={feed.error} onRetry={feed.reload} />}
-          {!feed.loading && !feed.error && feed.posts.length === 0 && (
-            <EmptyState
-              icon={<SparkIcon size={24} />}
-              title="Nothing here yet"
-              description="Once people start posting, their updates will show up here."
-            />
-          )}
-          {!feed.loading &&
-            feed.posts.map((post) => (
-              <PostCard
-                key={post.id}
-                post={post}
-                currentUserId={user?.id}
-                onChange={feed.replace}
-                onDeleted={feed.remove}
-                onEdit={setEditing}
-              />
-            ))}
-          {!feed.loading && feed.hasMore && (
-            <div className="load-more">
-              <button type="button" className="btn btn-secondary" disabled={feed.loadingMore} onClick={feed.loadMore}>
-                {feed.loadingMore ? <Spinner size={16} /> : 'Load more'}
-              </button>
-            </div>
+          {!feed.loading && !feed.error && (
+            <InfiniteFeed
+              hasMore={feed.hasMore}
+              loading={feed.loadingMore}
+              onLoadMore={feed.loadMore}
+              emptyState={
+                <EmptyState
+                  icon={<SparkIcon size={24} />}
+                  title="Nothing here yet"
+                  description="Once people start posting, their updates will show up here."
+                />
+              }
+            >
+              {feed.posts.map((post) => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  currentUserId={user?.id}
+                  onChange={feed.replace}
+                  onDeleted={feed.remove}
+                  onEdit={setEditing}
+                />
+              ))}
+            </InfiniteFeed>
           )}
         </div>
       )}

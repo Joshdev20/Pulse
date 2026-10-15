@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Avatar } from '../components/Avatar'
 import { EmptyState, ErrorState, FeedSkeleton } from '../components/UI'
 import { BellIcon, CommentIcon, HeartIcon, UserIcon } from '../components/Icons'
+import { useRealtime } from '../context/RealtimeContext'
 import { api } from '../lib/api'
 import { timeAgo } from '../lib/format'
 import type { Notification } from '../lib/types'
@@ -24,6 +25,7 @@ export function NotificationsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
+  const { subscribe } = useRealtime()
 
   useEffect(() => {
     let active = true
@@ -42,6 +44,19 @@ export function NotificationsPage() {
       active = false
     }
   }, [])
+
+  // A live event carries only ids, so refetch to get the actor's profile.
+  useEffect(
+    () =>
+      subscribe((event) => {
+        if (event.type !== 'notification') return
+        api
+          .notifications()
+          .then(setItems)
+          .catch(() => undefined)
+      }),
+    [subscribe],
+  )
 
   const unread = items.filter((item) => !item.read).length
 

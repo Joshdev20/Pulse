@@ -75,11 +75,25 @@ class CommentOut(BaseModel):
 
 
 class PostCreate(BaseModel):
-    body: str = Field(min_length=1, max_length=2000)
+    body: str = Field(default="", max_length=2000)
+    media_ids: list[int] = Field(default_factory=list, max_length=4)
 
 
 class PostUpdate(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
+
+
+class MediaOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    kind: str
+    content_type: str
+    size_bytes: int
+    width: int | None = None
+    height: int | None = None
+    alt_text: str = ""
+    url: str
 
 
 class PostOut(BaseModel):
@@ -91,9 +105,45 @@ class PostOut(BaseModel):
     edited_at: datetime | None
     author: UserPublic
     tags: list[TagOut] = []
+    media: list[MediaOut] = []
     like_count: int = 0
     comment_count: int = 0
     liked_by_me: bool = False
+
+
+class MessageCreate(BaseModel):
+    body: str = Field(default="", max_length=4000)
+    media_ids: list[int] = Field(default_factory=list, max_length=4)
+
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    conversation_id: int
+    body: str
+    created_at: datetime
+    sender: UserPublic
+    media: list[MediaOut] = []
+    mine: bool = False
+
+
+class ConversationOut(BaseModel):
+    id: int
+    created_at: datetime
+    last_message_at: datetime
+    partner: UserPublic
+    last_message: MessageOut | None = None
+    unread_count: int = 0
+
+
+class ConversationStart(BaseModel):
+    username: str = Field(min_length=1, max_length=32)
+
+
+class TypingEvent(BaseModel):
+    conversation_id: int
+    typing: bool = True
 
 
 class NotificationOut(BaseModel):

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Avatar } from './Avatar'
+import { MediaPicker } from './MediaPicker'
 import { SparkIcon } from './Icons'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
-import type { Post } from '../lib/types'
+import type { Media, Post } from '../lib/types'
 
 const MAX_LENGTH = 2000
 
@@ -20,6 +21,7 @@ export function Composer({
   const { user } = useAuth()
   const { notify } = useToast()
   const [body, setBody] = useState('')
+  const [attachments, setAttachments] = useState<Media[]>([])
   const [busy, setBusy] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -35,15 +37,19 @@ export function Composer({
 
   const remaining = MAX_LENGTH - body.length
   const trimmed = body.trim()
-  const canSubmit = trimmed.length > 0 && remaining >= 0 && !busy
+  const canSubmit = (trimmed.length > 0 || attachments.length > 0) && remaining >= 0 && !busy
 
   async function submit() {
     if (!canSubmit) return
     setBusy(true)
     try {
-      const post = await api.createPost(trimmed)
+      const post = await api.createPost(
+        trimmed,
+        attachments.map((item) => item.id),
+      )
       onPosted(post)
       setBody('')
+      setAttachments([])
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Could not publish your post', 'error')
     } finally {
@@ -73,8 +79,16 @@ export function Composer({
             }
           }}
         />
+        {attachments.length > 0 && (
+          <div className="composer-attachments">
+            <MediaPicker items={attachments} onChange={setAttachments} disabled={busy} showThumbsOnly />
+          </div>
+        )}
         <div className="composer-actions">
           <div className="composer-meta">
+            {attachments.length === 0 && (
+              <MediaPicker items={attachments} onChange={setAttachments} disabled={busy} />
+            )}
             {body.length > MAX_LENGTH - 200 && (
               <span className={`char-count ${tone}`}>{remaining}</span>
             )}

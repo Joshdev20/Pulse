@@ -58,7 +58,7 @@ export function LoginPage() {
             <span className="auth-point-icon">
               <SparkIcon size={16} />
             </span>
-            <span>Post updates with hashtags and mentions.</span>
+            <span>Post updates with photos, video and hashtags.</span>
           </div>
           <div className="auth-point">
             <span className="auth-point-icon">
@@ -70,7 +70,13 @@ export function LoginPage() {
             <span className="auth-point-icon">
               <SparkIcon size={16} />
             </span>
-            <span>Get notified when someone replies or likes your post.</span>
+            <span>Message anyone privately, with live delivery.</span>
+          </div>
+          <div className="auth-point">
+            <span className="auth-point-icon">
+              <SparkIcon size={16} />
+            </span>
+            <span>Get notified the moment someone replies or likes your post.</span>
           </div>
         </div>
       </aside>

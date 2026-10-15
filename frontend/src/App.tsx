@@ -3,7 +3,8 @@ import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react
 import { AppShell } from './components/Layout'
 import { Composer } from './components/Composer'
 import { Modal, Spinner } from './components/UI'
-import { useAuth } from './context/AuthContext'
+import { AuthProvider, useAuth } from './context/AuthContext'
+import { RealtimeProvider } from './context/RealtimeContext'
 import { HomePage } from './pages/HomePage'
 import { ExplorePage } from './pages/ExplorePage'
 import { LoginPage } from './pages/LoginPage'
@@ -13,39 +14,55 @@ import { PostDetailPage } from './pages/PostDetailPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { SearchPage } from './pages/SearchPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { MessagesPage } from './pages/MessagesPage'
 import { NotFoundPage } from './pages/NotFoundPage'
+import { usePageTitle } from './lib/usePageTitle'
 
 /** Routes with room for the right-hand rail on wide screens. */
 const RAIL_ROUTES = ['/', '/explore', '/search', '/notifications']
 
-function RequireAuth({ children }: { children: React.ReactNode }) {
+function FullPageSpinner() {
+  return (
+    <div className="state">
+      <Spinner size={22} />
+    </div>
+  )
+}
+
+/**
+ * Gate the whole application behind a session.
+ *
+ * The feed is no longer public: an unauthenticated visitor is redirected to
+ * sign in and returned to the page they asked for afterwards.
+ */
+function RequireAuth() {
   const { user, loading } = useAuth()
   const location = useLocation()
 
-  if (loading) {
+  if (loading) return <FullPageSpinner />
+  if (!user) {
     return (
-      <div className="state">
-        <Spinner size={22} />
-      </div>
+      <Navigate to="/login" state={{ from: `${location.pathname}${location.search}` }} replace />
     )
   }
-  if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />
+  return <Outlet />
+}
+
+/** Signed-in users have no reason to see the login or register screens. */
+function RedirectIfAuthed({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return <FullPageSpinner />
+  if (user) return <Navigate to="/" replace />
   return <>{children}</>
 }
 
 function Layout() {
   const [composeOpen, setComposeOpen] = useState(false)
-  const { user } = useAuth()
   const { pathname } = useLocation()
-  const navigate = useNavigate()
 
-  const openComposer = useCallback(() => {
-    if (!user) {
-      navigate('/login')
-      return
-    }
-    setComposeOpen(true)
-  }, [navigate, user])
+  usePageTitle(pathname)
+
+  const openComposer = useCallback(() => setComposeOpen(true), [])
 
   return (
     <>
@@ -72,41 +89,48 @@ function ComposerPage() {
 
 export function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route element={<Layout />}>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/explore" element={<ExplorePage />} />
-        <Route path="/search" element={<SearchPage />} />
-        <Route path="/p/:postId" element={<PostDetailPage />} />
-        <Route path="/u/:username" element={<ProfilePage />} />
+    <AuthProvider>
+      <Routes>
         <Route
-          path="/notifications"
+          path="/login"
           element={
-            <RequireAuth>
-              <NotificationsPage />
-            </RequireAuth>
+            <RedirectIfAuthed>
+              <LoginPage />
+            </RedirectIfAuthed>
           }
         />
         <Route
-          path="/settings"
+          path="/register"
           element={
-            <RequireAuth>
-              <SettingsPage />
-            </RequireAuth>
+            <RedirectIfAuthed>
+              <RegisterPage />
+            </RedirectIfAuthed>
           }
         />
-        <Route
-          path="/compose"
-          element={
-            <RequireAuth>
-              <ComposerPage />
-            </RequireAuth>
-          }
-        />
-        <Route path="*" element={<NotFoundPage />} />
-      </Route>
-    </Routes>
+
+        {/* Everything below requires a session. */}
+        <Route element={<RequireAuth />}>
+          <Route
+            element={
+              <RealtimeProvider>
+                <Layout />
+              </RealtimeProvider>
+            }
+          >
+            <Route path="/" element={<HomePage />} />
+            <Route path="/explore" element={<ExplorePage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/p/:postId" element={<PostDetailPage />} />
+            <Route path="/u/:username" element={<ProfilePage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/messages" element={<MessagesPage />} />
+            <Route path="/messages/:conversationId" element={<MessagesPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/compose" element={<ComposerPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Route>
+        </Route>
+      </Routes>
+    </AuthProvider>
   )
 }
