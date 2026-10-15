@@ -72,3 +72,9 @@ npm run build        # typecheck + vite build
   `tagging.py` flushes new `Tag` rows before linking them for this reason. Keep that flush.
 - The database file is `backend/pulse.db` and is gitignored. `python -m app.seed --reset`
   drops and rebuilds it.
+- Pushing to GitHub fails with `403 ... denied to <user>` in this sandbox. `GITHUB_TOKEN` is a
+  user-to-server token from the "OpenHands AI" GitHub App (client id `Iv23lizrrwLGm04hszl7`),
+  which declares `contents: write` but has `total_count: 0` installations, so it is read-only
+  for git and the API. Granting write requires installing the app at
+  https://github.com/apps/openhands-ai/installations/new and selecting the target repo.
+  Verify with `git push --dry-run` before assuming a push will work.
