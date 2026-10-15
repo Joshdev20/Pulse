@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Avatar } from '../components/Avatar'
+import { Avatar, DisplayName } from '../components/Avatar'
 import { MediaGallery } from '../components/MediaGallery'
 import { MediaPicker } from '../components/MediaPicker'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime, Spinner } from '../components/UI'
@@ -46,11 +46,14 @@ function Inbox({
             <Avatar
               name={conversation.partner.display_name}
               color={conversation.partner.avatar_color}
+              url={conversation.partner.avatar_url}
               size="md"
             />
             <div className="inbox-info">
               <div className="inbox-top">
-                <span className="inbox-name">{conversation.partner.display_name}</span>
+                <span className="inbox-name">
+                  <DisplayName user={conversation.partner} />
+                </span>
                 <RelativeTime iso={conversation.last_message_at} className="inbox-time" />
               </div>
               <div className="inbox-preview">
@@ -175,10 +178,13 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
           <Avatar
             name={conversation.partner.display_name}
             color={conversation.partner.avatar_color}
+            url={conversation.partner.avatar_url}
             size="md"
           />
           <div>
-            <div className="thread-name">{conversation.partner.display_name}</div>
+            <div className="thread-name">
+              <DisplayName user={conversation.partner} />
+            </div>
             <div className="thread-handle">@{conversation.partner.username}</div>
           </div>
         </Link>
@@ -201,6 +207,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
               <Avatar
                 name={message.sender.display_name}
                 color={message.sender.avatar_color}
+                url={message.sender.avatar_url}
                 size="sm"
               />
             )}

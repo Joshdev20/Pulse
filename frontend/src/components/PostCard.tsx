@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Avatar } from './Avatar'
+import { Avatar, DisplayName } from './Avatar'
 import { CommentIcon, HeartIcon, MoreIcon, ShareIcon, TrashIcon, EditIcon } from './Icons'
 import { MediaGallery } from './MediaGallery'
 import { Dropdown, RelativeTime } from './UI'
@@ -114,13 +114,13 @@ export function PostCard({
       tabIndex={clickable ? 0 : undefined}
     >
       <Link to={`/u/${post.author.username}`} onClick={(event) => event.stopPropagation()}>
-        <Avatar name={post.author.display_name} color={post.author.avatar_color} size="md" />
+        <Avatar name={post.author.display_name} color={post.author.avatar_color} url={post.author.avatar_url} size="md" />
       </Link>
 
       <div className="post-body-col">
         <div className="post-head">
           <Link className="post-author" to={`/u/${post.author.username}`} onClick={(e) => e.stopPropagation()}>
-            {post.author.display_name}
+            <DisplayName user={post.author} />
           </Link>
           <span className="post-handle">@{post.author.username}</span>
           <span className="post-dot">·</span>

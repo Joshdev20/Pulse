@@ -10,6 +10,7 @@ import {
   SparkIcon,
   TrashIcon,
   UsersIcon,
+  VerifiedIcon,
   WarningIcon,
 } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
@@ -204,6 +205,7 @@ function UserRow({
   busy,
   onBan,
   onToggleAdmin,
+  onToggleVerified,
   onDelete,
 }: {
   user: AdminUser
@@ -211,13 +213,14 @@ function UserRow({
   busy: boolean
   onBan: (user: AdminUser) => void
   onToggleAdmin: (user: AdminUser) => void
+  onToggleVerified: (user: AdminUser) => void
   onDelete: (user: AdminUser) => void
 }) {
   const isSelf = user.id === selfId
   return (
     <div className={`admin-row${user.is_banned ? ' admin-row-banned' : ''}`}>
       <Link to={`/u/${user.username}`} className="admin-row-avatar">
-        <Avatar name={user.display_name} color={user.avatar_color} size="md" />
+        <Avatar name={user.display_name} color={user.avatar_color} url={user.avatar_url} size="md" />
       </Link>
 
       <div className="admin-row-main">
@@ -226,6 +229,7 @@ function UserRow({
             {user.display_name}
           </Link>
           <span className="admin-row-handle">@{user.username}</span>
+          {user.is_verified && <span className="admin-badge admin-badge-verified">Verified</span>}
           {user.is_admin && <span className="admin-badge admin-badge-accent">Moderator</span>}
           {user.is_banned && <span className="admin-badge admin-badge-danger">Banned</span>}
           {isSelf && <span className="admin-badge">You</span>}
@@ -245,6 +249,19 @@ function UserRow({
       </div>
 
       <div className="admin-row-actions">
+        <button
+          type="button"
+          className={`btn btn-sm ${user.is_verified ? 'btn-secondary' : 'btn-outline'}`}
+          disabled={busy}
+          title={
+            user.is_verified
+              ? 'Remove the verified badge'
+              : 'Grant this account a verified badge'
+          }
+          onClick={() => onToggleVerified(user)}
+        >
+          <VerifiedIcon size={15} /> {user.is_verified ? 'Unverify' : 'Verify'}
+        </button>
         <button
           type="button"
           className="btn btn-secondary btn-sm"
@@ -420,6 +437,11 @@ function UsersTab() {
                 onToggleAdmin={(target) =>
                   void run(target.id, async () => {
                     replace(await api.adminSetAdmin(target.id, !target.is_admin))
+                  })
+                }
+                onToggleVerified={(target) =>
+                  void run(target.id, async () => {
+                    replace(await api.adminSetVerified(target.id, !target.is_verified))
                   })
                 }
                 onDelete={setDeleteTarget}

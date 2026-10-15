@@ -89,7 +89,21 @@ def _visible_to(db, media: Media, viewer: User) -> bool:
             is not None
         )
 
+    if is_public_avatar(db, media):
+        return True
+
     return viewer.id == media.owner_id
+
+
+def is_public_avatar(db, media: Media) -> bool:
+    """Whether ``media`` is currently in use as somebody's profile picture.
+
+    A picture shown as an avatar appears beside every post and profile the
+    account owns, so it is readable by any signed-in user. The check is what
+    keeps that exception narrow: an upload that is *not* an avatar stays private
+    to its owner until it is attached to a post or message.
+    """
+    return db.scalar(select(User.id).where(User.avatar_media_id == media.id).limit(1)) is not None
 
 
 @router.get("/{media_id}")

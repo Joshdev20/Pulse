@@ -43,6 +43,9 @@ class UserUpdate(BaseModel):
     location: str | None = Field(default=None, max_length=64)
     website: str | None = Field(default=None, max_length=255)
     avatar_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    # Set to an uploaded image id to use a picture, or null to go back to the
+    # generated initials avatar.
+    avatar_media_id: int | None = None
 
 
 class UserPublic(BaseModel):
@@ -55,6 +58,9 @@ class UserPublic(BaseModel):
     location: str
     website: str
     avatar_color: str
+    # Resolved media URL for an uploaded picture, or null for the initials
+    # avatar. A URL rather than an id so the client needs no second lookup.
+    avatar_url: str | None = None
     created_at: UTCDatetime
     follower_count: int = 0
     following_count: int = 0
@@ -62,6 +68,7 @@ class UserPublic(BaseModel):
     is_following: bool = False
     # Lets the client show the moderation entry point only to moderators.
     is_admin: bool = False
+    is_verified: bool = False
 
 
 class Token(BaseModel):
@@ -72,6 +79,28 @@ class Token(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1, max_length=128)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=16, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class PasswordResetIssued(BaseModel):
+    """Response to a reset request.
+
+    ``reset_token`` is only populated when no mail transport is configured, so a
+    deployment without SMTP can still be used and tested. It is null in any
+    environment that can actually send the link.
+    """
+
+    detail: str = "If that email is registered, a reset link has been sent."
+    reset_token: str | None = None
+    reset_url: str | None = None
 
 
 class TagOut(BaseModel):
@@ -215,11 +244,14 @@ class AdminUser(BaseModel):
     location: str
     website: str
     avatar_color: str
+    avatar_url: str | None = None
     created_at: UTCDatetime
     is_active: bool
     is_admin: bool
     is_banned: bool
     banned_reason: str = ""
+    is_verified: bool = False
+    verified_at: UTCDatetime | None = None
     follower_count: int = 0
     following_count: int = 0
     post_count: int = 0
@@ -232,6 +264,12 @@ class AdminUserPage(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+class AdminVerification(BaseModel):
+    """Grant or revoke a verified badge."""
+
+    is_verified: bool = True
 
 
 class AdminPost(BaseModel):

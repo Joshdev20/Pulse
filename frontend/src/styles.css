@@ -25,12 +25,45 @@
   /* Accents */
   --accent: #b8f24a;
   --accent-ink: #10160a;
-  --accent-soft: rgba(184, 242, 74, 0.14);
+  --accent-soft: var(--accent-soft);
+  --accent-wash: rgba(184, 242, 74, 0.045);
+  --accent-line: rgba(184, 242, 74, 0.28);
+  --accent-glow: rgba(184, 242, 74, 0.6);
   --violet: #a78bfa;
   --violet-soft: rgba(167, 139, 250, 0.16);
+  --violet-line: rgba(167, 139, 250, 0.35);
   --rose: #fb7185;
   --rose-soft: rgba(251, 113, 133, 0.16);
+  --rose-line: rgba(251, 113, 133, 0.34);
   --sky: #60a5fa;
+  --sky-soft: rgba(96, 165, 250, 0.12);
+
+  /* Semantic colours used by individual components. Named by role rather than
+     by hue so the light theme can restate them without touching every rule. */
+  --on-accent: #10160a;
+  --text-strong: #e4e8f2;
+  --text-on-media: #ffffff;
+  --hover-wash: rgba(255, 255, 255, 0.03);
+  --hover-wash-strong: rgba(255, 255, 255, 0.06);
+  --press-wash: rgba(255, 255, 255, 0.14);
+  --raised: #262b3d;
+  --chip: #2a3042;
+  --rose-strong: #ff8ba0;
+  --rose-ink: #2a0710;
+  --rose-text: #ffc2ce;
+  --rose-panel: #3a1220;
+  --warn: #fbbf24;
+  --scrim: rgba(0, 0, 0, 0.7);
+  --scrim-soft: rgba(0, 0, 0, 0.28);
+  --glass: rgba(12, 14, 20, 0.94);
+  --glass-solid: rgba(2, 3, 6, 0.94);
+  --banner-bg: linear-gradient(120deg, #171a26, #0e1017);
+  --skeleton-a: rgba(255, 255, 255, 0.04);
+  --skeleton-b: rgba(255, 255, 255, 0.09);
+  --focus-ring: rgba(184, 242, 74, 0.55);
+  --avatar-ink: rgba(0, 0, 0, 0.72);
+  --avatar-ring: rgba(255, 255, 255, 0.14);
+  --badge-ink: #101219;
 
   /* Geometry */
   --radius-sm: 10px;
@@ -48,6 +81,77 @@
 
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* ============================================================
+   Pulse — light theme
+   Every value above that a component depends on is restated here, so the
+   whole app follows `data-theme` without a single component knowing which
+   theme is active.
+   ============================================================ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f6f7fb;
+  --bg-glow-a: rgba(124, 58, 237, 0.1);
+  --bg-glow-b: rgba(77, 124, 15, 0.09);
+  --surface: #ffffff;
+  --surface-2: #f2f4f9;
+  --surface-3: #e7eaf2;
+  --overlay: rgba(15, 18, 28, 0.42);
+
+  --text: #12151f;
+  --text-muted: #5a6379;
+  --text-faint: #8b93a7;
+
+  --border: rgba(16, 20, 32, 0.1);
+  --border-strong: rgba(16, 20, 32, 0.18);
+
+  /* A lime accent cannot carry dark text on white, so the light theme uses a
+     deeper olive for the accent and keeps white as the ink on top of it. */
+  --accent: #4d7c0f;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(77, 124, 15, 0.12);
+  --accent-wash: rgba(77, 124, 15, 0.05);
+  --accent-line: rgba(77, 124, 15, 0.28);
+  --accent-glow: rgba(77, 124, 15, 0.35);
+  --violet-line: rgba(124, 58, 237, 0.35);
+  --violet: #7c3aed;
+  --violet-soft: rgba(124, 58, 237, 0.12);
+  --rose: #e11d48;
+  --rose-soft: rgba(225, 29, 72, 0.1);
+  --rose-line: rgba(225, 29, 72, 0.3);
+  --sky: #2563eb;
+  --sky-soft: rgba(37, 99, 235, 0.1);
+
+  --on-accent: #ffffff;
+  --text-strong: #1b2030;
+  --text-on-media: #ffffff;
+  --hover-wash: rgba(16, 20, 32, 0.035);
+  --hover-wash-strong: rgba(16, 20, 32, 0.06);
+  --press-wash: rgba(16, 20, 32, 0.12);
+  --raised: #ffffff;
+  --chip: #eceff6;
+  --rose-strong: #be123c;
+  --rose-ink: #ffffff;
+  --rose-text: #9f1239;
+  --rose-panel: #fff1f4;
+  --warn: #b45309;
+  --scrim: rgba(15, 18, 28, 0.55);
+  --scrim-soft: rgba(15, 18, 28, 0.08);
+  --glass: rgba(255, 255, 255, 0.92);
+  --glass-solid: rgba(255, 255, 255, 0.96);
+  --banner-bg: linear-gradient(120deg, #ffffff, #f4f6fb);
+  --skeleton-a: rgba(16, 20, 32, 0.05);
+  --skeleton-b: rgba(16, 20, 32, 0.1);
+  --focus-ring: rgba(77, 124, 15, 0.4);
+  --avatar-ink: rgba(0, 0, 0, 0.72);
+  --avatar-ring: rgba(255, 255, 255, 0.55);
+  --badge-ink: #ffffff;
+
+  --shadow-sm: 0 1px 2px rgba(16, 20, 32, 0.08);
+  --shadow: 0 12px 32px -14px rgba(16, 20, 32, 0.22);
+  --shadow-lg: 0 28px 60px -24px rgba(16, 20, 32, 0.28);
 }
 
 /* ============================================================
@@ -164,7 +268,7 @@ h4 {
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #2a3042;
+  background: var(--chip);
   background-clip: content-box;
 }
 
@@ -222,10 +326,10 @@ h4 {
   border-radius: 11px;
   display: grid;
   place-items: center;
-  background: linear-gradient(140deg, var(--accent), #7dd3fc 90%);
+  background: linear-gradient(140deg, var(--accent), var(--sky) 90%);
   color: var(--accent-ink);
   flex: none;
-  box-shadow: 0 6px 18px -6px rgba(184, 242, 74, 0.6);
+  box-shadow: 0 6px 18px -6px var(--accent-glow);
 }
 
 .brand-name {
@@ -293,7 +397,7 @@ h4 {
   padding: 0 5px;
   border-radius: 999px;
   background: var(--rose);
-  color: #fff;
+  color: var(--text-on-media);
   font-size: 10.5px;
   font-weight: 700;
   display: grid;
@@ -447,7 +551,7 @@ h4 {
 
 .tag-chip:hover {
   background: var(--violet-soft);
-  border-color: rgba(167, 139, 250, 0.35);
+  border-color: var(--violet-line);
   color: var(--violet);
 }
 
@@ -484,7 +588,7 @@ h4 {
   place-items: center;
   flex: none;
   font-weight: 700;
-  color: rgba(0, 0, 0, 0.72);
+  color: var(--avatar-ink);
   letter-spacing: 0.01em;
   user-select: none;
   overflow: hidden;
@@ -495,7 +599,70 @@ h4 {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px var(--avatar-ring);
+}
+
+/* The uploaded picture fades in over the initials once it has decoded, so the
+   avatar never flashes empty while the bytes are in flight. */
+.avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.avatar-img.loaded {
+  opacity: 1;
+}
+
+/* ============================================================
+   Verified badge
+   ============================================================ */
+/* Kept inline rather than inline-flex on purpose: a container that truncates
+   with an ellipsis (post author, inbox row, …) clips an atomic inline-flex box
+   whole, badge and all, instead of trimming the name. Inline text lets the
+   ellipsis land on the name and simply push the seal out of view. */
+.display-name {
+  min-width: 0;
+}
+
+.verified-badge {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 5px;
+  flex: none;
+  color: var(--sky);
+  filter: drop-shadow(0 0 6px var(--sky-soft));
+}
+
+/* ============================================================
+   Theme toggle
+   ============================================================ */
+.theme-toggle {
+  color: var(--text-muted);
+}
+
+.theme-toggle:hover {
+  color: var(--accent);
+}
+
+.sidebar-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 2px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-foot-label {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
 }
 
 /* ============================================================
@@ -531,7 +698,7 @@ h4 {
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #c8ff5c;
+  background: var(--accent);
 }
 
 .btn-secondary {
@@ -541,7 +708,7 @@ h4 {
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: #262b3d;
+  background: var(--raised);
   border-color: var(--border-strong);
 }
 
@@ -567,11 +734,11 @@ h4 {
 
 .btn-danger {
   background: var(--rose);
-  color: #2a0710;
+  color: var(--rose-ink);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: #ff8ba0;
+  background: var(--rose-strong);
 }
 
 .btn-block {
@@ -591,7 +758,7 @@ h4 {
 
 .btn-following:hover:not(:disabled) {
   background: var(--rose-soft);
-  border-color: rgba(251, 113, 133, 0.4);
+  border-color: var(--rose-line);
   color: var(--rose);
 }
 
@@ -666,7 +833,7 @@ h4 {
 }
 
 .char-count.warn {
-  color: #fbbf24;
+  color: var(--warn);
 }
 
 .char-count.over {
@@ -714,7 +881,7 @@ h4 {
 }
 
 .post:hover {
-  background: rgba(255, 255, 255, 0.017);
+  background: var(--hover-wash);
 }
 
 .post-clickable {
@@ -778,7 +945,7 @@ h4 {
   line-height: 1.58;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: #e4e8f2;
+  color: var(--text-strong);
 }
 
 .post-text .hashtag,
@@ -819,7 +986,7 @@ h4 {
 
 .action:hover {
   color: var(--sky);
-  background: rgba(96, 165, 250, 0.12);
+  background: var(--sky-soft);
 }
 
 .action.liked {
@@ -909,7 +1076,7 @@ h4 {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: rgba(8, 9, 13, 0.82);
+  background: var(--glass);
   backdrop-filter: blur(14px) saturate(160%);
   border-bottom: 1px solid var(--border);
 }
@@ -919,11 +1086,31 @@ h4 {
   align-items: center;
   gap: 16px;
   padding: 13px 18px;
+  /* On a narrow screen the title and any trailing control wrap rather than
+     squeezing the search field down to nothing. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .page-head h1 {
   font-size: 19px;
   font-weight: 700;
+}
+
+/* Truncating the title has to happen on the inner span: the h1 is a flex
+   container for the name and the verified seal, and an ellipsis on the
+   container clips the seal away with the overflow. */
+.page-head-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.page-head-title .display-name {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .page-head .sub {
@@ -947,7 +1134,7 @@ h4 {
 }
 
 .tab:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--hover-wash);
   color: var(--text-muted);
 }
 
@@ -1001,9 +1188,9 @@ h4 {
   height: 148px;
   position: relative;
   background:
-    radial-gradient(520px 200px at 20% 120%, rgba(167, 139, 250, 0.35), transparent 70%),
-    radial-gradient(420px 180px at 85% -30%, rgba(184, 242, 74, 0.22), transparent 70%),
-    linear-gradient(120deg, #171a26, #0e1017);
+    radial-gradient(520px 200px at 20% 120%, var(--violet-line), transparent 70%),
+    radial-gradient(420px 180px at 85% -30%, var(--accent-soft), transparent 70%),
+    var(--banner-bg);
   border-bottom: 1px solid var(--border);
 }
 
@@ -1048,7 +1235,7 @@ h4 {
 .profile-bio {
   margin-top: 12px;
   font-size: 15px;
-  color: #dfe4ef;
+  color: var(--text-strong);
   max-width: 62ch;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1123,8 +1310,8 @@ h4 {
   position: absolute;
   inset: -30% -20% auto -20%;
   height: 90%;
-  background: radial-gradient(560px 380px at 30% 30%, rgba(167, 139, 250, 0.22), transparent 70%),
-    radial-gradient(520px 340px at 80% 10%, rgba(184, 242, 74, 0.14), transparent 70%);
+  background: radial-gradient(560px 380px at 30% 30%, var(--violet-line), transparent 70%),
+    radial-gradient(520px 340px at 80% 10%, var(--accent-soft), transparent 70%);
   pointer-events: none;
 }
 
@@ -1257,6 +1444,60 @@ h4 {
   line-height: 1.55;
 }
 
+/* An input with a button inside its right edge, such as reveal-password. The
+   input keeps its own border and focus ring; the button is a sibling overlaid
+   on top so the two never double up. */
+.input-affix {
+  position: relative;
+  display: flex;
+}
+
+.input-affix .input {
+  padding-right: 44px;
+}
+
+.input-affix-btn {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--text-faint);
+  transition: color 0.16s ease, background 0.16s ease;
+}
+
+.input-affix-btn:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.input-affix-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.auth-dev-note {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 13.5px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.auth-dev-link {
+  display: inline-block;
+  margin-top: 8px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
 .field-error {
   color: var(--rose);
   font-size: 13px;
@@ -1282,8 +1523,8 @@ h4 {
   padding: 11px 14px;
   border-radius: var(--radius-sm);
   background: var(--rose-soft);
-  border: 1px solid rgba(251, 113, 133, 0.3);
-  color: #ffc2ce;
+  border: 1px solid var(--rose-line);
+  color: var(--rose-text);
   font-size: 14px;
 }
 
@@ -1300,11 +1541,11 @@ h4 {
 }
 
 .notification:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--hover-wash);
 }
 
 .notification.unread {
-  background: rgba(184, 242, 74, 0.045);
+  background: var(--accent-wash);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
@@ -1321,19 +1562,19 @@ h4 {
 .notification-icon.like {
   color: var(--rose);
   background: var(--rose-soft);
-  border-color: rgba(251, 113, 133, 0.28);
+  border-color: var(--rose-line);
 }
 
 .notification-icon.comment {
   color: var(--violet);
   background: var(--violet-soft);
-  border-color: rgba(167, 139, 250, 0.28);
+  border-color: var(--violet-line);
 }
 
 .notification-icon.follow {
   color: var(--accent);
   background: var(--accent-soft);
-  border-color: rgba(184, 242, 74, 0.28);
+  border-color: var(--accent-line);
 }
 
 .notification-text {
@@ -1341,7 +1582,8 @@ h4 {
   color: var(--text-muted);
 }
 
-.notification-text strong {
+.notification-text strong,
+.notification-actor {
   color: var(--text);
   font-weight: 640;
 }
@@ -1490,7 +1732,7 @@ h4 {
 }
 
 .comment:hover {
-  background: rgba(255, 255, 255, 0.017);
+  background: var(--hover-wash);
 }
 
 .comment-main {
@@ -1511,7 +1753,7 @@ h4 {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: #e4e8f2;
+  color: var(--text-strong);
 }
 
 .comment-body .hashtag,
@@ -1532,7 +1774,7 @@ h4 {
 }
 
 .user-row:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--hover-wash);
 }
 
 .user-row-main {
@@ -1607,6 +1849,9 @@ h4 {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  /* Grows to fill the header but never pushes it wider than the column. */
+  flex: 1 1 200px;
+  min-width: 0;
 }
 
 .search-bar:focus-within {
@@ -1697,12 +1942,44 @@ h4 {
   border-radius: 6px;
 }
 
+.skeleton-circle {
+  border-radius: 50%;
+  flex: none;
+}
+
+.skeleton-banner {
+  height: 148px;
+  border-radius: 0;
+}
+
+.skeleton-profile {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 0 18px 18px;
+  margin-top: -42px;
+}
+
+.skeleton-profile-avatar {
+  width: 84px;
+  height: 84px;
+  box-shadow: 0 0 0 4px var(--surface);
+}
+
 @keyframes shimmer {
   0% {
     background-position: 200% 0;
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+/* Respect a user who has asked the system to reduce motion: keep the
+   placeholder, drop the animation. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
   }
 }
 
@@ -1713,18 +1990,24 @@ h4 {
   border-bottom: 1px solid var(--border);
 }
 
+.skeleton-row-compact {
+  padding: 14px 18px;
+  align-items: center;
+}
+
 .skeleton-lines {
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: 9px;
+  min-width: 0;
 }
 
 .spinner {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.2);
+  border: 2px solid var(--border-strong);
   border-top-color: var(--text);
   animation: spin 0.7s linear infinite;
 }
@@ -1771,9 +2054,9 @@ h4 {
 }
 
 .toast-error {
-  background: #3a1220;
-  border-color: rgba(251, 113, 133, 0.42);
-  color: #ffc2ce;
+  background: var(--rose-panel);
+  border-color: var(--rose-line);
+  color: var(--rose-text);
 }
 
 @keyframes toast-in {
@@ -1881,7 +2164,7 @@ h4 {
   color: var(--accent-ink);
   display: none;
   place-items: center;
-  box-shadow: 0 12px 28px -8px rgba(184, 242, 74, 0.55);
+  box-shadow: 0 12px 28px -8px var(--accent-glow);
 }
 
 /* ============================================================
@@ -1952,8 +2235,8 @@ h4 {
   inset: 0;
   display: grid;
   place-items: center;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-on-media);
+  background: var(--scrim-soft);
   pointer-events: none;
 }
 
@@ -2020,7 +2303,7 @@ h4 {
   display: grid;
   place-items: center;
   padding: 32px;
-  background: rgba(2, 3, 6, 0.94);
+  background: var(--glass-solid);
   backdrop-filter: blur(6px);
   animation: fade-in 0.18s ease;
 }
@@ -2040,14 +2323,14 @@ h4 {
   height: 42px;
   border: 1px solid var(--border-strong);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover-wash-strong);
   color: var(--text);
   font-size: 17px;
   cursor: pointer;
 }
 
 .lightbox-close:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--press-wash);
 }
 
 /* Picker */
@@ -2106,8 +2389,8 @@ h4 {
   place-items: center;
   border: 0;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
+  background: var(--scrim);
+  color: var(--text-on-media);
   cursor: pointer;
 }
 
@@ -2259,7 +2542,7 @@ h4 {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: rgba(12, 14, 20, 0.9);
+  background: var(--glass);
   backdrop-filter: blur(14px);
 }
 
@@ -2327,7 +2610,7 @@ h4 {
 .bubble.mine {
   border-radius: 18px 18px 6px 18px;
   background: var(--accent-soft);
-  border-color: rgba(184, 242, 74, 0.28);
+  border-color: var(--accent-line);
 }
 
 .bubble p {
@@ -2587,7 +2870,7 @@ h4 {
   color: var(--rose);
   font-size: 13.5px;
   background: var(--rose-soft);
-  border: 1px solid rgba(251, 113, 133, 0.28);
+  border: 1px solid var(--rose-line);
   border-radius: var(--radius-sm);
   padding: 9px 13px;
   overflow-wrap: anywhere;
@@ -2616,7 +2899,7 @@ h4 {
 }
 
 .admin-row-banned {
-  background: rgba(251, 113, 133, 0.05);
+  background: var(--rose-line);
 }
 
 .admin-row-avatar {
@@ -2701,6 +2984,11 @@ h4 {
   color: var(--violet);
 }
 
+.admin-badge-verified {
+  background: var(--sky-soft);
+  color: var(--sky);
+}
+
 .admin-badge-danger {
   background: var(--rose-soft);
   color: var(--rose);
@@ -2709,7 +2997,7 @@ h4 {
 .admin-content-body {
   margin-top: 5px;
   font-size: 14px;
-  color: #dfe4ef;
+  color: var(--text-strong);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2871,7 +3159,7 @@ h4 {
     left: 0;
     right: 0;
     z-index: 70;
-    background: rgba(12, 14, 20, 0.94);
+    background: var(--glass);
     backdrop-filter: blur(16px) saturate(160%);
     border-top: 1px solid var(--border);
     padding: 7px 6px calc(7px + env(safe-area-inset-bottom));
@@ -2921,7 +3209,7 @@ h4 {
     padding: 0 4px;
     border-radius: 999px;
     background: var(--rose);
-    color: #fff;
+    color: var(--text-on-media);
     font-size: 10px;
     font-weight: 700;
     display: grid;
@@ -2969,6 +3257,39 @@ h4 {
   .detail-text {
     font-size: 17.5px;
   }
+
+  /* The search field owns the first row on a phone; anything beside it moves
+     below rather than crushing the input. */
+  .page-head-inner .search-bar {
+    flex: 1 1 100%;
+  }
+
+  .tab {
+    padding: 12px 6px;
+    font-size: 14px;
+  }
+
+  .composer-actions {
+    gap: 8px;
+  }
+
+  /* The primary action keeps its size and stays on the right; the tools on the
+     left are allowed to shrink. */
+  .composer-submit .btn {
+    padding-inline: 16px;
+  }
+
+  .modal {
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    align-self: end;
+    max-height: 92vh;
+  }
+
+  /* Full-bleed sheet on a phone: the backdrop's padding would otherwise leave
+     a gutter the sheet cannot use. */
+  .modal-backdrop {
+    padding: 0;
+  }
 }
 
 @media (max-width: 480px) {
@@ -2986,6 +3307,20 @@ h4 {
   }
   .mobile-nav-item {
     padding: 8px 2px;
+  }
+
+  .composer {
+    gap: 10px;
+  }
+
+  .composer-submit {
+    gap: 8px;
+  }
+
+  /* Two controls plus a button are tight here; the ring already conveys the
+     remaining budget, so the bare number is the first thing to go. */
+  .composer-submit .char-count {
+    display: none;
   }
 }
 

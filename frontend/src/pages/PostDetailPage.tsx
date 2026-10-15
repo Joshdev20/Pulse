@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Avatar } from '../components/Avatar'
+import { Avatar, DisplayName } from '../components/Avatar'
 import { PostText } from '../components/PostCard'
 import { EditPostModal } from '../components/EditPostModal'
 import { EmptyState, ErrorState, FeedSkeleton, Spinner, Dropdown, RelativeTime } from '../components/UI'
@@ -156,11 +156,11 @@ export function PostDetailPage() {
           <article className="detail-post">
             <div className="detail-head">
               <Link to={`/u/${post.author.username}`}>
-                <Avatar name={post.author.display_name} color={post.author.avatar_color} size="lg" />
+                <Avatar name={post.author.display_name} color={post.author.avatar_color} url={post.author.avatar_url} size="lg" />
               </Link>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <Link to={`/u/${post.author.username}`} className="detail-name">
-                  {post.author.display_name}
+                  <DisplayName user={post.author} />
                 </Link>
                 <div className="detail-handle">@{post.author.username}</div>
               </div>
@@ -250,7 +250,7 @@ export function PostDetailPage() {
 
           {user ? (
             <form className="comment-form" onSubmit={submitComment}>
-              <Avatar name={user.display_name} color={user.avatar_color} size="sm" />
+              <Avatar name={user.display_name} color={user.avatar_color} url={user.avatar_url} size="sm" />
               <div className="comment-form-inner">
                 <textarea
                   id="reply"
@@ -291,12 +291,12 @@ export function PostDetailPage() {
             comments.map((comment) => (
               <div key={comment.id} className="comment">
                 <Link to={`/u/${comment.author.username}`}>
-                  <Avatar name={comment.author.display_name} color={comment.author.avatar_color} size="sm" />
+                  <Avatar name={comment.author.display_name} color={comment.author.avatar_color} url={comment.author.avatar_url} size="sm" />
                 </Link>
                 <div className="comment-main">
                   <div className="comment-head">
                     <Link to={`/u/${comment.author.username}`} className="post-author">
-                      {comment.author.display_name}
+                      <DisplayName user={comment.author} />
                     </Link>
                     <span className="post-handle">@{comment.author.username}</span>
                     <span className="post-dot">·</span>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Avatar } from '../components/Avatar'
+import { Avatar, DisplayName } from '../components/Avatar'
 import { FollowButton } from '../components/FollowButton'
 import { PostCard } from '../components/PostCard'
 import { UserRow } from '../components/UserRow'
@@ -109,8 +109,8 @@ export function ProfilePage() {
             <ArrowLeftIcon size={20} />
           </button>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h1 style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {person.display_name}
+            <h1 className="page-head-title">
+              <DisplayName user={person} />
             </h1>
             <div className="sub">{pluralize(person.post_count, 'post')}</div>
           </div>
@@ -121,12 +121,14 @@ export function ProfilePage() {
 
       <div className="profile-head">
         <div className="profile-avatar">
-          <Avatar name={person.display_name} color={person.avatar_color} size="xl" />
+          <Avatar name={person.display_name} color={person.avatar_color} url={person.avatar_url} size="xl" eager />
         </div>
 
         <div className="profile-top">
           <div style={{ minWidth: 0 }}>
-            <div className="profile-name">{person.display_name}</div>
+            <div className="profile-name">
+              <DisplayName user={person} />
+            </div>
             <div className="profile-handle">@{person.username}</div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>

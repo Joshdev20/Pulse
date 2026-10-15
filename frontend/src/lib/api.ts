@@ -135,8 +135,29 @@ export const api = {
 
   me: () => request<User>('/api/auth/me'),
 
+  forgotPassword: (email: string) =>
+    request<{ detail: string; reset_token: string | null; reset_url: string | null }>(
+      '/api/auth/forgot-password',
+      { method: 'POST', body: JSON.stringify({ email }) },
+    ),
+
+  resetPassword: (token: string, password: string) =>
+    request<{ access_token: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
+    }),
+
   updateProfile: (username: string, data: Partial<Pick<User, 'display_name' | 'bio' | 'location' | 'website' | 'avatar_color'>>) =>
     request<User>(`/api/users/${username}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  uploadAvatar: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    // No Content-Type header: the browser must set the multipart boundary.
+    return request<User>('/api/users/me/avatar', { method: 'POST', body })
+  },
+
+  clearAvatar: () => request<User>('/api/users/me/avatar', { method: 'DELETE' }),
 
   feed: (scope: 'following' | 'all', page = 1, pageSize = 20) =>
     request<Page<Post>>(`/api/feed${query({ scope, page, page_size: pageSize })}`),
@@ -255,6 +276,12 @@ export const api = {
     request<AdminUser>(`/api/admin/users/${id}/admin`, {
       method: 'POST',
       body: JSON.stringify({ is_admin: isAdmin }),
+    }),
+
+  adminSetVerified: (id: number, isVerified: boolean) =>
+    request<AdminUser>(`/api/admin/users/${id}/verify`, {
+      method: 'POST',
+      body: JSON.stringify({ is_verified: isVerified }),
     }),
 
   adminDeleteUser: (id: number) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' }),

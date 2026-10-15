@@ -65,13 +65,21 @@ def _session_for(engine):
 
 def test_ensure_schema_adds_the_admin_columns(legacy_engine):
     before = {column["name"] for column in inspect(legacy_engine).get_columns("users")}
-    assert not {"is_admin", "is_banned", "banned_reason"} & before
+    expected = {
+        "is_admin",
+        "is_banned",
+        "banned_reason",
+        "is_verified",
+        "verified_at",
+        "avatar_media_id",
+    }
+    assert not expected & before
 
     applied = ensure_schema(legacy_engine)
 
-    assert set(applied) == {"users.is_admin", "users.is_banned", "users.banned_reason"}
+    assert set(applied) == {f"users.{column}" for column in expected}
     after = {column["name"] for column in inspect(legacy_engine).get_columns("users")}
-    assert {"is_admin", "is_banned", "banned_reason"} <= after
+    assert expected <= after
 
 
 def test_ensure_schema_is_idempotent(legacy_engine):

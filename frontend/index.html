@@ -4,7 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Pulse — share short updates, follow people you care about." />
+    <meta name="theme-color" content="#08090d" />
     <title>Pulse</title>
+    <script>
+      // Set the theme before the first paint so the page never flashes the
+      // wrong palette. Kept in sync by src/lib/useTheme.ts.
+      (function () {
+        try {
+          var saved = localStorage.getItem('pulse.theme')
+          var theme =
+            saved === 'light' || saved === 'dark'
+              ? saved
+              : window.matchMedia('(prefers-color-scheme: light)').matches
+                ? 'light'
+                : 'dark'
+          document.documentElement.dataset.theme = theme
+          document.documentElement.style.colorScheme = theme
+        } catch (error) {
+          document.documentElement.dataset.theme = 'dark'
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

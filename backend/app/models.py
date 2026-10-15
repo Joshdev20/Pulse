@@ -41,6 +41,11 @@ class User(Base):
     location: Mapped[str] = mapped_column(String(64), default="")
     website: Mapped[str] = mapped_column(String(255), default="")
     avatar_color: Mapped[str] = mapped_column(String(16), default="#6366f1")
+    # An uploaded picture, when the user has one. Falls back to the generated
+    # initials-on-colour avatar, so this stays nullable. Deliberately not a
+    # foreign key: users <-> media would be a circular reference, and the id is
+    # validated against the caller's own uploads in the avatar endpoints.
+    avatar_media_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Moderators can reach the admin endpoints; a banned account keeps its data
@@ -48,6 +53,9 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     banned_reason: Mapped[str] = mapped_column(String(280), default="")
+    # A staff-granted badge that distinguishes official accounts in the UI.
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     posts: Mapped[list["Post"]] = relationship(
@@ -244,3 +252,23 @@ class Message(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+
+
+class PasswordReset(Base):
+    """A single-use password reset token.
+
+    Only the SHA-256 of the token is stored, so a leaked database row cannot be
+    replayed as a working link. ``used_at`` makes the token single-use and
+    ``expires_at`` bounds how long a mail sitting in an inbox stays dangerous.
+    """
+
+    __tablename__ = "password_resets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship()

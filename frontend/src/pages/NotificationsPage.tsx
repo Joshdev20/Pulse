@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Avatar } from '../components/Avatar'
+import { Avatar, DisplayName } from '../components/Avatar'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime } from '../components/UI'
 import { BellIcon, CommentIcon, HeartIcon, UserIcon } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
@@ -123,7 +123,8 @@ export function NotificationsPage() {
               <div className="notification-text">
                 {item.actor ? (
                   <>
-                    <strong>{item.actor.display_name}</strong> {VERB[item.kind] ?? 'sent you a notification'}
+                    <DisplayName user={item.actor} className="notification-actor" />{' '}
+                    {VERB[item.kind] ?? 'sent you a notification'}
                   </>
                 ) : (
                   'A notification'
@@ -138,7 +139,7 @@ export function NotificationsPage() {
                 onClick={(event) => event.stopPropagation()}
                 aria-label={`View ${item.actor.username}`}
               >
-                <Avatar name={item.actor.display_name} color={item.actor.avatar_color} size="sm" />
+                <Avatar name={item.actor.display_name} color={item.actor.avatar_color} url={item.actor.avatar_url} size="sm" />
               </Link>
             )}
           </div>

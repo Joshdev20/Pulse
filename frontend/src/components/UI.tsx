@@ -38,7 +38,7 @@ export function RelativeTime({
 export function PostSkeleton() {
   return (
     <div className="skeleton-row">
-      <div className="skeleton" style={{ width: 42, height: 42, borderRadius: '50%', flex: 'none' }} />
+      <div className="skeleton skeleton-circle" style={{ width: 42, height: 42 }} />
       <div className="skeleton-lines">
         <div className="skeleton" style={{ width: '38%', height: 13 }} />
         <div className="skeleton" style={{ width: '94%', height: 13 }} />
@@ -50,10 +50,63 @@ export function PostSkeleton() {
 
 export function FeedSkeleton({ rows = 4 }: { rows?: number }) {
   return (
-    <div aria-busy="true" aria-label="Loading">
+    <div aria-busy="true" aria-label="Loading posts">
       {Array.from({ length: rows }, (_, index) => (
         <PostSkeleton key={index} />
       ))}
+    </div>
+  )
+}
+
+/** A row of avatar + two lines, for people and conversation lists. */
+export function ListSkeleton({ rows = 5, label = 'Loading' }: { rows?: number; label?: string }) {
+  return (
+    <div aria-busy="true" aria-label={label}>
+      {Array.from({ length: rows }, (_, index) => (
+        <div className="skeleton-row skeleton-row-compact" key={index}>
+          <div className="skeleton skeleton-circle" style={{ width: 42, height: 42 }} />
+          <div className="skeleton-lines">
+            <div className="skeleton" style={{ width: `${44 + ((index * 7) % 18)}%`, height: 13 }} />
+            <div className="skeleton" style={{ width: `${70 + ((index * 11) % 22)}%`, height: 12 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Profile header plus a couple of posts, so the shape matches the real page. */
+export function ProfileSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Loading profile">
+      <div className="skeleton skeleton-banner" />
+      <div className="skeleton-profile">
+        <div className="skeleton skeleton-circle skeleton-profile-avatar" />
+        <div className="skeleton-lines">
+          <div className="skeleton" style={{ width: 172, height: 17 }} />
+          <div className="skeleton" style={{ width: 118, height: 13 }} />
+          <div className="skeleton" style={{ width: '82%', height: 13, marginTop: 6 }} />
+        </div>
+      </div>
+      <FeedSkeleton rows={3} />
+    </div>
+  )
+}
+
+/** A card of stacked lines, for settings and admin panels. */
+export function CardSkeleton({ lines = 3 }: { lines?: number }) {
+  return (
+    <div className="card card-pad" aria-busy="true" aria-label="Loading">
+      <div className="skeleton" style={{ width: 138, height: 15, marginBottom: 14 }} />
+      <div className="skeleton-lines">
+        {Array.from({ length: lines }, (_, index) => (
+          <div
+            className="skeleton"
+            key={index}
+            style={{ width: `${92 - index * 13}%`, height: 13 }}
+          />
+        ))}
+      </div>
     </div>
   )
 }

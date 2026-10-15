@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
-import { SparkIcon } from '../components/Icons'
+import { EyeIcon, EyeOffIcon, SparkIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 
 export function LoginPage() {
@@ -9,6 +9,7 @@ export function LoginPage() {
   const location = useLocation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [reveal, setReveal] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -102,15 +103,27 @@ export function LoginPage() {
             </div>
             <div className="field">
               <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                value={password}
-                autoComplete="current-password"
-                required
-                onChange={(event) => setPassword(event.target.value)}
-              />
+              <div className="input-affix">
+                <input
+                  id="password"
+                  className="input"
+                  type={reveal ? 'text' : 'password'}
+                  value={password}
+                  autoComplete="current-password"
+                  required
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="input-affix-btn"
+                  onClick={() => setReveal((value) => !value)}
+                  aria-label={reveal ? 'Hide password' : 'Show password'}
+                  aria-pressed={reveal}
+                  title={reveal ? 'Hide password' : 'Show password'}
+                >
+                  {reveal ? <EyeOffIcon size={17} /> : <EyeIcon size={17} />}
+                </button>
+              </div>
             </div>
             <button type="submit" className="btn btn-primary btn-block" disabled={busy}>
               {busy ? 'Signing in…' : 'Sign in'}
@@ -118,10 +131,10 @@ export function LoginPage() {
           </form>
 
           <p className="auth-switch">
-            New here? <Link to="/register">Create an account</Link>
+            <Link to="/forgot-password">Forgot your password?</Link>
           </p>
-          <p className="auth-switch" style={{ marginTop: 8, fontSize: 13.5 }}>
-            Demo account: <code>ada</code> / <code>password123</code>
+          <p className="auth-switch" style={{ marginTop: 8 }}>
+            New here? <Link to="/register">Create an account</Link>
           </p>
         </div>
       </main>

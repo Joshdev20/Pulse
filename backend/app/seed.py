@@ -31,6 +31,9 @@ from .tagging import extract_tag_names, resolve_tags
 
 DEMO_PASSWORD = "password123"
 
+# Indices into USERS that start with the verified badge in a fresh demo.
+VERIFIED_INDEXES = {0, 3}
+
 USERS = [
     ("ada", "Ada Lovelace", "ada@example.com", "First programmer. Analytical engines, poetry and punch cards.", "London", "https://ada.dev", "#6366f1"),
     ("grace", "Grace Hopper", "grace@example.com", "Compilers, COBOL and the occasional nanosecond.", "Arlington", "https://grace.navy", "#ec4899"),
@@ -227,6 +230,10 @@ def seed(reset: bool = False) -> None:
                 # Without one administrator the moderation endpoints are
                 # unreachable, so the first demo account can moderate.
                 is_admin=index == 0,
+                # A couple of verified accounts so the badge is visible in a
+                # fresh demo without going through the admin console first.
+                is_verified=index in VERIFIED_INDEXES,
+                verified_at=utcnow() if index in VERIFIED_INDEXES else None,
             )
             db.add(user)
             users[username] = user
