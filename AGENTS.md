@@ -191,6 +191,9 @@ the public URL returns 502 until the dev server is bound to 12000.
   the correct behaviour when the bus is optional and missing.
 - Uploads are written to `UPLOAD_DIR`. On a host with an ephemeral filesystem this must
   point at a mounted volume (e.g. `/data/uploads`) or uploaded media is lost on redeploy.
+  Note that Render free web services cannot attach a disk at all, so `render.yaml` omits the
+  `disk:` block and leaves `UPLOAD_DIR` unset; combining `plan: free` with a `disk:` block
+  makes the Blueprint unprovisionable even though it passes Render's JSON schema.
 - `requirements-prod.txt` is for deployed images and excludes tests; `requirements-dev.txt`
   extends `requirements.txt` with pytest. pip does not parse docstrings, so comments in
   these files must start with `#` — a `"""..."""` header breaks the build.

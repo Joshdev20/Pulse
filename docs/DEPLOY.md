@@ -36,18 +36,23 @@ The repo contains `render.yaml`, so this is a blueprint deploy.
 
 1. Push this repo to GitHub.
 2. Render Dashboard → **New** → **Blueprint** → pick the repo.
-3. Render creates the `pulse-api` web service from `backend/` plus a 1 GB disk
-   mounted at `/data`.
+3. Render creates the `pulse-api` web service from `backend/`.
 4. Fill in the environment variables marked `sync: false` (Render prompts for
    them). See the table below.
 5. Deploy, then confirm `https://<your-service>.onrender.com/api/health`
    returns `{"status":"ok",...}`.
 
-> **Free tier note:** Render's free web services sleep after ~15 minutes idle and
-> take ~30–60s to wake. The first request after a sleep will be slow. Free
-> instances also cannot attach a persistent disk, so uploads are lost on
-> restart — set `UPLOAD_DIR` to a mounted disk path on a paid plan, or accept
-> that uploads are ephemeral.
+> **Free tier caveats.** A free web service **cannot attach a persistent disk**
+> (Render rejects `plan: free` together with a `disk:` block), so:
+>
+> - **Uploads are ephemeral** — lost on every redeploy. Fine for a demo.
+> - **It sleeps after ~15 minutes idle** and takes ~30–60s to wake, so the first
+>   request after a pause is slow.
+> - **Render's own free Postgres expires 30 days after creation.** Use a Neon or
+>   Supabase URL for anything you want to keep.
+>
+> To persist uploads, upgrade to a paid instance type, change `plan` in
+> `render.yaml`, uncomment the `disk:` block, and add `UPLOAD_DIR=/data/uploads`.
 
 ### Option B — Railway / Fly.io
 
@@ -165,9 +170,10 @@ console: the WebSocket should connect to `wss://<backend>/api/ws`, and the
 
 | Symptom | Cause |
 |---|---|
+| Render: "unable to read the render.yaml file" | The Blueprint is invalid or unprovisionable. Validate with `render blueprints validate` or against https://render.com/schema/render.yaml.json. The most common trap is a `disk:` block on `plan: free` — Render's JSON schema accepts it, but free web services cannot have disks. |
 | Browser console: CORS error | `CORS_ORIGINS` does not include the Vercel origin and the regex was overridden |
 | Login returns 401 on a fresh deploy | `AUTO_SEED` was not `true`, so there are no users — seed manually with `python -m app.seed` |
-| Uploads vanish after a redeploy | No persistent disk, or `UPLOAD_DIR` does not point at the mount |
+| Uploads vanish after a redeploy | No persistent disk, or `UPLOAD_DIR` does not point at the mount. Free Render instances cannot have a disk at all. |
 | WebSocket fails to connect | Backend host is unreachable, or a proxy in front of it does not forward `Upgrade` |
 | First request after idle takes ~60s | Render free tier cold start |
 | `FUNCTION_PAYLOAD_TOO_LARGE` | A Vercel Function received >4.5 MB — the backend is on the wrong host |

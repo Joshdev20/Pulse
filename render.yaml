@@ -1,10 +1,16 @@
 # Render blueprint for the Pulse backend.
 #
-# Creates the web service and a persistent disk for uploads. Postgres is
-# deliberately left out so you can pick the free tier of your choice; set
-# DATABASE_URL in the dashboard (or uncomment the `databases` block below).
-#
 # Deploy: Render Dashboard -> New -> Blueprint -> pick this repo.
+#
+# This file targets the FREE instance type. A free web service CANNOT attach a
+# persistent disk (https://render.com/docs/free), so two things follow:
+#
+#   * Uploads land on the ephemeral filesystem and are lost on every redeploy.
+#     Fine for a demo. To persist them, upgrade to a paid instance type and
+#     uncomment the `disk` block at the bottom, then set UPLOAD_DIR.
+#   * DATABASE_URL must point at an external Postgres. Render's own free
+#     Postgres expires 30 days after creation, so a Neon or Supabase URL is a
+#     better choice for anything you want to keep.
 
 services:
   - type: web
@@ -27,9 +33,9 @@ services:
         sync: false
       - key: AUTO_SEED
         value: "true"
-      - key: UPLOAD_DIR
-        value: /data/uploads
-    disk:
-      name: pulse-uploads
-      mountPath: /data
-      sizeGB: 1
+    # Requires a paid instance type. Uncomment this AND change `plan` above,
+    # then add UPLOAD_DIR=/data/uploads to envVars.
+    # disk:
+    #   name: pulse-uploads
+    #   mountPath: /data
+    #   sizeGB: 1
