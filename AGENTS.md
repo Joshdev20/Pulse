@@ -127,6 +127,14 @@ the public URL returns 502 until the dev server is bound to 12000.
   `useMediaUrl` (`src/lib/useMediaUrl.ts`), which fetches the bytes with auth and returns a
   blob URL. It reference-counts per path, so several elements showing one attachment share a
   single download. Never point an element at `media.url` directly.
+- `mediaCache.ts` releases an entry from a `queueMicrotask`, not synchronously. StrictMode
+  mounts, unmounts and remounts every effect in one tick; releasing inline cancelled a
+  download that the remount immediately re-requested, so each image was fetched twice on
+  every mount. Keep the deferral when touching that file.
+- A placeholder must distinguish "still loading" from "will never load": read `failed` from
+  `useMediaStatus`, or a broken avatar or attachment shimmers forever. Use
+  `useMediaReady` rather than a bare `onLoad` — blob bytes are already in memory, so the
+  element can finish decoding before React attaches the handler and the event never fires.
 - SQLite writes can hit `UNIQUE` constraint errors if a flush is skipped mid-transaction;
   `tagging.py` flushes new `Tag` rows before linking them for this reason. Keep that flush.
 - The database file is `backend/pulse.db` and is gitignored. `python -m app.seed --reset`

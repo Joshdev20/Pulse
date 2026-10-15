@@ -1,6 +1,7 @@
 import { initials } from '../lib/format'
 import { useInView } from '../lib/useInView'
-import { useMediaUrl } from '../lib/useMediaUrl'
+import { useMediaStatus } from '../lib/useMediaUrl'
+import { useMediaReady } from '../lib/useMediaReady'
 import { VerifiedIcon } from './Icons'
 
 const SIZES = { xs: 24, sm: 32, md: 42, lg: 52, xl: 84 } as const
@@ -29,7 +30,12 @@ export function Avatar({
   const shouldLoad = eager || inView
   // The fetch is what is deferred; `loading="lazy"` on the <img> would do
   // nothing here because the src is a blob URL that only exists after it.
-  const asset = useMediaUrl(shouldLoad ? url : null)
+  const { asset, failed } = useMediaStatus(shouldLoad ? url : null)
+  const { ref: imageRef, ready, markReady } = useMediaReady(asset?.url)
+
+  // Only a picture that is still in flight counts as pending: a failed fetch
+  // falls back to the initials, and an account with no picture never shimmers.
+  const pending = Boolean(url) && !ready && !failed
 
   return (
     <div
@@ -45,13 +51,16 @@ export function Avatar({
       aria-hidden="true"
     >
       {initials(name)}
+      {pending && <span className="avatar-skeleton" />}
       {asset && (
         <img
-          className="avatar-img"
+          ref={imageRef}
+          className={`avatar-img${ready ? ' loaded' : ''}`}
           src={asset.url}
           alt=""
           decoding="async"
-          onLoad={(event) => event.currentTarget.classList.add('loaded')}
+          onLoad={markReady}
+          onError={markReady}
         />
       )}
     </div>
@@ -71,7 +80,7 @@ export function DisplayName({
       {user.display_name}
       {user.is_verified && (
         <span className="verified-badge" title="Verified account" aria-label="Verified account">
-          <VerifiedIcon size={15} />
+          <VerifiedIcon size={18} />
         </span>
       )}
     </span>
