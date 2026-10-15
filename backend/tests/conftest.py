@@ -10,9 +10,31 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
+from app.cache import reset_store  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.middleware import RateLimitMiddleware  # noqa: E402
+
+
+@pytest.fixture
+def anyio_backend():
+    """Run `pytest.mark.anyio` tests on asyncio only (not trio)."""
+    return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache(monkeypatch):
+    """Give every test its own cache store.
+
+    The cache backend is process-global, so without this a response cached by
+    one test would be served to the next. The Redis URL is cleared so a server
+    running on the developer's machine cannot leak state between tests.
+    """
+    monkeypatch.setattr(settings, "redis_url", None)
+    reset_store()
+    yield
+    reset_store()
 
 
 @pytest.fixture

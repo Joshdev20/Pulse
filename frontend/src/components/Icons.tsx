@@ -171,6 +171,14 @@ export const ImageIcon = (p: IconProps) => (
   </Base>
 )
 
+export const UploadIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 15.5V4.2" />
+    <path d="m7.6 8.4 4.4-4.4 4.4 4.4" />
+    <path d="M4.5 14.8v3.4a1.6 1.6 0 0 0 1.6 1.6h11.8a1.6 1.6 0 0 0 1.6-1.6v-3.4" />
+  </Base>
+)
+
 export const MailIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h13A2.5 2.5 0 0 1 21 7.5v9A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />

@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Avatar } from '../components/Avatar'
-import { EmptyState, ErrorState, FeedSkeleton } from '../components/UI'
+import { EmptyState, ErrorState, FeedSkeleton, RelativeTime } from '../components/UI'
 import { BellIcon, CommentIcon, HeartIcon, UserIcon } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import { api } from '../lib/api'
-import { timeAgo } from '../lib/format'
 import type { Notification } from '../lib/types'
 
 const ICONS = {
@@ -129,7 +128,7 @@ export function NotificationsPage() {
                 ) : (
                   'A notification'
                 )}
-                <span className="post-time"> · {timeAgo(item.created_at)}</span>
+                <RelativeTime iso={item.created_at} className="post-time" prefix=" · " />
               </div>
               {item.actor && <div className="notification-snippet">@{item.actor.username}</div>}
             </div>

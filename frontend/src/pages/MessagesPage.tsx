@@ -3,11 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar } from '../components/Avatar'
 import { MediaGallery } from '../components/MediaGallery'
 import { MediaPicker } from '../components/MediaPicker'
-import { EmptyState, ErrorState, FeedSkeleton, Spinner } from '../components/UI'
+import { EmptyState, ErrorState, FeedSkeleton, RelativeTime, Spinner } from '../components/UI'
 import { ChevronLeftIcon, MailIcon, PaperclipIcon, SendIcon } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import { api, ApiError } from '../lib/api'
-import { timeAgo } from '../lib/format'
 import type { Conversation, Media, Message } from '../lib/types'
 
 /** Inbox: every conversation, newest activity first. */
@@ -52,7 +51,7 @@ function Inbox({
             <div className="inbox-info">
               <div className="inbox-top">
                 <span className="inbox-name">{conversation.partner.display_name}</span>
-                <span className="inbox-time">{timeAgo(conversation.last_message_at)}</span>
+                <RelativeTime iso={conversation.last_message_at} className="inbox-time" />
               </div>
               <div className="inbox-preview">
                 {conversation.last_message
@@ -208,9 +207,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
             <div className={`bubble${message.mine ? ' mine' : ''}`}>
               {message.body && <p>{message.body}</p>}
               <MediaGallery items={message.media} />
-              <time className="bubble-time" dateTime={message.created_at}>
-                {timeAgo(message.created_at)}
-              </time>
+              <RelativeTime iso={message.created_at} className="bubble-time" />
             </div>
           </div>
         ))}
@@ -229,7 +226,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
       {error && messages.length > 0 && <p className="thread-error">{error}</p>}
 
       <form className="composer-inline thread-composer" onSubmit={submit}>
-        <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} compact />
+        <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} />
         <textarea
           className="input thread-input"
           placeholder={`Message @${conversation.partner.username}`}

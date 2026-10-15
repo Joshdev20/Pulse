@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar } from '../components/Avatar'
 import { PostText } from '../components/PostCard'
 import { EditPostModal } from '../components/EditPostModal'
-import { EmptyState, ErrorState, FeedSkeleton, Spinner, Dropdown } from '../components/UI'
+import { EmptyState, ErrorState, FeedSkeleton, Spinner, Dropdown, RelativeTime } from '../components/UI'
 import {
   ArrowLeftIcon,
   CommentIcon,
@@ -16,7 +16,7 @@ import {
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
-import { formatCount, formatFullDate, timeAgo } from '../lib/format'
+import { formatCount, formatFullDate } from '../lib/format'
 import type { Comment, Post } from '../lib/types'
 
 export function PostDetailPage() {
@@ -210,7 +210,12 @@ export function PostDetailPage() {
 
             <div className="detail-time">
               {formatFullDate(post.created_at)}
-              {post.edited_at && ` · edited ${timeAgo(post.edited_at)} ago`}
+              {post.edited_at && (
+                <>
+                  {' · '}
+                  <RelativeTime iso={post.edited_at} prefix="edited " suffix=" ago" />
+                </>
+              )}
             </div>
 
             <div className="detail-stats">
@@ -295,9 +300,7 @@ export function PostDetailPage() {
                     </Link>
                     <span className="post-handle">@{comment.author.username}</span>
                     <span className="post-dot">·</span>
-                    <time className="post-time" dateTime={comment.created_at}>
-                      {timeAgo(comment.created_at)}
-                    </time>
+                    <RelativeTime iso={comment.created_at} className="post-time" />
                     {(user?.id === comment.author.id || user?.id === post.author.id) && (
                       <div style={{ marginLeft: 'auto' }}>
                         <button

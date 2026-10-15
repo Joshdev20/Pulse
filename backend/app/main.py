@@ -5,10 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import storage
+from . import cache, storage
 from .config import settings
 from .database import Base, engine
 from .middleware import RateLimitMiddleware, SecurityHeadersMiddleware
+from .realtime import manager
 from .routers import auth, media, messages, notifications, posts, realtime, search, users
 
 
@@ -16,7 +17,16 @@ from .routers import auth, media, messages, notifications, posts, realtime, sear
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
     storage.ensure_upload_dir()
-    yield
+    # Resolve the cache backend once at startup so the first request is not the
+    # one that discovers Redis is unavailable.
+    cache.get_store()
+    # Join the cross-process realtime bus so a socket held by one worker still
+    # receives events published by another.
+    await manager.start()
+    try:
+        yield
+    finally:
+        await manager.stop()
 
 
 app = FastAPI(
@@ -51,4 +61,4 @@ app.include_router(realtime.router)
 
 @app.get("/api/health", tags=["meta"])
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": settings.app_name}
+    return {"status": "ok", "service": settings.app_name, "cache": cache.backend_name()}

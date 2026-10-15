@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 240
     rate_limit_window_seconds: int = 60
 
+    # Response caching for hot read endpoints. Redis is used when `redis_url`
+    # is set and reachable; otherwise an in-process store is used, so the app
+    # and its tests run fine without a Redis server.
+    redis_url: str | None = "redis://localhost:6379/0"
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = 30
+    cache_profile_ttl_seconds: int = 60
+    cache_stats_ttl_seconds: int = 120
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
