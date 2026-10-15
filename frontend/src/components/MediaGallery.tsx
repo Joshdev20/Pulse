@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { DownloadIcon, FileIcon, PlayIcon } from './Icons'
-import { useMediaUrl } from '../lib/useMediaUrl'
+import { useMediaStatus, useMediaUrl } from '../lib/useMediaUrl'
+import { primeMedia } from '../lib/mediaCache'
+import { useMediaReady } from '../lib/useMediaReady'
 import type { Media } from '../lib/types'
 
 function humanSize(bytes: number): string {
@@ -11,7 +13,9 @@ function humanSize(bytes: number): string {
 
 /** Full-screen viewer for a single image or video. */
 function Lightbox({ item, onClose }: { item: Media; onClose: () => void }) {
-  const asset = useMediaUrl(item.url)
+  const { asset, failed } = useMediaStatus(item.url)
+  const { ref: mediaRef, ready, markReady } = useMediaReady(asset?.url)
+  const showSkeleton = !ready && !failed
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -39,10 +43,27 @@ function Lightbox({ item, onClose }: { item: Media; onClose: () => void }) {
       <button type="button" className="lightbox-close" onClick={onClose} aria-label="Close">
         ✕
       </button>
+      {showSkeleton && <span className="lightbox-skeleton skeleton" aria-hidden="true" />}
       {item.kind === 'video' ? (
-        <video className="lightbox-media" src={asset?.url} controls autoPlay playsInline />
+        <video
+          ref={mediaRef}
+          className={`lightbox-media${ready ? ' ready' : ''}`}
+          src={asset?.url}
+          controls
+          autoPlay
+          playsInline
+          onLoadedData={markReady}
+          onError={markReady}
+        />
       ) : (
-        <img className="lightbox-media" src={asset?.url} alt={item.alt_text} />
+        <img
+          ref={mediaRef}
+          className={`lightbox-media${ready ? ' ready' : ''}`}
+          src={asset?.url}
+          alt={item.alt_text}
+          onLoad={markReady}
+          onError={markReady}
+        />
       )}
     </div>
   )
@@ -75,7 +96,14 @@ function Attachment({ item }: { item: Media }) {
 
 /** One tile in the grid. Owns its own fetch so hooks stay per-item. */
 function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
-  const asset = useMediaUrl(item.url)
+  const { asset, failed } = useMediaStatus(item.url)
+  const { ref: mediaRef, ready, markReady } = useMediaReady(asset?.url)
+  const showSkeleton = !ready && !failed
+
+  // A pointer resting on a tile is a strong hint the click is coming, so start
+  // the download now and the lightbox opens onto bytes already in memory.
+  const warm = () => primeMedia(item.url)
+
   return (
     <button
       type="button"
@@ -84,17 +112,38 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
         event.stopPropagation()
         onOpen()
       }}
+      onPointerEnter={warm}
+      onFocus={warm}
       aria-label={item.alt_text || 'Open attachment'}
     >
+      {showSkeleton && <span className="media-skeleton skeleton" aria-hidden="true" />}
       {item.kind === 'video' ? (
         <>
-          <video className="media-el" src={asset?.url} muted playsInline preload="metadata" />
+          <video
+            ref={mediaRef}
+            className={`media-el${ready ? ' ready' : ''}`}
+            src={asset?.url}
+            muted
+            playsInline
+            preload="metadata"
+            onLoadedData={markReady}
+            onError={markReady}
+          />
           <span className="media-play">
             <PlayIcon size={30} />
           </span>
         </>
       ) : (
-        <img className="media-el" src={asset?.url} alt={item.alt_text} loading="lazy" />
+        <img
+          ref={mediaRef}
+          className={`media-el${ready ? ' ready' : ''}`}
+          src={asset?.url}
+          alt={item.alt_text}
+          loading="lazy"
+          decoding="async"
+          onLoad={markReady}
+          onError={markReady}
+        />
       )}
     </button>
   )
@@ -108,6 +157,14 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
  */
 export function MediaGallery({ items }: { items: Media[] }) {
   const [open, setOpen] = useState<Media | null>(null)
+
+  // Kick off every attachment's download as soon as the gallery mounts. Each
+  // cell would otherwise start its own fetch only once React runs its effects,
+  // which serializes work that the browser is happy to do in parallel.
+  useEffect(() => {
+    for (const item of items ?? []) primeMedia(item.url)
+  }, [items])
+
   if (!items || items.length === 0) return null
 
   const visuals = items.filter((item) => item.kind !== 'application')

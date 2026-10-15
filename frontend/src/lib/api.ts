@@ -150,12 +150,8 @@ export const api = {
   updateProfile: (username: string, data: Partial<Pick<User, 'display_name' | 'bio' | 'location' | 'website' | 'avatar_color'>>) =>
     request<User>(`/api/users/${username}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
-  uploadAvatar: (file: File) => {
-    const body = new FormData()
-    body.append('file', file)
-    // No Content-Type header: the browser must set the multipart boundary.
-    return request<User>('/api/users/me/avatar', { method: 'POST', body })
-  },
+  uploadAvatar: (file: File, onProgress?: (percent: number) => void) =>
+    uploadWithProgress<User>('/api/users/me/avatar', file, '', onProgress),
 
   clearAvatar: () => request<User>('/api/users/me/avatar', { method: 'DELETE' }),
 
