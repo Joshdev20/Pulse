@@ -16,6 +16,9 @@ venv/
 *.db
 *.sqlite3
 
+# Runtime uploads (user content, not source)
+uploads/
+
 # Node
 node_modules/
 dist/

@@ -11,8 +11,21 @@ from datetime import timedelta
 
 from sqlalchemy import func, select
 
+from . import storage
 from .database import Base, SessionLocal, engine
-from .models import Comment, Follow, Like, Notification, Post, User, utcnow
+from .models import (
+    Comment,
+    Conversation,
+    ConversationParticipant,
+    Follow,
+    Like,
+    Media,
+    Message,
+    Notification,
+    Post,
+    User,
+    utcnow,
+)
 from .security import hash_password
 from .tagging import extract_tag_names, resolve_tags
 
@@ -62,6 +75,130 @@ COMMENTS = [
     ("donald", "Elegant. Worthy of a footnote.", 8),
     ("ada", "Exactly the framing I was looking for.", 1),
 ]
+
+# Direct message threads: (user_a, user_b, [(sender, body), ...])
+CONVERSATIONS = [
+    (
+        "ada",
+        "grace",
+        [
+            ("ada", "Do you still have the notes from the compiler talk?"),
+            ("grace", "I do. I'll send the slides over this evening."),
+            ("ada", "Perfect, thank you."),
+            ("grace", "Sent. Let me know if the appendix makes sense."),
+        ],
+    ),
+    (
+        "linus",
+        "margaret",
+        [
+            ("margaret", "Did you get a chance to look at the priority display patch?"),
+            ("linus", "Reading it now. The error path is much clearer."),
+        ],
+    ),
+    (
+        "alan",
+        "katherine",
+        [
+            ("katherine", "Your morphogenesis paper keeps coming up in my reading group."),
+            ("alan", "Glad it is still useful. Which section?"),
+            ("katherine", "The reaction-diffusion part. We are trying to reproduce it."),
+        ],
+    ),
+]
+
+
+def _demo_png(color: tuple[int, int, int]) -> bytes:
+    """A tiny valid PNG, built by hand so the seed has no image dependency."""
+    import struct
+    import zlib
+
+    width = height = 8
+    raw = b""
+    for _ in range(height):
+        raw += b"\x00"  # filter byte: none
+        raw += bytes(color) * width
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + tag
+            + payload
+            + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _seed_media(db, users: dict[str, User], posts: list[Post]) -> int:
+    """Attach a generated image to a couple of posts so media renders in the feed."""
+    plan = [
+        ("margaret", 3, "Apollo guidance computer, mission display mock-up", (16, 185, 129)),
+        ("ada", 8, "Sketch of the Analytical Engine operation cards", (99, 102, 241)),
+    ]
+    created = 0
+    for username, post_index, alt, color in plan:
+        if post_index >= len(posts):
+            continue
+        data = _demo_png(color)
+        stored_name = storage.store(data, "png")
+        media = Media(
+            owner_id=users[username].id,
+            stored_name=stored_name,
+            content_type="image/png",
+            kind="image",
+            size_bytes=len(data),
+            width=8,
+            height=8,
+            alt_text=alt,
+            post_id=posts[post_index].id,
+        )
+        db.add(media)
+        created += 1
+    return created
+
+
+def _seed_conversations(db, users: dict[str, User], now) -> int:
+    created = 0
+    for first, second, messages in CONVERSATIONS:
+        left, right = users[first], users[second]
+        last_sender = users[messages[-1][0]]
+
+        conversation = Conversation(created_at=now - timedelta(days=1), last_message_at=now)
+        db.add(conversation)
+        db.flush()
+
+        # Whoever did not send the last message starts with the thread unread,
+        # so the unread badge is visible on first sign-in.
+        db.add_all(
+            [
+                ConversationParticipant(
+                    conversation_id=conversation.id,
+                    user_id=member.id,
+                    last_read_at=now if member.id == last_sender.id else None,
+                )
+                for member in (left, right)
+            ]
+        )
+
+        offset = len(messages)
+        for index, (sender, body) in enumerate(messages):
+            db.add(
+                Message(
+                    conversation_id=conversation.id,
+                    sender_id=users[sender].id,
+                    body=body,
+                    created_at=now - timedelta(minutes=offset - index),
+                )
+            )
+        created += 1
+    return created
 
 
 def seed(reset: bool = False) -> None:
@@ -153,8 +290,12 @@ def seed(reset: bool = False) -> None:
                 )
             )
 
+        media_count = _seed_media(db, users, posts)
+        conversation_count = _seed_conversations(db, users, now)
+
         db.commit()
         print(f"Seeded {len(users)} users, {len(posts)} posts, {len(FOLLOWS)} follows.")
+        print(f"Seeded {media_count} attachments and {conversation_count} conversations.")
         print(f"Sign in with any username above and the password '{DEMO_PASSWORD}'.")
     finally:
         db.close()

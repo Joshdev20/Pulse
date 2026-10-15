@@ -14,6 +14,8 @@ export default defineConfig({
       '/api': {
         target: backend,
         changeOrigin: true,
+        // Realtime notifications and messaging ride on /api/ws.
+        ws: true,
       },
     },
   },

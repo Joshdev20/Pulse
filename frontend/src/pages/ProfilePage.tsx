@@ -6,15 +6,51 @@ import { PostCard } from '../components/PostCard'
 import { UserRow } from '../components/UserRow'
 import { EditPostModal } from '../components/EditPostModal'
 import { EmptyState, ErrorState, FeedSkeleton, Modal, Spinner } from '../components/UI'
-import { ArrowLeftIcon, CalendarIcon, LinkIcon, LocationIcon, SparkIcon } from '../components/Icons'
+import { InfiniteFeed } from '../components/InfiniteFeed'
+import {
+  ArrowLeftIcon,
+  CalendarIcon,
+  LinkIcon,
+  LocationIcon,
+  MailIcon,
+  SparkIcon,
+  UsersIcon,
+} from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
 import { formatCount, pluralize } from '../lib/format'
 import { useAsync } from '../lib/useAsync'
+import { usePageTitle } from '../lib/usePageTitle'
 import { usePostFeed } from '../lib/usePostFeed'
 import type { Post, User } from '../lib/types'
 
 type Tab = 'posts' | 'likes'
+
+/** Opens (or creates) the direct message thread with this person. */
+function MessageButton({ username }: { username: string }) {
+  const navigate = useNavigate()
+  const { notify } = useToast()
+  const [busy, setBusy] = useState(false)
+
+  async function open() {
+    setBusy(true)
+    try {
+      const conversation = await api.startConversation(username)
+      navigate(`/messages/${conversation.id}`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not open the conversation', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button type="button" className="btn btn-outline" disabled={busy} onClick={open}>
+      {busy ? <Spinner size={16} /> : <MailIcon size={16} />} Message
+    </button>
+  )
+}
 
 export function ProfilePage() {
   const { username = '' } = useParams()
@@ -27,6 +63,8 @@ export function ProfilePage() {
   const profile = useAsync(() => api.user(username), [username, me?.id])
   const person = profile.data
   const isMe = me?.username.toLowerCase() === username.toLowerCase()
+
+  usePageTitle(`/u/${username}`, person ? `${person.display_name} (@${person.username})` : undefined)
 
   const feed = usePostFeed(
     (page) => (tab === 'posts' ? api.userPosts(username, page, 20) : api.userLikes(username, page, 20)),
@@ -97,7 +135,10 @@ export function ProfilePage() {
                 Edit profile
               </Link>
             ) : (
-              <FollowButton user={person} onChange={profile.setData} />
+              <>
+                <FollowButton user={person} onChange={profile.setData} />
+                <MessageButton username={person.username} />
+              </>
             )}
           </div>
         </div>
@@ -144,36 +185,36 @@ export function ProfilePage() {
 
       {feed.loading && <FeedSkeleton rows={4} />}
       {!feed.loading && feed.error && <ErrorState message={feed.error} onRetry={feed.reload} />}
-      {!feed.loading && !feed.error && feed.posts.length === 0 && (
-        <EmptyState
-          icon={<SparkIcon size={24} />}
-          title={tab === 'posts' ? 'No posts yet' : 'No likes yet'}
-          description={
-            tab === 'posts'
-              ? isMe
-                ? 'Share your first update and it will show up here.'
-                : `${person.display_name} has not posted anything yet.`
-              : `${person.display_name} has not liked any posts yet.`
+      {!feed.loading && !feed.error && (
+        <InfiniteFeed
+          hasMore={feed.hasMore}
+          loading={feed.loadingMore}
+          onLoadMore={feed.loadMore}
+          emptyState={
+            <EmptyState
+              icon={<UsersIcon size={24} />}
+              title={tab === 'posts' ? 'No posts yet' : 'No likes yet'}
+              description={
+                tab === 'posts'
+                  ? isMe
+                    ? 'Share your first update and it will show up here.'
+                    : `${person.display_name} has not posted anything yet.`
+                  : `${person.display_name} has not liked any posts yet.`
+              }
+            />
           }
-        />
-      )}
-      {!feed.loading &&
-        feed.posts.map((post) => (
-          <PostCard
-            key={post.id}
-            post={post}
-            currentUserId={me?.id}
-            onChange={feed.replace}
-            onDeleted={feed.remove}
-            onEdit={setEditing}
-          />
-        ))}
-      {!feed.loading && feed.hasMore && (
-        <div className="load-more">
-          <button type="button" className="btn btn-secondary" disabled={feed.loadingMore} onClick={feed.loadMore}>
-            {feed.loadingMore ? <Spinner size={16} /> : 'Load more'}
-          </button>
-        </div>
+        >
+          {feed.posts.map((post) => (
+            <PostCard
+              key={post.id}
+              post={post}
+              currentUserId={me?.id}
+              onChange={feed.replace}
+              onDeleted={feed.remove}
+              onEdit={setEditing}
+            />
+          ))}
+        </InfiniteFeed>
       )}
 
       {editing && (

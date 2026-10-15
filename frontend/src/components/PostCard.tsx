@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Avatar } from './Avatar'
 import { CommentIcon, HeartIcon, MoreIcon, ShareIcon, TrashIcon, EditIcon } from './Icons'
+import { MediaGallery } from './MediaGallery'
 import { Dropdown } from './UI'
 import { api } from '../lib/api'
 import { formatCount, segmentBody, timeAgo } from '../lib/format'
@@ -56,10 +57,6 @@ export function PostCard({
 
   async function toggleLike(event: React.MouseEvent) {
     event.stopPropagation()
-    if (!currentUserId) {
-      navigate('/login')
-      return
-    }
     if (busy) return
     setBusy(true)
     // Optimistic update so the tap feels instant.
@@ -176,7 +173,9 @@ export function PostCard({
           </div>
         </div>
 
-        <PostText body={post.body} className="post-text" />
+        {post.body && <PostText body={post.body} className="post-text" />}
+
+        <MediaGallery items={post.media} />
 
         <div className="post-actions">
           <button

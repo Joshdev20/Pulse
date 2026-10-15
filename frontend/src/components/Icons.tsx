@@ -170,3 +170,61 @@ export const ImageIcon = (p: IconProps) => (
     <path d="m4 17 4.5-4.5 4 4 3-3 4.5 4.5" />
   </Base>
 )
+
+export const MailIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h13A2.5 2.5 0 0 1 21 7.5v9A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />
+    <path d="m3.8 7 7.4 5.3a1.4 1.4 0 0 0 1.6 0L20.2 7" />
+  </Base>
+)
+
+export const SendIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4.3 11.3 20 4l-7.3 15.7-2-6.4z" />
+    <path d="m10.7 13.3 4.4-4.4" />
+  </Base>
+)
+
+export const PaperclipIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M20 11.5 12.4 19a4.6 4.6 0 0 1-6.5-6.5l7.8-7.8a3 3 0 0 1 4.3 4.3l-7.8 7.8a1.5 1.5 0 0 1-2.1-2.1l7-7" />
+  </Base>
+)
+
+export const PlayIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M10.4 9.1v5.8l4.8-2.9z" fill="currentColor" stroke="none" />
+  </Base>
+)
+
+export const DownloadIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 4v10" />
+    <path d="m8 10.5 4 4 4-4" />
+    <path d="M5 19h14" />
+  </Base>
+)
+
+export const ChevronLeftIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M14.5 5.5 8 12l6.5 6.5" />
+  </Base>
+)
+
+export const FileIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M13.5 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" />
+    <path d="M13.5 3.5V9H19" />
+  </Base>
+)
+
+export const WifiOffIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M3 4.5 20.5 20" />
+    <path d="M8.8 15.4a4.5 4.5 0 0 1 6.4 0" />
+    <path d="M5.5 12a9 9 0 0 1 3-1.9" />
+    <path d="M15.6 10.2A9 9 0 0 1 18.5 12" />
+    <circle cx="12" cy="18.5" r=".6" fill="currentColor" stroke="none" />
+  </Base>
+)

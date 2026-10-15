@@ -10,7 +10,8 @@ from ..deps import (
     serialize_posts,
     serialize_users,
 )
-from ..models import Comment, Follow, Like, Notification, Post, User, utcnow
+from ..models import Comment, Follow, Like, Media, Notification, Post, User, utcnow
+from ..realtime import manager
 from ..schemas import (
     CommentCreate,
     CommentOut,
@@ -25,6 +26,7 @@ from ..tagging import extract_tag_names, resolve_tags
 router = APIRouter(prefix="/api", tags=["posts"])
 
 MAX_PAGE_SIZE = 50
+MAX_ATTACHMENTS = 4
 
 
 def _get_post_or_404(db: DbSession, post_id: int) -> Post:
@@ -32,6 +34,46 @@ def _get_post_or_404(db: DbSession, post_id: int) -> Post:
     if post is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Post not found")
     return post
+
+
+def _claim_media(db: DbSession, media_ids: list[int], user: User) -> list[Media]:
+    """Attach the caller's own unlinked uploads to a new post.
+
+    Refusing files owned by someone else, or already attached elsewhere, keeps
+    an upload id from being reused to graft another user's content into a post.
+    """
+    if not media_ids:
+        return []
+    unique = list(dict.fromkeys(media_ids))[:MAX_ATTACHMENTS]
+    items = list(db.scalars(select(Media).where(Media.id.in_(unique))).all())
+    if len(items) != len(unique):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown attachment")
+    for item in items:
+        if item.owner_id != user.id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot attach this file")
+        if item.post_id is not None or item.message_id is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Attachment already in use")
+    return items
+
+
+async def _notify(db: DbSession, notification: Notification, recipient_id: int) -> None:
+    """Persist a notification and push it to the recipient if they are online."""
+    db.add(notification)
+    db.flush()
+    await manager.publish(
+        recipient_id,
+        {
+            "type": "notification",
+            "notification": {
+                "id": notification.id,
+                "kind": notification.kind,
+                "read": False,
+                "created_at": notification.created_at or utcnow(),
+                "post_id": notification.post_id,
+                "actor_id": notification.actor_id,
+            },
+        },
+    )
 
 
 def _paginate(db: DbSession, query, page: int, page_size: int, viewer: User | None) -> Page:
@@ -82,10 +124,18 @@ def list_posts(
 
 
 @router.post("/posts", response_model=PostOut, status_code=status.HTTP_201_CREATED)
-def create_post(payload: PostCreate, db: DbSession, user: CurrentUser) -> PostOut:
-    post = Post(author_id=user.id, body=payload.body.strip())
-    post.tags = resolve_tags(db, extract_tag_names(post.body))
+async def create_post(payload: PostCreate, db: DbSession, user: CurrentUser) -> PostOut:
+    body = payload.body.strip()
+    attachments = _claim_media(db, payload.media_ids, user)
+    if not body and not attachments:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A post needs text or an attachment")
+
+    post = Post(author_id=user.id, body=body)
+    post.tags = resolve_tags(db, extract_tag_names(body))
     db.add(post)
+    db.flush()
+    for item in attachments:
+        item.post_id = post.id
     db.commit()
     db.refresh(post)
     return serialize_posts(db, [post], user)[0]
@@ -120,13 +170,17 @@ def delete_post(post_id: int, db: DbSession, user: CurrentUser) -> None:
 
 
 @router.post("/posts/{post_id}/like", response_model=PostOut)
-def like_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
+async def like_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
     post = _get_post_or_404(db, post_id)
     existing = db.scalar(select(Like).where(Like.post_id == post.id, Like.user_id == user.id))
     if existing is None:
         db.add(Like(post_id=post.id, user_id=user.id))
         if post.author_id != user.id:
-            db.add(Notification(user_id=post.author_id, actor_id=user.id, kind="like", post_id=post.id))
+            await _notify(
+                db,
+                Notification(user_id=post.author_id, actor_id=user.id, kind="like", post_id=post.id),
+                post.author_id,
+            )
         db.commit()
         db.refresh(post)
     return serialize_posts(db, [post], user)[0]
@@ -162,12 +216,16 @@ def list_comments(post_id: int, db: DbSession) -> list[CommentOut]:
 
 
 @router.post("/posts/{post_id}/comments", response_model=CommentOut, status_code=status.HTTP_201_CREATED)
-def create_comment(post_id: int, payload: CommentCreate, db: DbSession, user: CurrentUser) -> CommentOut:
+async def create_comment(post_id: int, payload: CommentCreate, db: DbSession, user: CurrentUser) -> CommentOut:
     post = _get_post_or_404(db, post_id)
     comment = Comment(post_id=post.id, author_id=user.id, body=payload.body.strip())
     db.add(comment)
     if post.author_id != user.id:
-        db.add(Notification(user_id=post.author_id, actor_id=user.id, kind="comment", post_id=post.id))
+        await _notify(
+            db,
+            Notification(user_id=post.author_id, actor_id=user.id, kind="comment", post_id=post.id),
+            post.author_id,
+        )
     db.commit()
     db.refresh(comment)
     author = serialize_users(db, [user])[user.id]

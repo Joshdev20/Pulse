@@ -22,8 +22,15 @@ def test_post_requires_authentication(client):
 
 
 def test_empty_post_is_rejected(client, make_user):
+    """A post needs text or an attachment; a bare empty body is a 400."""
     headers, _ = make_user("ada")
-    assert client.post("/api/posts", headers=headers, json={"body": ""}).status_code == 422
+    assert client.post("/api/posts", headers=headers, json={"body": ""}).status_code == 400
+    assert client.post("/api/posts", headers=headers, json={"body": "   "}).status_code == 400
+
+
+def test_post_body_length_is_validated(client, make_user):
+    headers, _ = make_user("ada")
+    assert client.post("/api/posts", headers=headers, json={"body": "x" * 2001}).status_code == 422
 
 
 def test_like_and_unlike(client, make_user):

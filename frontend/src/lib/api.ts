@@ -1,5 +1,8 @@
 import type {
   Comment,
+  Conversation,
+  Media,
+  Message,
   Notification,
   Page,
   Post,
@@ -108,8 +111,8 @@ export const api = {
   posts: (page = 1, pageSize = 20) =>
     request<Page<Post>>(`/api/posts${query({ page, page_size: pageSize })}`),
 
-  createPost: (body: string) =>
-    request<Post>('/api/posts', { method: 'POST', body: JSON.stringify({ body }) }),
+  createPost: (body: string, mediaIds: number[] = []) =>
+    request<Post>('/api/posts', { method: 'POST', body: JSON.stringify({ body, media_ids: mediaIds }) }),
 
   getPost: (id: number) => request<Post>(`/api/posts/${id}`),
 
@@ -166,4 +169,78 @@ export const api = {
   trendingTags: (limit = 8) => request<TrendingTag[]>(`/api/trending/tags${query({ limit })}`),
 
   trendingPeople: (limit = 5) => request<User[]>(`/api/trending/people${query({ limit })}`),
+
+  /** Multipart upload. Content-Type is left to the browser so the boundary is set. */
+  upload: (file: File, altText = '', onProgress?: (percent: number) => void) =>
+    uploadWithProgress<Media>('/api/media', file, altText, onProgress),
+
+  conversations: () => request<Conversation[]>('/api/conversations'),
+
+  startConversation: (username: string) =>
+    request<Conversation>('/api/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    }),
+
+  messages: (conversationId: number, limit = 50, beforeId?: number) =>
+    request<Message[]>(
+      `/api/conversations/${conversationId}/messages${query({ limit, before_id: beforeId })}`,
+    ),
+
+  sendMessage: (conversationId: number, body: string, mediaIds: number[] = []) =>
+    request<Message>(`/api/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ body, media_ids: mediaIds }),
+    }),
+
+  markConversationRead: (conversationId: number) =>
+    request<{ unread_count: number }>(`/api/conversations/${conversationId}/read`, {
+      method: 'POST',
+    }),
+
+  messagesUnreadCount: () => request<{ count: number }>('/api/conversations/unread-count'),
+
+  signalTyping: (conversationId: number) =>
+    request<{ ok: boolean }>(`/api/conversations/${conversationId}/typing`, { method: 'POST' }),
+}
+
+/**
+ * Upload via XMLHttpRequest rather than fetch: it is the only way to observe
+ * upload progress, which matters for video files on slow connections.
+ */
+function uploadWithProgress<T>(
+  path: string,
+  file: File,
+  altText: string,
+  onProgress?: (percent: number) => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('alt_text', altText)
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', path)
+    const token = getToken()
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100))
+      }
+    }
+
+    xhr.onload = () => {
+      const payload = xhr.responseText ? safeParse(xhr.responseText) : null
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload as T)
+      } else {
+        reject(new ApiError(xhr.status, readError(payload, xhr.statusText || 'Upload failed')))
+      }
+    }
+    xhr.onerror = () => reject(new ApiError(0, 'Network error during upload'))
+    xhr.onabort = () => reject(new ApiError(0, 'Upload cancelled'))
+
+    xhr.send(form)
+  })
 }
