@@ -25,8 +25,20 @@ const RealtimeContext = createContext<RealtimeValue | null>(null)
 const MAX_BACKOFF_MS = 15_000
 const BASE_BACKOFF_MS = 800
 
-/** Resolve the websocket URL for the current origin, honouring https -> wss. */
+/**
+ * Resolve the websocket URL.
+ *
+ * With `VITE_API_BASE` set the socket points at the API host (honouring
+ * https -> wss); otherwise it stays on the current origin, which is what the
+ * Vite dev proxy and a same-origin production deploy both expect.
+ */
 function socketUrl(): string {
+  const base = import.meta.env.VITE_API_BASE
+  if (base) {
+    const url = new URL(base)
+    const scheme = url.protocol === 'https:' ? 'wss' : 'ws'
+    return `${scheme}://${url.host}/api/ws`
+  }
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
   return `${scheme}://${window.location.host}/api/ws`
 }

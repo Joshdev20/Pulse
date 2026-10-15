@@ -17,6 +17,12 @@ from .routers import auth, media, messages, notifications, posts, realtime, sear
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
     storage.ensure_upload_dir()
+    if settings.auto_seed:
+        # Demo deploys start with an empty database; populate it once. `seed`
+        # is a no-op when users already exist, so restarts are safe.
+        from .seed import seed
+
+        seed()
     # Resolve the cache backend once at startup so the first request is not the
     # one that discovers Redis is unavailable.
     cache.get_store()
@@ -44,6 +50,7 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
+    allow_origin_regex=settings.cors_origin_pattern,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

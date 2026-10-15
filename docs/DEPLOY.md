@@ -1,0 +1,173 @@
+# Deploying Pulse
+
+Pulse is split across two hosts on purpose:
+
+| Part | Host | Why |
+|---|---|---|
+| `frontend/` | **Vercel** | Static Vite build; a CDN and preview deploys are exactly what it is good at |
+| `backend/` | **Render** (or Railway / Fly.io) | Needs a long-lived process, a writable disk and WebSockets |
+
+## Why the backend is not on Vercel
+
+Vercel Functions are stateless and short-lived. Pulse depends on four things that
+serverless breaks, so the split is a requirement rather than a preference:
+
+1. **SQLite on local disk** — wiped on every deploy and not shared between
+   instances. Writes would silently disappear.
+2. **Uploads on local disk** — same problem.
+3. **The rate limiter counts in process memory** — limits would multiply by the
+   number of instances.
+4. **WebSockets** — capped at 300s per connection, and there is no way to
+   broadcast to sockets held by another instance. The Redis pub/sub bus
+   coordinates worker *processes*; it cannot coordinate unrelated function
+   instances, so DMs and notifications would drop silently.
+
+Vercel also caps a request body at **4.5 MB**, while Pulse accepts videos up to
+32 MB. Vercel WebSocket support is in public beta (Python since July 2026) and
+requires Fluid Compute.
+
+---
+
+## 1. Deploy the backend
+
+### Option A — Render (recommended, has a free tier)
+
+The repo contains `render.yaml`, so this is a blueprint deploy.
+
+1. Push this repo to GitHub.
+2. Render Dashboard → **New** → **Blueprint** → pick the repo.
+3. Render creates the `pulse-api` web service from `backend/` plus a 1 GB disk
+   mounted at `/data`.
+4. Fill in the environment variables marked `sync: false` (Render prompts for
+   them). See the table below.
+5. Deploy, then confirm `https://<your-service>.onrender.com/api/health`
+   returns `{"status":"ok",...}`.
+
+> **Free tier note:** Render's free web services sleep after ~15 minutes idle and
+> take ~30–60s to wake. The first request after a sleep will be slow. Free
+> instances also cannot attach a persistent disk, so uploads are lost on
+> restart — set `UPLOAD_DIR` to a mounted disk path on a paid plan, or accept
+> that uploads are ephemeral.
+
+### Option B — Railway / Fly.io
+
+Both run the provided `backend/Dockerfile` unchanged.
+
+- **Railway:** New Project → Deploy from GitHub → set **Root Directory** to
+  `backend`. Railway detects the Dockerfile. Add a volume mounted at `/data`.
+- **Fly.io:** `cd backend && fly launch` (accept the Dockerfile), then
+  `fly volumes create pulse_data` and mount it at `/data`.
+
+Either way, set the same environment variables as below.
+
+### Option C — Docker anywhere
+
+```bash
+docker build -t pulse-api ./backend
+docker run -p 8000:8000 \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -e DATABASE_URL="postgresql://user:pass@host/db" \
+  -e CORS_ORIGINS="https://your-app.vercel.app" \
+  -e AUTO_SEED=true \
+  -v pulse_data:/data \
+  -e UPLOAD_DIR=/data/uploads \
+  pulse-api
+```
+
+### Backend environment variables
+
+| Variable | Required | Value |
+|---|---|---|
+| `SECRET_KEY` | **Yes** | `openssl rand -hex 32`. Tokens signed with the default key are forgeable. |
+| `DATABASE_URL` | **Yes** | A hosted Postgres, e.g. `postgresql://user:pass@host/db`. Render/Railway/Heroku `postgres://` URLs are normalized automatically. Without this you get SQLite on an ephemeral disk. |
+| `CORS_ORIGINS` | **Yes** | Your exact Vercel URL, e.g. `https://pulse.vercel.app`. Comma-separate several. |
+| `CORS_ORIGIN_REGEX` | No | Defaults to `https://[a-zA-Z0-9-]+(\.vercel\.app)$`, which matches the production alias and every preview deployment. |
+| `AUTO_SEED` | No | `true` seeds the demo users/posts when the database is empty. Demo only — it is a no-op once users exist. |
+| `UPLOAD_DIR` | No | Point at the mounted volume, e.g. `/data/uploads`. |
+| `REDIS_URL` | No | Leave **unset** for a single instance. Set it only when running more than one worker, so realtime fan-out reaches sockets on other workers. |
+
+### Notes on the database
+
+`AUTO_SEED=true` creates tables and inserts the demo content on first boot, so a
+fresh deploy is immediately usable. Sign in as any seeded user (e.g. `ada`) with
+password `password123`.
+
+The engine is configured with `pool_pre_ping` and a 280s `pool_recycle` for
+Postgres, because hosted Postgres (and poolers in front of it) closes idle
+connections.
+
+---
+
+## 2. Deploy the frontend to Vercel
+
+1. Vercel Dashboard → **Add New** → **Project** → import the GitHub repo.
+2. Set **Root Directory** to `frontend`. `frontend/vercel.json` supplies the
+   framework, build command, output directory and the SPA fallback rewrite.
+3. Add a build-time environment variable:
+
+   | Key | Value |
+   |---|---|
+   | `VITE_API_BASE` | `https://<your-backend-host>` — **no trailing slash** |
+
+4. **Deploy.**
+
+`VITE_API_BASE` is inlined into the bundle by Vite at build time. It is *not* a
+runtime variable, so changing it requires a redeploy, not a restart.
+
+### How the two connect
+
+- **HTTP** — every request is built as `VITE_API_BASE + /api/...`. With the
+  variable set, requests go straight to the backend host, so no Vercel rewrite
+  or proxy is involved.
+- **WebSocket** — `RealtimeContext` derives `wss://<backend-host>/api/ws` from
+  the same variable, honouring `https → wss`.
+- **CORS** — the backend must allow the Vercel origin. Either set `CORS_ORIGINS`
+  to the production URL or rely on the default `CORS_ORIGIN_REGEX`, which also
+  covers preview deployments.
+
+With `VITE_API_BASE` unset, the frontend stays same-origin and relies on the Vite
+dev proxy — which is exactly what local development and the single-container
+deploy want.
+
+### Deployment protection
+
+If preview URLs redirect to a Vercel login, protection is enabled. To let tools
+reach them, generate a bypass secret under **Settings → Deployment Protection →
+Protection Bypass for Automation** and pass it as
+`?x-vercel-protection-bypass=<secret>` or the `x-vercel-protection-bypass`
+header. Alternatively set Vercel Authentication to *Only Production Deployments*.
+
+---
+
+## 3. Verify a deploy
+
+```bash
+# Backend is up and which cache it chose
+curl https://<backend>/api/health
+# → {"status":"ok","service":"Pulse API","cache":"memory"}
+
+# Login works (proves the DB is seeded and reachable)
+curl -X POST https://<backend>/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"ada","password":"password123"}'
+
+# CORS allows the Vercel origin
+curl -i -X OPTIONS https://<backend>/api/auth/login \
+  -H 'Origin: https://<your-app>.vercel.app' \
+  -H 'Access-Control-Request-Method: POST' | grep -i access-control-allow-origin
+```
+
+Then open the Vercel URL and sign in as `ada` / `password123`. Open the browser
+console: the WebSocket should connect to `wss://<backend>/api/ws`, and the
+`/notifications` page should render with a live socket.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Browser console: CORS error | `CORS_ORIGINS` does not include the Vercel origin and the regex was overridden |
+| Login returns 401 on a fresh deploy | `AUTO_SEED` was not `true`, so there are no users — seed manually with `python -m app.seed` |
+| Uploads vanish after a redeploy | No persistent disk, or `UPLOAD_DIR` does not point at the mount |
+| WebSocket fails to connect | Backend host is unreachable, or a proxy in front of it does not forward `Upgrade` |
+| First request after idle takes ~60s | Render free tier cold start |
+| `FUNCTION_PAYLOAD_TOO_LARGE` | A Vercel Function received >4.5 MB — the backend is on the wrong host |

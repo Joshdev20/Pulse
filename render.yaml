@@ -1,0 +1,35 @@
+# Render blueprint for the Pulse backend.
+#
+# Creates the web service and a persistent disk for uploads. Postgres is
+# deliberately left out so you can pick the free tier of your choice; set
+# DATABASE_URL in the dashboard (or uncomment the `databases` block below).
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> pick this repo.
+
+services:
+  - type: web
+    name: pulse-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements-prod.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.15
+      # Set these in the dashboard; `sync: false` keeps them out of git.
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: AUTO_SEED
+        value: "true"
+      - key: UPLOAD_DIR
+        value: /data/uploads
+    disk:
+      name: pulse-uploads
+      mountPath: /data
+      sizeGB: 1

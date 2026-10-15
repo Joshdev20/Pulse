@@ -14,6 +14,21 @@ import type {
 
 const TOKEN_KEY = 'pulse.token'
 
+/**
+ * Base URL of the API, without a trailing slash.
+ *
+ * Empty in local dev, where Vite proxies `/api` to the backend so requests stay
+ * same-origin. In a split deploy the frontend and API live on different hosts,
+ * so this is set at build time (e.g. `https://pulse-api.onrender.com`) and every
+ * request becomes absolute.
+ */
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '')
+
+/** Make an API path absolute when a base URL is configured. */
+export function apiUrl(path: string): string {
+  return API_BASE ? `${API_BASE}${path}` : path
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -57,7 +72,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.set('Content-Type', 'application/json')
   }
 
-  const response = await fetch(path, { ...options, headers })
+  const response = await fetch(apiUrl(path), { ...options, headers })
 
   if (response.status === 204) return undefined as T
 
