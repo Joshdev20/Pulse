@@ -189,6 +189,7 @@ console: the WebSocket should connect to `wss://<backend>/api/ws`, and the
 | Symptom | Cause |
 |---|---|
 | Site renders but **no account can be created or logged in** | `VITE_API_BASE` was not set at build time, so the bundle called its own origin and Vercel answered `/api/*` with `index.html`. Set it in the Vercel project and redeploy. The build now fails when this is missing. |
+| Everything works **except uploads** (404, or "the upload was answered by the web server") | The upload XHR was built from a relative path instead of `apiUrl()`, so it hit the frontend host rather than the API. Uploads use `XMLHttpRequest` for progress reporting and so do not inherit the `fetch` wrapper's URL handling. Fixed in `uploadWithProgress()`; keep new upload paths going through `apiUrl()`. |
 | Render: "unable to read the render.yaml file" | The Blueprint is invalid or unprovisionable. Validate with `render blueprints validate` or against https://render.com/schema/render.yaml.json. The most common trap is a `disk:` block on `plan: free` — Render's JSON schema accepts it, but free web services cannot have disks. |
 | Browser console: CORS error | `CORS_ORIGINS` does not include the Vercel origin and the regex was overridden |
 | Login returns 401 on a fresh deploy | `AUTO_SEED` was not `true`, so there are no users — seed manually with `python -m app.seed` |
