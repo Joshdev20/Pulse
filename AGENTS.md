@@ -96,6 +96,29 @@ npm run build        # typecheck + vite build
   `tagging.py` flushes new `Tag` rows before linking them for this reason. Keep that flush.
 - The database file is `backend/pulse.db` and is gitignored. `python -m app.seed --reset`
   drops and rebuilds it.
+- `app/cache.py` caches JSON responses for hot read endpoints. Invalidation is by
+  *namespace version*, not key deletion: `cache.bump(...)` increments `pulse:v:<ns>`, which
+  is folded into every cache key, so old entries become unreachable and expire on their own.
+  A write must bump every namespace whose reads it can change — a new post touches
+  `posts`, `feed`, `trending`, `search`, `comments` and `users` (post counts), which is why
+  `POST_WRITE_NAMESPACES` in `routers/posts.py` is a list rather than a single name.
+- The cache store is process-global and resolved once. `conftest.py` clears `redis_url` and
+  calls `reset_store()` around every test, so a Redis server running locally cannot leak a
+  cached response from one test into the next. Keep that fixture autouse.
+- `redis_url` defaults to `redis://localhost:6379/0`, so the app uses Redis when a server is
+  present and silently falls back to an in-process store when it is not. `/api/health`
+  reports which backend is live — check it before assuming Redis is actually in use.
+- `app/realtime.py` fans out over local sockets *and* a Redis pub/sub channel (`pulse:ws`)
+  so a socket held by one worker receives events published by another. Bus envelopes carry
+  `PROCESS_ID`; a process ignores its own announcement because `publish` already delivered
+  locally. Do not deliver bus messages without that origin check, or every event is sent twice.
+- Timestamps are serialized through `UTCDatetime` in `schemas.py`, which forces an explicit
+  UTC offset. SQLite drops `tzinfo`, so a naive datetime would otherwise be read as local
+  time by the browser and make a fresh post look an hour old. Any new timestamp field must
+  use `UTCDatetime`, not bare `datetime`.
+- The frontend renders relative times with `RelativeTime` (`components/UI.tsx`), driven by
+  the shared `useNow` clock. Use it instead of calling `timeAgo` directly so timestamps keep
+  ticking and stay consistent with each other.
 - Pushing to GitHub requires the "OpenHands AI" GitHub App (client id `Iv23lizrrwLGm04hszl7`)
   to be installed on the account. The `GITHUB_TOKEN` is a user-to-server token from that app;
   authorizing the app is not enough, it must be *installed* with `Contents: Read and write`.
