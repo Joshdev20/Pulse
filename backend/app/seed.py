@@ -304,6 +304,33 @@ def seed(reset: bool = False) -> None:
         db.close()
 
 
+def ensure_admin() -> str | None:
+    """Promote the oldest account when the platform has no moderator at all.
+
+    The demo seed only runs against an empty database, so a deployment whose
+    users predate the ``is_admin`` column keeps the column's ``false`` default
+    and cannot reach the admin endpoints. The API refuses to remove the last
+    administrator, so reaching zero this way means the column was just added;
+    restoring one keeps the console reachable. Returns the promoted username.
+    """
+    db = SessionLocal()
+    try:
+        has_admin = db.scalar(
+            select(func.count()).select_from(User).where(User.is_admin.is_(True))
+        )
+        if has_admin:
+            return None
+        first = db.scalar(select(User).order_by(User.id).limit(1))
+        if first is None:
+            return None
+        first.is_admin = True
+        db.commit()
+        print(f"No administrator found; '{first.username}' can now moderate.")
+        return first.username
+    finally:
+        db.close()
+
+
 def grant_admin(username: str) -> bool:
     """Give an existing account moderator rights.
 
