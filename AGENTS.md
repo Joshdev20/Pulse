@@ -16,14 +16,14 @@ Backend (run from `backend/`):
 pip install -r requirements.txt
 python -m app.seed --reset                  # rebuild pulse.db with demo data
 python -m uvicorn app.main:app --reload --port 8000
-python -m pytest -q                         # 30 tests
+python -m pytest -q                         # 71 tests
 ```
 
 Frontend (run from `frontend/`):
 
 ```bash
 npm install
-npm run dev          # port 5173, proxies /api to 127.0.0.1:8000
+npm run dev          # port 12000, proxies /api and /api/ws to 127.0.0.1:8000
 npm run typecheck    # tsc --noEmit
 npm run build        # typecheck + vite build
 ```
@@ -60,14 +60,38 @@ npm run build        # typecheck + vite build
 - Style with existing classes in `styles.css` and the CSS custom properties at the top of
   that file. Do not introduce a styling library or inline hex colours.
 
+### Realtime
+
+- One socket per session, owned by `RealtimeContext`. Components never open their own
+  WebSocket; they call `useRealtimeEvent(listener)` or `useRealtime()` and receive events.
+- The auth token travels in the first frame after `open`, never the query string, so it
+  stays out of access logs. Keep it that way.
+- Message fan-out is per recipient: each participant gets their own serialized copy
+  because `Message.mine` is relative to the reader. Do not broadcast one shared payload.
+- `usePageTitle(pathname, suffix?)` keeps `document.title` in step with the route. Login and
+  register set their own titles while mounted; signed-in pages go through the hook.
+
 ## Gotchas
 
+- `RateLimitMiddleware` keeps counters in process-wide state, so tests disable it in
+  `conftest.py`. If you add a test that asserts a 429, re-enable it for that test only.
+- Uploaded files land in `backend/uploads/` (gitignored) under random names; the database
+  stores only the generated filename. `storage.resolve` re-checks containment, so never
+  build an upload path by hand.
+- Vite HMR replaces a changed module but does not re-run effects whose dependencies are
+  unchanged, so a new `useEffect` may not fire until a full page reload. Hard-reload when
+  verifying hook changes in the browser.
 - `allowedHosts: true` is set in `vite.config.ts` so the dev server accepts the generated
   sandbox hostnames. Removing it makes the app return "Blocked request" when accessed
   through a proxy hostname.
 - `UserPublic` deliberately omits `email`, and every user-facing endpoint (including
   `/auth/me`) returns `UserPublic`. The email is only ever accepted on register/login, so
   no component may reference `user.email`.
+- Every read endpoint requires a bearer token, including `/api/media/{id}`. A bare
+  `<img src>`/`<video src>` cannot send an `Authorization` header, so media must go through
+  `useMediaUrl` (`src/lib/useMediaUrl.ts`), which fetches the bytes with auth and returns a
+  blob URL. It reference-counts per path, so several elements showing one attachment share a
+  single download. Never point an element at `media.url` directly.
 - SQLite writes can hit `UNIQUE` constraint errors if a flush is skipped mid-transaction;
   `tagging.py` flushes new `Tag` rows before linking them for this reason. Keep that flush.
 - The database file is `backend/pulse.db` and is gitignored. `python -m app.seed --reset`

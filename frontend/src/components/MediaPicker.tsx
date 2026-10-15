@@ -2,9 +2,27 @@ import { useRef, useState } from 'react'
 import { CloseIcon, ImageIcon } from './Icons'
 import { Spinner } from './UI'
 import { api, ApiError } from '../lib/api'
+import { useMediaUrl } from '../lib/useMediaUrl'
 import type { Media } from '../lib/types'
 
 const MAX_ATTACHMENTS = 4
+
+/** Uploaded-but-not-yet-posted preview. Owns its own authenticated fetch. */
+function Thumb({ item, onRemove }: { item: Media; onRemove: () => void }) {
+  const asset = useMediaUrl(item.url)
+  return (
+    <div className="media-thumb">
+      {item.kind === 'image' ? (
+        <img src={asset?.url} alt={item.alt_text} />
+      ) : (
+        <span className="media-thumb-file">{item.content_type.split('/')[1]}</span>
+      )}
+      <button type="button" className="media-thumb-remove" onClick={onRemove} aria-label="Remove attachment">
+        <CloseIcon size={12} />
+      </button>
+    </div>
+  )
+}
 
 /**
  * File picker that uploads immediately and hands back media ids.
@@ -92,21 +110,7 @@ export function MediaPicker({
       {items.length > 0 && (
         <div className="media-thumbs">
           {items.map((item) => (
-            <div key={item.id} className="media-thumb">
-              {item.kind === 'image' ? (
-                <img src={item.url} alt={item.alt_text} />
-              ) : (
-                <span className="media-thumb-file">{item.content_type.split('/')[1]}</span>
-              )}
-              <button
-                type="button"
-                className="media-thumb-remove"
-                onClick={() => remove(item.id)}
-                aria-label="Remove attachment"
-              >
-                <CloseIcon size={12} />
-              </button>
-            </div>
+            <Thumb key={item.id} item={item} onRemove={() => remove(item.id)} />
           ))}
         </div>
       )}

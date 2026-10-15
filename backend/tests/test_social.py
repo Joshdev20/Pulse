@@ -17,9 +17,9 @@ def test_follow_and_unfollow(client, make_user):
     profile = client.get("/api/users/ada", headers=ada_headers).json()
     assert profile["following_count"] == 1
 
-    followers = client.get("/api/users/grace/followers").json()
+    followers = client.get("/api/users/grace/followers", headers=ada_headers).json()
     assert [u["username"] for u in followers] == ["ada"]
-    assert client.get("/api/users/ada/following").json()[0]["username"] == "grace"
+    assert client.get("/api/users/ada/following", headers=ada_headers).json()[0]["username"] == "grace"
 
     unfollowed = client.delete("/api/users/grace/follow", headers=ada_headers)
     assert unfollowed.json()["follower_count"] == 0
@@ -96,7 +96,7 @@ def test_platform_stats(client, make_user):
     client.post(f"/api/posts/{post['id']}/like", headers=grace_headers)
     client.post(f"/api/posts/{post['id']}/comments", headers=grace_headers, json={"body": "hi"})
 
-    stats = client.get("/api/users/stats").json()
+    stats = client.get("/api/users/stats", headers=ada_headers).json()
     assert stats == {"users": 2, "posts": 1, "likes": 1, "comments": 1}
 
 

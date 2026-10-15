@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { DownloadIcon, FileIcon, PlayIcon } from './Icons'
+import { useMediaUrl } from '../lib/useMediaUrl'
 import type { Media } from '../lib/types'
 
 function humanSize(bytes: number): string {
@@ -10,6 +11,8 @@ function humanSize(bytes: number): string {
 
 /** Full-screen viewer for a single image or video. */
 function Lightbox({ item, onClose }: { item: Media; onClose: () => void }) {
+  const asset = useMediaUrl(item.url)
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -37,17 +40,23 @@ function Lightbox({ item, onClose }: { item: Media; onClose: () => void }) {
         ✕
       </button>
       {item.kind === 'video' ? (
-        <video className="lightbox-media" src={item.url} controls autoPlay playsInline />
+        <video className="lightbox-media" src={asset?.url} controls autoPlay playsInline />
       ) : (
-        <img className="lightbox-media" src={item.url} alt={item.alt_text} />
+        <img className="lightbox-media" src={asset?.url} alt={item.alt_text} />
       )}
     </div>
   )
 }
 
 function Attachment({ item }: { item: Media }) {
+  const asset = useMediaUrl(item.url)
   return (
-    <a className="attachment" href={item.url} download onClick={(event) => event.stopPropagation()}>
+    <a
+      className="attachment"
+      href={asset?.url}
+      download={asset?.filename ?? undefined}
+      onClick={(event) => event.stopPropagation()}
+    >
       <span className="attachment-icon">
         <FileIcon size={18} />
       </span>
@@ -61,6 +70,33 @@ function Attachment({ item }: { item: Media }) {
         <DownloadIcon size={16} />
       </span>
     </a>
+  )
+}
+
+/** One tile in the grid. Owns its own fetch so hooks stay per-item. */
+function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
+  const asset = useMediaUrl(item.url)
+  return (
+    <button
+      type="button"
+      className="media-cell"
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpen()
+      }}
+      aria-label={item.alt_text || 'Open attachment'}
+    >
+      {item.kind === 'video' ? (
+        <>
+          <video className="media-el" src={asset?.url} muted playsInline preload="metadata" />
+          <span className="media-play">
+            <PlayIcon size={30} />
+          </span>
+        </>
+      ) : (
+        <img className="media-el" src={asset?.url} alt={item.alt_text} loading="lazy" />
+      )}
+    </button>
   )
 }
 
@@ -82,27 +118,7 @@ export function MediaGallery({ items }: { items: Media[] }) {
       {visuals.length > 0 && (
         <div className={`media-grid media-count-${Math.min(visuals.length, 4)}`}>
           {visuals.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="media-cell"
-              onClick={(event) => {
-                event.stopPropagation()
-                setOpen(item)
-              }}
-              aria-label={item.alt_text || 'Open attachment'}
-            >
-              {item.kind === 'video' ? (
-                <>
-                  <video className="media-el" src={item.url} muted playsInline preload="metadata" />
-                  <span className="media-play">
-                    <PlayIcon size={30} />
-                  </span>
-                </>
-              ) : (
-                <img className="media-el" src={item.url} alt={item.alt_text} loading="lazy" />
-              )}
-            </button>
+            <MediaCell key={item.id} item={item} onOpen={() => setOpen(item)} />
           ))}
         </div>
       )}

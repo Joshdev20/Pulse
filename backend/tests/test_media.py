@@ -83,8 +83,8 @@ def test_media_requires_auth_and_visibility(client, make_user, tmp_path, monkeyp
     assert client.get(f"/api/media/{media_id}", headers=headers).status_code == 200
     # A different user cannot.
     assert client.get(f"/api/media/{media_id}", headers=other).status_code == 404
-    # Nor can an anonymous caller.
-    assert client.get(f"/api/media/{media_id}").status_code == 404
+    # An anonymous caller is rejected outright, before visibility is even checked.
+    assert client.get(f"/api/media/{media_id}").status_code == 401
 
 
 def test_media_becomes_public_once_attached_to_a_post(client, make_user, tmp_path, monkeypatch):

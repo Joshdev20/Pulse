@@ -80,15 +80,15 @@ def test_comments_flow(client, make_user):
     assert created.status_code == 201
     assert created.json()["author"]["username"] == "grace"
 
-    comments = client.get(f"/api/posts/{post['id']}/comments").json()
+    comments = client.get(f"/api/posts/{post['id']}/comments", headers=author_headers).json()
     assert len(comments) == 1
 
-    detail = client.get(f"/api/posts/{post['id']}").json()
+    detail = client.get(f"/api/posts/{post['id']}", headers=author_headers).json()
     assert detail["comment_count"] == 1
 
     comment_id = comments[0]["id"]
     assert client.delete(f"/api/comments/{comment_id}", headers=other_headers).status_code == 204
-    assert client.get(f"/api/posts/{post['id']}/comments").json() == []
+    assert client.get(f"/api/posts/{post['id']}/comments", headers=author_headers).json() == []
 
 
 def test_post_author_can_delete_comment(client, make_user):
@@ -122,7 +122,7 @@ def test_edit_and_delete_own_post(client, make_user):
     assert [tag["name"] for tag in updated["tags"]] == ["new"]
 
     assert client.delete(f"/api/posts/{post['id']}", headers=headers).status_code == 204
-    assert client.get(f"/api/posts/{post['id']}").status_code == 404
+    assert client.get(f"/api/posts/{post['id']}", headers=headers).status_code == 404
 
 
 def test_feed_scopes(client, make_user):
@@ -173,14 +173,14 @@ def test_search(client, make_user):
     client.post("/api/posts", headers=grace_headers, json={"body": "compilers are fun #cobol"})
     client.post("/api/posts", headers=ada_headers, json={"body": "analytical engines"})
 
-    posts = client.get("/api/search/posts?q=compilers").json()
+    posts = client.get("/api/search/posts?q=compilers", headers=ada_headers).json()
     assert len(posts) == 1
     assert posts[0]["author"]["username"] == "grace"
 
-    users = client.get("/api/search/users?q=gra").json()
+    users = client.get("/api/search/users?q=gra", headers=ada_headers).json()
     assert [u["username"] for u in users] == ["grace"]
 
-    combined = client.get("/api/search?q=fun").json()
+    combined = client.get("/api/search?q=fun", headers=ada_headers).json()
     assert len(combined["posts"]) == 1
     assert combined["users"] == []
 
@@ -190,7 +190,7 @@ def test_trending_tags(client, make_user):
     client.post("/api/posts", headers=headers, json={"body": "one #python #code"})
     client.post("/api/posts", headers=headers, json={"body": "two #python"})
 
-    tags = client.get("/api/trending/tags").json()
+    tags = client.get("/api/trending/tags", headers=headers).json()
     assert tags[0] == {"name": "python", "uses": 2}
 
 
@@ -201,7 +201,7 @@ def test_repeated_tags_are_shared_not_duplicated(client, make_user):
         response = client.post("/api/posts", headers=headers, json={"body": f"post {index} #shared"})
         assert response.status_code == 201, response.text
 
-    tags = client.get("/api/trending/tags").json()
+    tags = client.get("/api/trending/tags", headers=headers).json()
     assert tags == [{"name": "shared", "uses": 3}]
 
     # Two new tags in one post must also not collide.
@@ -221,5 +221,33 @@ def test_profile_post_counts(client, make_user):
     posts = client.get("/api/users/ada/posts", headers=ada_headers).json()
     assert posts["total"] == 2
 
-    other = client.get("/api/users/ada").json()
+    other = client.get("/api/users/ada", headers=ada_headers).json()
     assert other["is_following"] is False
+
+
+def test_read_endpoints_require_authentication(client, make_user):
+    """Every read route is closed to anonymous callers, matching the gated UI."""
+    headers, _ = make_user("ada")
+    post = client.post("/api/posts", headers=headers, json={"body": "hello #tag"}).json()
+
+    reads = [
+        "/api/posts",
+        "/api/feed",
+        f"/api/posts/{post['id']}",
+        f"/api/posts/{post['id']}/comments",
+        "/api/trending/tags",
+        "/api/trending/people",
+        "/api/search/posts?q=hello",
+        "/api/search/users?q=ada",
+        "/api/search?q=hello",
+        "/api/users/suggested",
+        "/api/users/stats",
+        "/api/users/ada",
+        "/api/users/ada/posts",
+        "/api/users/ada/likes",
+        "/api/users/ada/followers",
+        "/api/users/ada/following",
+    ]
+    for path in reads:
+        assert client.get(path).status_code == 401, f"anonymous GET {path} was allowed"
+        assert client.get(path, headers=headers).status_code == 200, f"authed GET {path} failed"
