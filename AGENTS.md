@@ -197,3 +197,10 @@ the public URL returns 502 until the dev server is bound to 12000.
 - `requirements-prod.txt` is for deployed images and excludes tests; `requirements-dev.txt`
   extends `requirements.txt` with pytest. pip does not parse docstrings, so comments in
   these files must start with `#` — a `"""..."""` header breaks the build.
+- `vercel.json`'s SPA rewrite must stay scoped to `/((?!api/).*)`. A plain `/(.*)`
+  catch-all also swallows `/api/*`, and because that happens before the build's
+  API base is consulted, the deployed site renders fine while every auth call
+  receives `index.html`. `vite.config.ts` also fails a `VERCEL=1` build when
+  `VITE_API_BASE` is empty, so a misconfigured bundle cannot ship silently;
+  `VITE_SAME_ORIGIN=1` opts out for a genuine single-origin deploy. `api.ts`
+  raises a descriptive error when a response comes back as `text/html`.

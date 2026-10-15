@@ -74,6 +74,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const response = await fetch(apiUrl(path), { ...options, headers })
 
+  // When the API base is unset in a split deploy, the web server answers
+  // /api/* from its SPA fallback and returns index.html with a 200 or 405.
+  // Without this check that surfaces as a baffling JSON parse error.
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('text/html')) {
+    throw new ApiError(
+      response.status,
+      API_BASE
+        ? `${API_BASE} returned HTML instead of JSON. Check that VITE_API_BASE points at the backend.`
+        : 'The API is not configured for this deployment: /api requests are being answered by the web server instead of the backend. Set VITE_API_BASE to the backend origin and redeploy.',
+    )
+  }
+
   if (response.status === 204) return undefined as T
 
   const text = await response.text()
