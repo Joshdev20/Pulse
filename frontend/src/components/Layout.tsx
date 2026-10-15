@@ -8,6 +8,7 @@ import {
   LogoutIcon,
   MailIcon,
   SearchIcon,
+  ShieldIcon,
   SparkIcon,
   TrendIcon,
   UserIcon,
@@ -77,6 +78,17 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
               <UserIcon size={23} />
             </span>
             <span>Profile</span>
+          </NavLink>
+        )}
+        {user?.is_admin && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+          >
+            <span className="nav-icon">
+              <ShieldIcon size={23} />
+            </span>
+            <span>Admin</span>
           </NavLink>
         )}
       </nav>
@@ -149,6 +161,15 @@ export function MobileNav() {
         >
           <UserIcon size={21} />
           <span>Profile</span>
+        </NavLink>
+      )}
+      {user?.is_admin && (
+        <NavLink
+          to="/admin"
+          className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
+        >
+          <ShieldIcon size={21} />
+          <span>Admin</span>
         </NavLink>
       )}
     </nav>

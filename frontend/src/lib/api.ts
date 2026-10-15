@@ -1,4 +1,9 @@
 import type {
+  AdminComment,
+  AdminPost,
+  AdminStats,
+  AdminUser,
+  AdminUserStatus,
   Comment,
   Conversation,
   Media,
@@ -230,6 +235,40 @@ export const api = {
 
   signalTyping: (conversationId: number) =>
     request<{ ok: boolean }>(`/api/conversations/${conversationId}/typing`, { method: 'POST' }),
+
+  // ---- Admin -------------------------------------------------------------
+
+  adminStats: () => request<AdminStats>('/api/admin/stats'),
+
+  adminUsers: (params: { q?: string; status?: AdminUserStatus; page?: number; page_size?: number } = {}) =>
+    request<Page<AdminUser>>(`/api/admin/users${query(params)}`),
+
+  adminUser: (id: number) => request<AdminUser>(`/api/admin/users/${id}`),
+
+  adminSetBan: (id: number, banned: boolean, reason = '') =>
+    request<AdminUser>(`/api/admin/users/${id}/ban`, {
+      method: 'POST',
+      body: JSON.stringify({ banned, reason }),
+    }),
+
+  adminSetAdmin: (id: number, isAdmin: boolean) =>
+    request<AdminUser>(`/api/admin/users/${id}/admin`, {
+      method: 'POST',
+      body: JSON.stringify({ is_admin: isAdmin }),
+    }),
+
+  adminDeleteUser: (id: number) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+
+  adminPosts: (params: { q?: string; author?: string; page?: number; page_size?: number } = {}) =>
+    request<Page<AdminPost>>(`/api/admin/posts${query(params)}`),
+
+  adminDeletePost: (id: number) => request<void>(`/api/admin/posts/${id}`, { method: 'DELETE' }),
+
+  adminComments: (params: { q?: string; author?: string; page?: number; page_size?: number } = {}) =>
+    request<Page<AdminComment>>(`/api/admin/comments${query(params)}`),
+
+  adminDeleteComment: (id: number) =>
+    request<void>(`/api/admin/comments/${id}`, { method: 'DELETE' }),
 }
 
 /**

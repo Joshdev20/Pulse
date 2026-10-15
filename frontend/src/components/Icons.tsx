@@ -131,6 +131,26 @@ export const UsersIcon = (p: IconProps) => (
   </Base>
 )
 
+export const ShieldIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 3 5 6v5.5c0 4.2 2.9 8 7 9.5 4.1-1.5 7-5.3 7-9.5V6l-7-3Z" />
+  </Base>
+)
+
+export const BanIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M6.2 6.2l11.6 11.6" />
+  </Base>
+)
+
+export const WarningIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 4.5 3 19.5h18L12 4.5Z" />
+    <path d="M12 10v4M12 17.2v.1" />
+  </Base>
+)
+
 export const CloseIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="m6 6 12 12M18 6 6 18" />

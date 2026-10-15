@@ -69,6 +69,13 @@ body,
   height: 100%;
 }
 
+/* Nothing in the layout may produce a horizontal scrollbar. Individual
+   components still clip their own long content deliberately; this only stops a
+   stray wide child from shifting the whole page sideways. */
+html {
+  overflow-x: hidden;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -77,6 +84,7 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overflow-wrap: break-word;
 }
 
 /* Ambient background wash */
@@ -318,6 +326,7 @@ h4 {
 .sidebar-user-name {
   font-weight: 600;
   font-size: 14.5px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -326,6 +335,7 @@ h4 {
 .sidebar-user-handle {
   color: var(--text-faint);
   font-size: 13px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -674,9 +684,21 @@ h4 {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  /* Sits beside the counter and submit button, so it must be able to shrink
+     and truncate rather than push them off the edge on a narrow screen. */
+  min-width: 0;
+  flex: 0 1 auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Below the point where the hint would be reduced to a few characters, drop it
+   entirely: the counter and the submit button are the important controls. */
+@media (max-width: 620px) {
+  .composer-hint {
+    display: none;
+  }
 }
 
 /* ============================================================
@@ -712,10 +734,27 @@ h4 {
   min-width: 0;
 }
 
+/* The author name and handle are user input. On a narrow screen, or with a
+   64-character display name, they must give way to the time and the menu
+   button instead of widening the card. */
 .post-author {
   font-weight: 650;
   font-size: 15px;
   color: var(--text);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-handle {
+  color: var(--text-faint);
+  font-size: 13.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .post-author:hover {
@@ -994,12 +1033,16 @@ h4 {
   font-size: 23px;
   font-weight: 720;
   letter-spacing: -0.025em;
+  /* A 64-character display name must not push the profile column wider than
+     the viewport. */
+  overflow-wrap: anywhere;
 }
 
 .profile-handle {
   color: var(--text-faint);
   font-size: 14.5px;
   margin-top: 1px;
+  overflow-wrap: anywhere;
 }
 
 .profile-bio {
@@ -1325,11 +1368,16 @@ h4 {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .detail-name {
   font-weight: 660;
   font-size: 15.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .detail-name:hover {
@@ -1339,6 +1387,10 @@ h4 {
 .detail-handle {
   color: var(--text-faint);
   font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .detail-text {
@@ -1494,10 +1546,17 @@ h4 {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
-.user-row-name:hover {
-  text-decoration: underline;
+/* The name and handle sit in a flex row beside the follow button, so they must
+   truncate rather than widen the row. */
+.user-row-name > span,
+.user-row-handle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-row-handle {
@@ -1513,6 +1572,11 @@ h4 {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.user-row-name:hover {
+  text-decoration: underline;
 }
 
 .user-row-actions {
@@ -2356,6 +2420,379 @@ h4 {
 }
 
 /* ============================================================
+   Admin console
+   ============================================================ */
+.admin-tab-body {
+  padding: 16px 18px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.admin-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.admin-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 15px 16px;
+  min-width: 0;
+}
+
+.admin-tile-value {
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.admin-tile-label {
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.admin-tile-hint {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.admin-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.admin-panel {
+  min-width: 0;
+}
+
+.admin-empty {
+  color: var(--text-faint);
+  font-size: 13.5px;
+  padding-bottom: 6px;
+}
+
+.admin-ranks {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.admin-rank {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 84px 42px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+}
+
+.admin-rank-label {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-rank-bar {
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.admin-rank-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--violet), var(--accent));
+}
+
+.admin-rank-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.admin-inline-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
+.admin-inline-stats strong {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+}
+
+.admin-search:focus-within {
+  border-color: var(--border-strong);
+}
+
+.admin-search input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.admin-filters {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.admin-count {
+  font-size: 13px;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+.admin-error {
+  color: var(--rose);
+  font-size: 13.5px;
+  background: var(--rose-soft);
+  border: 1px solid rgba(251, 113, 133, 0.28);
+  border-radius: var(--radius-sm);
+  padding: 9px 13px;
+  overflow-wrap: anywhere;
+}
+
+.admin-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.admin-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.admin-row:last-child {
+  border-bottom: none;
+}
+
+.admin-row-banned {
+  background: rgba(251, 113, 133, 0.05);
+}
+
+.admin-row-avatar {
+  flex: none;
+}
+
+.admin-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.admin-row-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.admin-row-name {
+  font-weight: 650;
+  font-size: 14.5px;
+  color: var(--text);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-row-name:hover {
+  text-decoration: underline;
+}
+
+.admin-row-handle,
+.admin-row-sub {
+  color: var(--text-faint);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.admin-row-sub {
+  margin-top: 2px;
+}
+
+.admin-row-stats {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.admin-row-reason {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--rose);
+  overflow-wrap: anywhere;
+}
+
+.admin-row-actions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-items: stretch;
+}
+
+.admin-badge {
+  font-size: 11px;
+  font-weight: 650;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.admin-badge-accent {
+  background: var(--violet-soft);
+  color: var(--violet);
+}
+
+.admin-badge-danger {
+  background: var(--rose-soft);
+  color: var(--rose);
+}
+
+.admin-content-body {
+  margin-top: 5px;
+  font-size: 14px;
+  color: #dfe4ef;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.admin-link {
+  color: var(--sky);
+}
+
+.admin-link:hover {
+  text-decoration: underline;
+}
+
+.admin-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.admin-pager-status {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.admin-modal-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.admin-modal-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--rose);
+}
+
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.admin-field input {
+  padding: 10px 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.admin-field input:focus {
+  border-color: var(--border-strong);
+}
+
+/* Stack the row so the action buttons never squeeze the user's details. */
+@media (max-width: 700px) {
+  .admin-row {
+    flex-direction: column;
+  }
+  .admin-row-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .admin-row-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .admin-tab-body {
+    padding: 14px 12px 40px;
+  }
+}
+
+/* ============================================================
    Responsive
    ============================================================ */
 @media (max-width: 1180px) {
@@ -2455,8 +2892,11 @@ h4 {
     min-width: 0;
   }
 
+  /* Labels such as "Notifications" do not fit beside five icons on a narrow
+     phone, so they shrink and then drop out, leaving the icons legible. */
   .mobile-nav-item > span:last-child {
     max-width: 100%;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2538,6 +2978,14 @@ h4 {
   .profile-counts {
     gap: 14px;
     font-size: 13.5px;
+  }
+  /* Five labelled items cannot fit across a phone this narrow. The icons carry
+     the meaning and each link keeps its accessible name. */
+  .mobile-nav-item > span:last-child {
+    display: none;
+  }
+  .mobile-nav-item {
+    padding: 8px 2px;
   }
 }
 

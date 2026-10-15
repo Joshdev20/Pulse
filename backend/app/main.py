@@ -10,12 +10,17 @@ from .config import settings
 from .database import Base, engine
 from .middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from .realtime import manager
-from .routers import auth, media, messages, notifications, posts, realtime, search, users
+from .routers import admin, auth, media, messages, notifications, posts, realtime, search, users
+from .schema import ensure_schema
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # create_all makes missing tables but never alters an existing one, so a
+    # deploy onto a database created by an earlier version needs the newer
+    # columns added here.
+    ensure_schema(engine)
     storage.ensure_upload_dir()
     if settings.auto_seed:
         # Demo deploys start with an empty database; populate it once. `seed`
@@ -64,6 +69,7 @@ app.include_router(search.router)
 app.include_router(media.router)
 app.include_router(messages.router)
 app.include_router(realtime.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/health", tags=["meta"])

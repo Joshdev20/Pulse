@@ -11,6 +11,7 @@ export interface User {
   following_count: number
   post_count: number
   is_following: boolean
+  is_admin: boolean
 }
 
 export interface Tag {
@@ -110,3 +111,77 @@ export interface TrendingTag {
   name: string
   uses: number
 }
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+export interface AdminUser {
+  id: number
+  username: string
+  email: string
+  display_name: string
+  bio: string
+  location: string
+  website: string
+  avatar_color: string
+  created_at: string
+  is_active: boolean
+  is_admin: boolean
+  is_banned: boolean
+  banned_reason: string
+  follower_count: number
+  following_count: number
+  post_count: number
+  comment_count: number
+}
+
+export interface AdminPost {
+  id: number
+  body: string
+  created_at: string
+  author_id: number
+  author_username: string
+  author_display_name: string
+  like_count: number
+  comment_count: number
+  media_count: number
+}
+
+export interface AdminComment {
+  id: number
+  body: string
+  created_at: string
+  post_id: number
+  author_id: number
+  author_username: string
+  author_display_name: string
+}
+
+export interface AdminCount {
+  label: string
+  value: number
+}
+
+export interface AdminStats {
+  total_users: number
+  active_users: number
+  banned_users: number
+  admin_users: number
+  new_users_7d: number
+  new_users_30d: number
+  total_posts: number
+  posts_7d: number
+  posts_30d: number
+  total_comments: number
+  total_likes: number
+  total_messages: number
+  total_conversations: number
+  total_media: number
+  engagement_rate: number
+  avg_posts_per_user: number
+  top_posters: AdminCount[]
+  top_tags: AdminCount[]
+}
+
+export type AdminUserStatus = 'all' | 'active' | 'banned' | 'admin'

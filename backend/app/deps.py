@@ -60,10 +60,34 @@ def get_current_user(
     user = _user_from_token(credentials.credentials, db)
     if user is None or not user.is_active:
         raise unauthorized
+    # A ban must invalidate tokens that were already issued, otherwise a banned
+    # user stays signed in until their week-long token expires.
+    if user.is_banned:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This account has been suspended",
+        )
     return user
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_current_admin(user: CurrentUser) -> User:
+    """Gate the moderation endpoints.
+
+    Depends on ``get_current_user`` rather than repeating the token handling, so
+    a banned or inactive account can never reach an admin route.
+    """
+    if not user.is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Administrator access is required",
+        )
+    return user
+
+
+CurrentAdmin = Annotated[User, Depends(get_current_admin)]
 
 
 def serialize_user(db: Session, user: User, viewer: User | None = None) -> UserPublic:
@@ -91,6 +115,7 @@ def serialize_user(db: Session, user: User, viewer: User | None = None) -> UserP
         following_count=user.following_count,
         post_count=post_count,
         is_following=is_following,
+        is_admin=user.is_admin,
     )
 
 
@@ -145,6 +170,7 @@ def serialize_users(db: Session, users: list[User], viewer: User | None = None) 
             following_count=following_counts.get(user.id, 0),
             post_count=post_counts.get(user.id, 0),
             is_following=user.id in following_ids,
+            is_admin=user.is_admin,
         )
         for user in users
     }
