@@ -25,9 +25,12 @@ async def lifespan(_app: FastAPI):
     if settings.auto_seed:
         # Demo deploys start with an empty database; populate it once. `seed`
         # is a no-op when users already exist, so restarts are safe.
-        from .seed import seed
+        from .seed import ensure_admin, seed
 
         seed()
+        # A database seeded before moderators existed keeps is_admin at its
+        # default and would have no route into the admin console.
+        ensure_admin()
     # Resolve the cache backend once at startup so the first request is not the
     # one that discovers Redis is unavailable.
     cache.get_store()
