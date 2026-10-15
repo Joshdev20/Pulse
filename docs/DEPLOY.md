@@ -84,12 +84,24 @@ docker run -p 8000:8000 \
 | Variable | Required | Value |
 |---|---|---|
 | `SECRET_KEY` | **Yes** | `openssl rand -hex 32`. Tokens signed with the default key are forgeable. |
-| `DATABASE_URL` | **Yes** | A hosted Postgres, e.g. `postgresql://user:pass@host/db`. Render/Railway/Heroku `postgres://` URLs are normalized automatically. Without this you get SQLite on an ephemeral disk. |
-| `CORS_ORIGINS` | **Yes** | Your exact Vercel URL, e.g. `https://pulse.vercel.app`. Comma-separate several. |
+| `DATABASE_URL` | **Yes** | A hosted Postgres, e.g. a Neon URL. Render/Railway/Heroku `postgres://` URLs are normalized automatically. Without this you get SQLite on an ephemeral disk. |
+| `CORS_ORIGINS` | **Yes** | Your exact Vercel URL, e.g. `https://pulse-hazel-nine.vercel.app`. Comma-separate several. |
 | `CORS_ORIGIN_REGEX` | No | Defaults to `https://[a-zA-Z0-9-]+(\.vercel\.app)$`, which matches the production alias and every preview deployment. |
 | `AUTO_SEED` | No | `true` seeds the demo users/posts when the database is empty. Demo only — it is a no-op once users exist. |
 | `UPLOAD_DIR` | No | Point at the mounted volume, e.g. `/data/uploads`. |
 | `REDIS_URL` | No | Leave **unset** for a single instance. Set it only when running more than one worker, so realtime fan-out reaches sockets on other workers. |
+
+### Neon specifics
+
+Neon hands out a URL shaped like
+`postgresql://user:password@ep-xxx-pooler.region.aws.neon.tech/neondb?sslmode=require`.
+
+- `sslmode=require` is already in the URL Neon gives you. Keep it.
+- Prefer the **pooled** host (the one containing `-pooler`). Pulse sets
+  `pool_pre_ping` and a 280s `pool_recycle`, so it tolerates a pooler that drops
+  idle connections.
+- `AUTO_SEED=true` creates the tables on first boot, so you do not need to run
+  any migration by hand.
 
 ### Notes on the database
 
@@ -118,6 +130,12 @@ connections.
 
 `VITE_API_BASE` is inlined into the bundle by Vite at build time. It is *not* a
 runtime variable, so changing it requires a redeploy, not a restart.
+
+**This variable is not optional.** If it is missing, the bundle calls its own
+origin for `/api/*`, Vercel answers those paths with `index.html`, and the site
+renders perfectly while every login and registration fails. The build now fails
+loudly when `VERCEL` is set and `VITE_API_BASE` is empty, so this cannot ship
+silently. See the troubleshooting table.
 
 ### How the two connect
 
@@ -170,6 +188,7 @@ console: the WebSocket should connect to `wss://<backend>/api/ws`, and the
 
 | Symptom | Cause |
 |---|---|
+| Site renders but **no account can be created or logged in** | `VITE_API_BASE` was not set at build time, so the bundle called its own origin and Vercel answered `/api/*` with `index.html`. Set it in the Vercel project and redeploy. The build now fails when this is missing. |
 | Render: "unable to read the render.yaml file" | The Blueprint is invalid or unprovisionable. Validate with `render blueprints validate` or against https://render.com/schema/render.yaml.json. The most common trap is a `disk:` block on `plan: free` — Render's JSON schema accepts it, but free web services cannot have disks. |
 | Browser console: CORS error | `CORS_ORIGINS` does not include the Vercel origin and the regex was overridden |
 | Login returns 401 on a fresh deploy | `AUTO_SEED` was not `true`, so there are no users — seed manually with `python -m app.seed` |
@@ -177,3 +196,29 @@ console: the WebSocket should connect to `wss://<backend>/api/ws`, and the
 | WebSocket fails to connect | Backend host is unreachable, or a proxy in front of it does not forward `Upgrade` |
 | First request after idle takes ~60s | Render free tier cold start |
 | `FUNCTION_PAYLOAD_TOO_LARGE` | A Vercel Function received >4.5 MB — the backend is on the wrong host |
+| `ModuleNotFoundError: psycopg` in the backend logs | `psycopg[binary]` is in `requirements-prod.txt` but the service is installing `requirements.txt`, or is building from a stale commit |
+
+### Diagnosing "the site loads but nothing works"
+
+`/api/*` is served by Vercel, not the backend, in this architecture. So you can
+ask Vercel directly what it is doing:
+
+```bash
+# A working split deploy returns JSON. index.html means the API base is wrong.
+curl -s https://<your-app>.vercel.app/api/health
+```
+
+- **JSON** → the frontend is configured correctly.
+- **HTML** → `VITE_API_BASE` is unset or wrong, so requests never leave Vercel.
+
+Then confirm the backend itself is reachable and permissive enough:
+
+```bash
+curl -s https://<your-backend>/api/health
+curl -i -X OPTIONS https://<your-backend>/api/auth/register \
+  -H 'Origin: https://<your-app>.vercel.app' \
+  -H 'Access-Control-Request-Method: POST' | grep -i access-control-allow-origin
+```
+
+If the backend answers but the browser still fails, the origin is missing from
+`CORS_ORIGINS` and `CORS_ORIGIN_REGEX` was overridden.
