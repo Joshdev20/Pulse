@@ -63,19 +63,7 @@ def get_current_user(
     return user
 
 
-def get_optional_user(
-    db: DbSession,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)] = None,
-) -> User | None:
-    """Used by endpoints that are readable anonymously but personalised when signed in."""
-    if credentials is None or not credentials.credentials:
-        return None
-    user = _user_from_token(credentials.credentials, db)
-    return user if user and user.is_active else None
-
-
 CurrentUser = Annotated[User, Depends(get_current_user)]
-OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 
 
 def serialize_user(db: Session, user: User, viewer: User | None = None) -> UserPublic:

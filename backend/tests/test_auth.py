@@ -72,5 +72,6 @@ def test_cannot_update_another_profile(client, make_user):
     assert response.status_code == 403
 
 
-def test_unknown_user_returns_404(client):
-    assert client.get("/api/users/ghost").status_code == 404
+def test_unknown_user_returns_404(client, make_user):
+    headers, _ = make_user("ada")
+    assert client.get("/api/users/ghost", headers=headers).status_code == 404

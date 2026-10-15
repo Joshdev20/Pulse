@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
-from ..deps import CurrentUser, DbSession, OptionalUser, serialize_posts, serialize_user, serialize_users
+from ..deps import CurrentUser, DbSession, serialize_posts, serialize_user, serialize_users
 from ..models import Comment, Follow, Like, Notification, Post, User
 from ..realtime import manager
 from ..schemas import Page, SuggestedUser, UserPublic, UserUpdate, Stats
@@ -20,23 +20,19 @@ def _get_user_or_404(db: DbSession, username: str) -> User:
 
 @router.get("/suggested", response_model=list[SuggestedUser])
 def suggested_users(
-    db: DbSession, viewer: OptionalUser, limit: int = Query(3, ge=1, le=20)
+    db: DbSession, viewer: CurrentUser, limit: int = Query(3, ge=1, le=20)
 ) -> list[SuggestedUser]:
     """Suggest accounts the viewer does not yet follow, preferring popular ones."""
-    exclude_ids: set[int] = set()
-    if viewer is not None:
-        exclude_ids = {viewer.id} | {
-            row[0]
-            for row in db.execute(select(Follow.following_id).where(Follow.follower_id == viewer.id)).all()
-        }
+    exclude_ids: set[int] = {viewer.id} | {
+        row[0]
+        for row in db.execute(select(Follow.following_id).where(Follow.follower_id == viewer.id)).all()
+    }
 
     follower_counts = dict(
         db.execute(select(Follow.following_id, func.count(Follow.id)).group_by(Follow.following_id)).all()
     )
 
-    query = select(User).where(User.is_active.is_(True))
-    if exclude_ids:
-        query = query.where(User.id.notin_(exclude_ids))
+    query = select(User).where(User.is_active.is_(True)).where(User.id.notin_(exclude_ids))
     candidates = list(db.scalars(query).all())
     candidates.sort(key=lambda u: (-follower_counts.get(u.id, 0), u.username))
 
@@ -51,7 +47,7 @@ def suggested_users(
 
 
 @router.get("/stats", response_model=Stats)
-def platform_stats(db: DbSession) -> Stats:
+def platform_stats(db: DbSession, viewer: CurrentUser) -> Stats:
     def count(model) -> int:
         return db.scalar(select(func.count()).select_from(model)) or 0
 
@@ -59,7 +55,7 @@ def platform_stats(db: DbSession) -> Stats:
 
 
 @router.get("/{username}", response_model=UserPublic)
-def get_user(username: str, db: DbSession, viewer: OptionalUser) -> UserPublic:
+def get_user(username: str, db: DbSession, viewer: CurrentUser) -> UserPublic:
     return serialize_user(db, _get_user_or_404(db, username), viewer)
 
 
@@ -80,7 +76,7 @@ def update_user(username: str, payload: UserUpdate, db: DbSession, user: Current
 def user_posts(
     username: str,
     db: DbSession,
-    viewer: OptionalUser,
+    viewer: CurrentUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
 ) -> Page:
@@ -105,7 +101,7 @@ def user_posts(
 def user_likes(
     username: str,
     db: DbSession,
-    viewer: OptionalUser,
+    viewer: CurrentUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
 ) -> Page:
@@ -173,7 +169,7 @@ def unfollow_user(username: str, db: DbSession, user: CurrentUser) -> UserPublic
 
 
 @router.get("/{username}/followers", response_model=list[UserPublic])
-def followers(username: str, db: DbSession, viewer: OptionalUser) -> list[UserPublic]:
+def followers(username: str, db: DbSession, viewer: CurrentUser) -> list[UserPublic]:
     target = _get_user_or_404(db, username)
     users = [follow.follower for follow in target.followers]
     serialized = serialize_users(db, users, viewer)
@@ -181,7 +177,7 @@ def followers(username: str, db: DbSession, viewer: OptionalUser) -> list[UserPu
 
 
 @router.get("/{username}/following", response_model=list[UserPublic])
-def following(username: str, db: DbSession, viewer: OptionalUser) -> list[UserPublic]:
+def following(username: str, db: DbSession, viewer: CurrentUser) -> list[UserPublic]:
     target = _get_user_or_404(db, username)
     users = [follow.following for follow in target.following]
     serialized = serialize_users(db, users, viewer)

@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Query
 from sqlalchemy import or_, select
 
-from ..deps import DbSession, OptionalUser, serialize_posts, serialize_users
+from ..deps import CurrentUser, DbSession, serialize_posts, serialize_users
 from ..models import Post, User
 from ..schemas import PostOut, UserPublic
 
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 @router.get("/posts", response_model=list[PostOut])
 def search_posts(
     db: DbSession,
-    viewer: OptionalUser,
+    viewer: CurrentUser,
     q: str = Query(min_length=1, max_length=100),
     limit: int = Query(20, ge=1, le=50),
 ) -> list[PostOut]:
@@ -32,7 +32,7 @@ def search_posts(
 @router.get("/users", response_model=list[UserPublic])
 def search_users(
     db: DbSession,
-    viewer: OptionalUser,
+    viewer: CurrentUser,
     q: str = Query(min_length=1, max_length=100),
     limit: int = Query(20, ge=1, le=50),
 ) -> list[UserPublic]:
@@ -51,7 +51,7 @@ def search_users(
 @router.get("")
 def search_all(
     db: DbSession,
-    viewer: OptionalUser,
+    viewer: CurrentUser,
     q: str = Query(min_length=1, max_length=100),
     limit: int = Query(10, ge=1, le=50),
 ) -> dict:

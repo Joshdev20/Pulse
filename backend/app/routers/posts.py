@@ -6,7 +6,6 @@ from sqlalchemy import func, or_, select
 from ..deps import (
     CurrentUser,
     DbSession,
-    OptionalUser,
     serialize_posts,
     serialize_users,
 )
@@ -92,7 +91,7 @@ def _paginate(db: DbSession, query, page: int, page_size: int, viewer: User | No
 @router.get("/feed", response_model=Page)
 def feed(
     db: DbSession,
-    viewer: OptionalUser,
+    viewer: CurrentUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
     scope: str = Query("following", pattern="^(following|all)$"),
@@ -101,8 +100,6 @@ def feed(
     query = select(Post).order_by(Post.created_at.desc(), Post.id.desc())
 
     if scope == "following":
-        if viewer is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sign in to view your feed")
         author_ids = [viewer.id] + [
             row[0]
             for row in db.execute(select(Follow.following_id).where(Follow.follower_id == viewer.id)).all()
@@ -115,7 +112,7 @@ def feed(
 @router.get("/posts", response_model=Page)
 def list_posts(
     db: DbSession,
-    viewer: OptionalUser,
+    viewer: CurrentUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
 ) -> Page:
@@ -142,7 +139,7 @@ async def create_post(payload: PostCreate, db: DbSession, user: CurrentUser) -> 
 
 
 @router.get("/posts/{post_id}", response_model=PostOut)
-def get_post(post_id: int, db: DbSession, viewer: OptionalUser) -> PostOut:
+def get_post(post_id: int, db: DbSession, viewer: CurrentUser) -> PostOut:
     post = _get_post_or_404(db, post_id)
     return serialize_posts(db, [post], viewer)[0]
 
@@ -198,7 +195,7 @@ def unlike_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
 
 
 @router.get("/posts/{post_id}/comments", response_model=list[CommentOut])
-def list_comments(post_id: int, db: DbSession) -> list[CommentOut]:
+def list_comments(post_id: int, db: DbSession, viewer: CurrentUser) -> list[CommentOut]:
     _get_post_or_404(db, post_id)
     comments = db.scalars(
         select(Comment).where(Comment.post_id == post_id).order_by(Comment.created_at.asc())
@@ -245,7 +242,7 @@ def delete_comment(comment_id: int, db: DbSession, user: CurrentUser) -> None:
 
 
 @router.get("/trending/tags", response_model=list[dict])
-def trending_tags(db: DbSession, limit: int = Query(10, ge=1, le=50)) -> list[dict]:
+def trending_tags(db: DbSession, viewer: CurrentUser, limit: int = Query(10, ge=1, le=50)) -> list[dict]:
     from ..models import Tag, post_tags
 
     rows = db.execute(
@@ -259,7 +256,7 @@ def trending_tags(db: DbSession, limit: int = Query(10, ge=1, le=50)) -> list[di
 
 
 @router.get("/trending/people", response_model=list[UserPublic])
-def trending_people(db: DbSession, viewer: OptionalUser, limit: int = Query(5, ge=1, le=20)) -> list[UserPublic]:
+def trending_people(db: DbSession, viewer: CurrentUser, limit: int = Query(5, ge=1, le=20)) -> list[UserPublic]:
     rows = db.execute(
         select(User, func.count(Like.id).label("likes"))
         .join(Post, Post.author_id == User.id)
@@ -269,7 +266,6 @@ def trending_people(db: DbSession, viewer: OptionalUser, limit: int = Query(5, g
         .limit(limit)
     ).all()
     users = [row[0] for row in rows]
-    if viewer is not None:
-        users = [u for u in users if u.id != viewer.id]
+    users = [u for u in users if u.id != viewer.id]
     serialized = serialize_users(db, users, viewer)
     return [serialized[u.id] for u in users]

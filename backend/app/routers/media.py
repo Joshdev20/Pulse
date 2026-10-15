@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from .. import storage
-from ..deps import CurrentUser, DbSession, OptionalUser, serialize_media
+from ..deps import CurrentUser, DbSession, serialize_media
 from ..models import Media, Post, User
 from ..schemas import MediaOut
 
@@ -64,7 +64,7 @@ async def upload(
     return serialize_media([media])[0]
 
 
-def _visible_to(db, media: Media, viewer: User | None) -> bool:
+def _visible_to(db, media: Media, viewer: User) -> bool:
     """Media is readable by anyone who can read the post or message it belongs to.
 
     An attachment not yet linked to a post or message is private to its owner,
@@ -74,8 +74,6 @@ def _visible_to(db, media: Media, viewer: User | None) -> bool:
         return db.get(Post, media.post_id) is not None
 
     if media.message_id is not None:
-        if viewer is None:
-            return False
         from ..models import ConversationParticipant, Message
 
         message = db.get(Message, media.message_id)
@@ -91,11 +89,11 @@ def _visible_to(db, media: Media, viewer: User | None) -> bool:
             is not None
         )
 
-    return viewer is not None and viewer.id == media.owner_id
+    return viewer.id == media.owner_id
 
 
 @router.get("/{media_id}")
-def download(media_id: int, db: DbSession, viewer: OptionalUser) -> FileResponse:
+def download(media_id: int, db: DbSession, viewer: CurrentUser) -> FileResponse:
     media = db.get(Media, media_id)
     if media is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
