@@ -7,6 +7,8 @@ export interface User {
   website: string
   avatar_color: string
   avatar_url: string | null
+  /** Profile header image; null renders the plain gradient banner. */
+  cover_url: string | null
   created_at: string
   follower_count: number
   following_count: number
@@ -43,6 +45,14 @@ export interface Post {
   like_count: number
   comment_count: number
   liked_by_me: boolean
+  repost_count: number
+  reposted_by_me: boolean
+  /**
+   * Set when this row is a repost: `author` and `created_at` describe who
+   * shared it, while this holds the post that was shared. Null for an
+   * original, and always exactly one level deep.
+   */
+  repost_of: Post | null
 }
 
 export interface Comment {
@@ -71,9 +81,12 @@ export interface Conversation {
   unread_count: number
 }
 
+/** A notification the API can produce. `repost` is someone sharing your post. */
+export type NotificationKind = 'like' | 'comment' | 'follow' | 'repost'
+
 export interface RealtimeNotification {
   id: number
-  kind: 'like' | 'comment' | 'follow'
+  kind: NotificationKind
   read: boolean
   created_at: string
   post_id: number | null
@@ -82,13 +95,12 @@ export interface RealtimeNotification {
 
 export interface Notification {
   id: number
-  kind: 'like' | 'comment' | 'follow'
+  kind: NotificationKind
   read: boolean
   created_at: string
   post_id: number | null
   actor: User | null
 }
-
 export interface Page<T> {
   items: T[]
   total: number
@@ -128,6 +140,7 @@ export interface AdminUser {
   website: string
   avatar_color: string
   avatar_url: string | null
+  cover_url: string | null
   created_at: string
   is_active: boolean
   is_admin: boolean

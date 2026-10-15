@@ -93,17 +93,20 @@ def get_user(username: str, db: DbSession, viewer: CurrentUser) -> UserPublic:
     )
 
 
-@router.post("/me/avatar", response_model=UserPublic)
-async def upload_avatar(
+async def _set_profile_image(
     db: DbSession,
-    user: CurrentUser,
-    file: UploadFile = File(...),
+    user: User,
+    file: UploadFile,
+    *,
+    field: str,
+    label: str,
+    alt: str,
 ) -> UserPublic:
-    """Set the signed-in user's profile picture.
+    """Store an uploaded image and point ``field`` at it.
 
-    The upload is sniffed and stored through the same path as post media, so
-    only real image bytes are accepted regardless of the filename or the
-    declared content type.
+    Shared by the profile picture and cover photo, which differ only in which
+    column they set. ``field`` is a literal chosen by the caller, never client
+    input, so it cannot be used to write an arbitrary attribute.
     """
     data = await file.read(storage.MAX_IMAGE_BYTES + 1)
     if not data:
@@ -119,13 +122,13 @@ async def upload_avatar(
     except storage.UnsupportedMedia:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            "Profile pictures must be a JPEG, PNG, GIF or WebP image",
+            f"{label} must be a JPEG, PNG, GIF or WebP image",
         ) from None
 
     if sniffed.kind != "image":
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            "Profile pictures must be an image",
+            f"{label} must be an image",
         )
 
     stored_name = storage.store(data, sniffed.extension)
@@ -135,22 +138,13 @@ async def upload_avatar(
         content_type=sniffed.content_type,
         kind="image",
         size_bytes=len(data),
-        alt_text=f"{user.display_name}'s profile picture",
+        alt_text=f"{user.display_name}'s {alt}",
     )
     db.add(media)
     db.flush()
 
-    previous_id = user.avatar_media_id
-    previous_name = None
-    if previous_id is not None:
-        previous = db.get(Media, previous_id)
-        # Only the uploader's own picture, and only one that is not also
-        # attached to a post or message, may be cleaned up.
-        if previous is not None and previous.post_id is None and previous.message_id is None:
-            previous_name = previous.stored_name
-            db.delete(previous)
-
-    user.avatar_media_id = media.id
+    previous_name = _drop_previous_image(db, getattr(user, field))
+    setattr(user, field, media.id)
     db.commit()
     db.refresh(user)
     invalidate_user_reads()
@@ -160,20 +154,10 @@ async def upload_avatar(
     return serialize_user(db, user, user)
 
 
-@router.delete("/me/avatar", response_model=UserPublic)
-def clear_avatar(db: DbSession, user: CurrentUser) -> UserPublic:
-    """Revert to the generated initials avatar and drop the uploaded file."""
-    previous_id = user.avatar_media_id
-    user.avatar_media_id = None
-    db.flush()
-
-    stored_name = None
-    if previous_id is not None:
-        previous = db.get(Media, previous_id)
-        if previous is not None and previous.post_id is None and previous.message_id is None:
-            stored_name = previous.stored_name
-            db.delete(previous)
-
+def _clear_profile_image(db: DbSession, user: User, field: str) -> UserPublic:
+    """Detach and delete the image in ``field``, reverting to the fallback look."""
+    stored_name = _drop_previous_image(db, getattr(user, field))
+    setattr(user, field, None)
     db.commit()
     db.refresh(user)
     invalidate_user_reads()
@@ -181,6 +165,63 @@ def clear_avatar(db: DbSession, user: CurrentUser) -> UserPublic:
     if stored_name:
         storage.delete(stored_name)
     return serialize_user(db, user, user)
+
+
+def _drop_previous_image(db: DbSession, media_id: int | None) -> str | None:
+    """Queue the superseded upload for deletion and return its stored name.
+
+    Only an image that is not also attached to a post or message is removed, so
+    replacing a picture can never delete content the user still expects to see.
+    """
+    if media_id is None:
+        return None
+    previous = db.get(Media, media_id)
+    if previous is None or previous.post_id is not None or previous.message_id is not None:
+        return None
+    stored_name = previous.stored_name
+    db.delete(previous)
+    return stored_name
+
+
+@router.post("/me/avatar", response_model=UserPublic)
+async def upload_avatar(
+    db: DbSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> UserPublic:
+    """Set the signed-in user's profile picture.
+
+    The upload is sniffed and stored through the same path as post media, so
+    only real image bytes are accepted regardless of the filename or the
+    declared content type.
+    """
+    return await _set_profile_image(
+        db, user, file, field="avatar_media_id", label="Profile pictures", alt="profile picture"
+    )
+
+
+@router.delete("/me/avatar", response_model=UserPublic)
+def clear_avatar(db: DbSession, user: CurrentUser) -> UserPublic:
+    """Revert to the generated initials avatar and drop the uploaded file."""
+    return _clear_profile_image(db, user, "avatar_media_id")
+
+
+@router.post("/me/cover", response_model=UserPublic)
+async def upload_cover(
+    db: DbSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> UserPublic:
+    """Set the signed-in user's profile header image."""
+    return await _set_profile_image(
+        db, user, file, field="cover_media_id", label="Cover photos", alt="cover photo"
+    )
+
+
+@router.delete("/me/cover", response_model=UserPublic)
+def clear_cover(db: DbSession, user: CurrentUser) -> UserPublic:
+    """Remove the header image and go back to the plain gradient."""
+    return _clear_profile_image(db, user, "cover_media_id")
 
 
 @router.patch("/{username}", response_model=UserPublic)
@@ -191,27 +232,38 @@ def update_user(username: str, payload: UserUpdate, db: DbSession, user: Current
 
     changes = payload.model_dump(exclude_unset=True)
     avatar_media_id = changes.pop("avatar_media_id", None)
+    cover_media_id = changes.pop("cover_media_id", None)
     for field, value in changes.items():
         if value is not None:
             setattr(target, field, value.strip() if isinstance(value, str) else value)
 
     if "avatar_media_id" in payload.model_fields_set:
-        if avatar_media_id is None:
-            target.avatar_media_id = None
-        else:
-            media = db.get(Media, avatar_media_id)
-            # Only the caller's own upload may be attached, and only an image,
-            # so a profile cannot be pointed at someone else's attachment.
-            if media is None or media.owner_id != user.id or media.kind != "image":
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, "That image cannot be used as a profile picture"
-                )
-            target.avatar_media_id = media.id
+        target.avatar_media_id = _validated_profile_image(
+            db, user, avatar_media_id, "That image cannot be used as a profile picture"
+        )
+    if "cover_media_id" in payload.model_fields_set:
+        target.cover_media_id = _validated_profile_image(
+            db, user, cover_media_id, "That image cannot be used as a cover photo"
+        )
 
     db.commit()
     db.refresh(target)
     invalidate_user_reads()
     return serialize_user(db, target, user)
+
+
+def _validated_profile_image(db: DbSession, user: User, media_id: int | None, message: str) -> int | None:
+    """Resolve a client-supplied media id to one this user may use as a picture.
+
+    Only the caller's own upload, and only an image, so a profile cannot be
+    pointed at someone else's attachment.
+    """
+    if media_id is None:
+        return None
+    media = db.get(Media, media_id)
+    if media is None or media.owner_id != user.id or media.kind != "image":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, message)
+    return media.id
 
 
 @router.get("/{username}/posts", response_model=Page)

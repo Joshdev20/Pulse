@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime } from '../components/UI'
-import { BellIcon, CommentIcon, HeartIcon, UserIcon } from '../components/Icons'
+import { BellIcon, CommentIcon, HeartIcon, RepostIcon, UserIcon } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import { api } from '../lib/api'
 import type { Notification } from '../lib/types'
@@ -11,12 +11,14 @@ const ICONS = {
   like: HeartIcon,
   comment: CommentIcon,
   follow: UserIcon,
+  repost: RepostIcon,
 } as const
 
 const VERB = {
   like: 'liked your post',
   comment: 'replied to your post',
   follow: 'started following you',
+  repost: 'reposted your post',
 } as const
 
 export function NotificationsPage() {

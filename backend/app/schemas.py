@@ -46,6 +46,8 @@ class UserUpdate(BaseModel):
     # Set to an uploaded image id to use a picture, or null to go back to the
     # generated initials avatar.
     avatar_media_id: int | None = None
+    # Same, for the profile header image.
+    cover_media_id: int | None = None
 
 
 class UserPublic(BaseModel):
@@ -61,6 +63,8 @@ class UserPublic(BaseModel):
     # Resolved media URL for an uploaded picture, or null for the initials
     # avatar. A URL rather than an id so the client needs no second lookup.
     avatar_url: str | None = None
+    # Resolved URL for the profile header image, or null for the plain gradient.
+    cover_url: str | None = None
     created_at: UTCDatetime
     follower_count: int = 0
     following_count: int = 0
@@ -158,6 +162,17 @@ class PostOut(BaseModel):
     like_count: int = 0
     comment_count: int = 0
     liked_by_me: bool = False
+    repost_count: int = 0
+    reposted_by_me: bool = False
+    # Set when this row is a repost: `author`/`created_at` describe who shared
+    # it and when, while this holds the post that was shared. Null for an
+    # original. Always one level deep, so the recursion terminates.
+    repost_of: "PostOut | None" = None
+
+
+# The annotation above is a forward reference, which Pydantic resolves lazily.
+# Without this it stays unresolved and the first repost fails to serialize.
+PostOut.model_rebuild()
 
 
 class MessageCreate(BaseModel):
@@ -245,6 +260,7 @@ class AdminUser(BaseModel):
     website: str
     avatar_color: str
     avatar_url: str | None = None
+    cover_url: str | None = None
     created_at: UTCDatetime
     is_active: bool
     is_admin: bool

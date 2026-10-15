@@ -26,6 +26,13 @@ def avatar_url_for(user: User) -> str | None:
     return MEDIA_URL.format(id=user.avatar_media_id)
 
 
+def cover_url_for(user: User) -> str | None:
+    """URL of a user's uploaded header image, or None for the plain gradient."""
+    if user.cover_media_id is None:
+        return None
+    return MEDIA_URL.format(id=user.cover_media_id)
+
+
 def serialize_media(items: list[Media]) -> list[MediaOut]:
     return [
         MediaOut(
@@ -118,6 +125,7 @@ def serialize_user(db: Session, user: User, viewer: User | None = None) -> UserP
         website=user.website,
         avatar_color=user.avatar_color,
         avatar_url=avatar_url_for(user),
+        cover_url=cover_url_for(user),
         created_at=user.created_at,
         follower_count=user.follower_count,
         following_count=user.following_count,
@@ -175,6 +183,7 @@ def serialize_users(db: Session, users: list[User], viewer: User | None = None) 
             website=user.website,
             avatar_color=user.avatar_color,
             avatar_url=avatar_url_for(user),
+            cover_url=cover_url_for(user),
             created_at=user.created_at,
             follower_count=follower_counts.get(user.id, 0),
             following_count=following_counts.get(user.id, 0),
@@ -188,10 +197,24 @@ def serialize_users(db: Session, users: list[User], viewer: User | None = None) 
 
 
 def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) -> list[PostOut]:
-    """Serialize posts, batching like/comment counts and viewer state."""
+    """Serialize posts, batching like/comment/repost counts and viewer state.
+
+    A repost row carries no content of its own, so the post it shares is
+    serialized alongside it and nested as ``repost_of``. The originals are
+    included in every batched count query, so a repost and the original it
+    points at agree on their like and comment totals.
+    """
     if not posts:
         return []
-    post_ids = [post.id for post in posts]
+
+    # Every post whose counts are needed: the rows themselves plus the
+    # originals behind any repost (which may not be in `posts` at all).
+    involved: dict[int, Post] = {}
+    for post in posts:
+        involved[post.id] = post
+        if post.repost_of is not None:
+            involved[post.repost_of.id] = post.repost_of
+    post_ids = list(involved)
 
     like_counts = dict(
         db.execute(
@@ -207,8 +230,17 @@ def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) 
             .group_by(Comment.post_id)
         ).all()
     )
+    # How many times each of these posts has been shared.
+    repost_counts = dict(
+        db.execute(
+            select(Post.repost_of_id, func.count(Post.id))
+            .where(Post.repost_of_id.in_(post_ids))
+            .group_by(Post.repost_of_id)
+        ).all()
+    )
 
     liked_ids: set[int] = set()
+    reposted_ids: set[int] = set()
     if viewer is not None:
         liked_ids = {
             row[0]
@@ -216,21 +248,36 @@ def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) 
                 select(Like.post_id).where(Like.user_id == viewer.id, Like.post_id.in_(post_ids))
             ).all()
         }
+        reposted_ids = {
+            row[0]
+            for row in db.execute(
+                select(Post.repost_of_id).where(
+                    Post.author_id == viewer.id, Post.repost_of_id.in_(post_ids)
+                )
+            ).all()
+        }
 
-    users = serialize_users(db, [post.author for post in posts], viewer)
+    authors = serialize_users(db, [post.author for post in involved.values()], viewer)
 
-    return [
-        PostOut(
+    def build(post: Post, include_repost: bool) -> PostOut:
+        return PostOut(
             id=post.id,
             body=post.body,
             created_at=post.created_at,
             edited_at=post.edited_at,
-            author=users[post.author_id],
+            author=authors[post.author_id],
             tags=post.tags,
             media=serialize_media(post.media),
             like_count=like_counts.get(post.id, 0),
             comment_count=comment_counts.get(post.id, 0),
             liked_by_me=post.id in liked_ids,
+            repost_count=repost_counts.get(post.id, 0),
+            reposted_by_me=post.id in reposted_ids,
+            # Deliberately no further nesting: a repost always points at an
+            # original, so this branch is taken at most once.
+            repost_of=build(post.repost_of, False)
+            if include_repost and post.repost_of is not None
+            else None,
         )
-        for post in posts
-    ]
+
+    return [build(post, True) for post in posts]

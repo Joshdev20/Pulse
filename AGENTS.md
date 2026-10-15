@@ -34,7 +34,7 @@ The venv has **no pip**; use `uv`:
 uv pip install -r requirements.txt        # or: uv pip install redis
 .venv/bin/python -m app.seed --reset      # rebuild pulse.db with demo data
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-.venv/bin/python -m pytest -q             # 142 tests
+.venv/bin/python -m pytest -q             # 178 tests
 ```
 
 ### Frontend (run from `frontend/`)
@@ -220,6 +220,28 @@ the public URL returns 502 until the dev server is bound to 12000.
 - Avatars resolve through `avatar_url_for` in `deps.py` to `/api/media/{id}`, the same
   authenticated route as post media, so the URL is useless without a token and every
   serializer that carries a user must go through it rather than reading `avatar_media_id`.
+  Cover photos work the same way through `cover_url_for`.
+- Media visibility is decided by `is_public_profile_image` in `routers/media.py`, which
+  checks `avatar_media_id` *and* `cover_media_id`. The check has to cover both columns: an
+  image in only one of them loads for its owner and 404s for everyone else, which reads as a
+  broken profile rather than a permissions problem. Anything not in those two columns stays
+  private to its uploader until it is attached to a post or a message.
+- The profile picture and cover photo share `_set_profile_image` / `_clear_profile_image` in
+  `routers/users.py` and differ only in which column they write, so a fix to one applies to
+  both. Replacing or clearing either only deletes the superseded upload when it is not also
+  attached to a post or message.
+- Reposts are a self-referential `Post.repost_of_id`: a share is a real row authored by the
+  sharer, so it reaches their followers, while its content, author and every interaction come
+  from the original. `serialize_posts` nests the original exactly one level deep, and
+  `_original_of` in `routers/posts.py` redirects a share of a share at the original so a chain
+  can never form. The repost endpoints return the *original*, like/unlike style, so the client
+  updates the post it is displaying.
+- `delete_post` removes rows pointing at the post before deleting it. The `ON DELETE CASCADE`
+  on `repost_of_id` covers a database created by this version, but a pre-existing database gets
+  the column from `ensure_schema()`, which cannot add a constraint — and the test suite builds
+  its tables without the SQLite `foreign_keys` pragma, so the cascade does not fire there either.
+- Reposting your own post is a 400, and `PostCard` omits the button in that case rather than
+  offering an action the API will refuse.
 - The password-reset link is only returned in the response body when `may_return_reset_token`
   is true, i.e. no SMTP host is configured *and* `EXPOSE_RESET_TOKEN` is false. That is what
   makes the demo flow walkable; set `EXPOSE_RESET_TOKEN=true` in production so a live reset

@@ -156,13 +156,25 @@ export const api = {
       body: JSON.stringify({ token, password }),
     }),
 
-  updateProfile: (username: string, data: Partial<Pick<User, 'display_name' | 'bio' | 'location' | 'website' | 'avatar_color'>>) =>
-    request<User>(`/api/users/${username}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  updateProfile: (
+    username: string,
+    data: Partial<
+      Pick<User, 'display_name' | 'bio' | 'location' | 'website' | 'avatar_color'> & {
+        avatar_media_id: number | null
+        cover_media_id: number | null
+      }
+    >,
+  ) => request<User>(`/api/users/${username}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   uploadAvatar: (file: File, onProgress?: (percent: number) => void) =>
     uploadWithProgress<User>('/api/users/me/avatar', file, '', onProgress),
 
   clearAvatar: () => request<User>('/api/users/me/avatar', { method: 'DELETE' }),
+
+  uploadCover: (file: File, onProgress?: (percent: number) => void) =>
+    uploadWithProgress<User>('/api/users/me/cover', file, '', onProgress),
+
+  clearCover: () => request<User>('/api/users/me/cover', { method: 'DELETE' }),
 
   feed: (scope: 'following' | 'all', page = 1, pageSize = 20) =>
     request<Page<Post>>(`/api/feed${query({ scope, page, page_size: pageSize })}`),
@@ -183,6 +195,14 @@ export const api = {
   likePost: (id: number) => request<Post>(`/api/posts/${id}/like`, { method: 'POST' }),
 
   unlikePost: (id: number) => request<Post>(`/api/posts/${id}/like`, { method: 'DELETE' }),
+
+  // Repost endpoints return the original post, so the caller updates the post
+  // it is displaying rather than the share row.
+  repostPost: (id: number) => request<Post>(`/api/posts/${id}/repost`, { method: 'POST' }),
+
+  unrepostPost: (id: number) => request<Post>(`/api/posts/${id}/repost`, { method: 'DELETE' }),
+
+  reposts: (id: number) => request<User[]>(`/api/posts/${id}/reposts`),
 
   comments: (postId: number) => request<Comment[]>(`/api/posts/${postId}/comments`),
 
