@@ -63,7 +63,7 @@ export function Composer({
 
   return (
     <div className="composer">
-      <Avatar name={user.display_name} color={user.avatar_color} size="md" />
+      <Avatar name={user.display_name} color={user.avatar_color} url={user.avatar_url} size="md" />
       <div className="composer-body">
         <textarea
           ref={textareaRef}

@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
 from .. import cache, storage
-from ..deps import CurrentAdmin, DbSession
+from ..deps import CurrentAdmin, DbSession, avatar_url_for
 from ..models import (
     Comment,
     Conversation,
@@ -35,6 +35,7 @@ from ..schemas import (
     AdminStats,
     AdminUser,
     AdminUserPage,
+    AdminVerification,
     UserModeration,
 )
 
@@ -101,11 +102,14 @@ def _serialize_admin_users(db: DbSession, users: list[User]) -> list[AdminUser]:
             location=user.location,
             website=user.website,
             avatar_color=user.avatar_color,
+            avatar_url=avatar_url_for(user),
             created_at=user.created_at,
             is_active=user.is_active,
             is_admin=user.is_admin,
             is_banned=user.is_banned,
             banned_reason=user.banned_reason,
+            is_verified=user.is_verified,
+            verified_at=user.verified_at,
             post_count=post_counts.get(user.id, 0),
             comment_count=comment_counts.get(user.id, 0),
             follower_count=follower_counts.get(user.id, 0),
@@ -297,6 +301,24 @@ def set_admin(
         _ensure_admin_remains(db, target)
 
     target.is_admin = payload.is_admin
+    db.commit()
+    db.refresh(target)
+    _invalidate()
+    return _serialize_admin_users(db, [target])[0]
+
+
+@router.post("/users/{user_id}/verify", response_model=AdminUser)
+def set_verification(
+    user_id: int, payload: AdminVerification, db: DbSession, _admin: CurrentAdmin
+) -> AdminUser:
+    """Grant or revoke a verified badge.
+
+    Unlike banning, this carries no self-lockout risk, so there is no guard: a
+    moderator may verify themselves.
+    """
+    target = _get_user_or_404(db, user_id)
+    target.is_verified = payload.is_verified
+    target.verified_at = utcnow() if payload.is_verified else None
     db.commit()
     db.refresh(target)
     _invalidate()

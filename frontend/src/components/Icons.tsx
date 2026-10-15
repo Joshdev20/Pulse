@@ -263,3 +263,53 @@ export const WifiOffIcon = (p: IconProps) => (
     <circle cx="12" cy="18.5" r=".6" fill="currentColor" stroke="none" />
   </Base>
 )
+
+export const SunIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="4.2" />
+    <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2" />
+    <path d="M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4 17 7M7 17l-1.6 1.6" />
+  </Base>
+)
+
+export const MoonIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M20 14.2A8.2 8.2 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2Z" />
+  </Base>
+)
+
+export const EyeIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" />
+    <circle cx="12" cy="12" r="3.1" />
+  </Base>
+)
+
+export const EyeOffIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M3 4.5 20.5 20" />
+    <path d="M9.9 5.9A9.6 9.6 0 0 1 12 5.8c6 0 9.5 6.2 9.5 6.2a17 17 0 0 1-2.9 3.6" />
+    <path d="M6.4 7.6A17 17 0 0 0 2.5 12S6 18.2 12 18.2a9.6 9.6 0 0 0 3.6-.7" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+  </Base>
+)
+
+/** A filled seal with a tick, for the verified badge. */
+export const VerifiedIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path
+      d="M12 2.6l2.3 1.7 2.8-.3 1 2.7 2.4 1.6-.9 2.7.9 2.7-2.4 1.6-1 2.7-2.8-.3L12 21.4l-2.3-1.7-2.8.3-1-2.7-2.4-1.6.9-2.7-.9-2.7 2.4-1.6 1-2.7 2.8.3z"
+      fill="currentColor"
+      stroke="none"
+    />
+    <path d="m8.5 12.2 2.4 2.3 4.6-4.7" stroke="var(--badge-ink, #fff)" strokeWidth={2.2} />
+  </Base>
+)
+
+export const KeyIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="8" cy="15.6" r="3.6" />
+    <path d="m10.7 13 8-8" />
+    <path d="m16.4 7.3 1.9 1.9M18.9 4.8l1.9 1.9" />
+  </Base>
+)

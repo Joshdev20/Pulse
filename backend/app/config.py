@@ -33,6 +33,30 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     max_upload_mb: int = 32
 
+    # Password reset. The token is mailed as a link to `frontend_base_url`.
+    # Without SMTP configured the link is logged and, in a non-production
+    # setting, returned to the caller so the flow can be exercised.
+    frontend_base_url: str = "http://localhost:12000"
+    password_reset_ttl_minutes: int = 30
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str = "no-reply@pulse.local"
+    smtp_starttls: bool = True
+    # Set true in production so a reset link is never handed back in the API
+    # response, whatever the mail configuration.
+    expose_reset_token: bool = False
+
+    @property
+    def mail_configured(self) -> bool:
+        return bool(self.smtp_host)
+
+    @property
+    def may_return_reset_token(self) -> bool:
+        """Whether the reset token may be echoed in the response body."""
+        return not self.mail_configured and not self.expose_reset_token
+
     # Request-body ceilings, in bytes. Uploads are allowed the full
     # `max_upload_mb`, while ordinary JSON payloads stay small.
     max_body_bytes: int = 1 * 1024 * 1024

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { Avatar } from './Avatar'
+import { Avatar, DisplayName } from './Avatar'
+import { ThemeToggle } from './ThemeToggle'
 import {
   BellIcon,
   CompassIcon,
@@ -114,10 +115,12 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
       {user && (
         <div className="sidebar-user">
           <Link to={`/u/${user.username}`}>
-            <Avatar name={user.display_name} color={user.avatar_color} size="sm" />
+            <Avatar name={user.display_name} color={user.avatar_color} url={user.avatar_url} size="sm" />
           </Link>
           <Link to={`/u/${user.username}`} className="sidebar-user-info">
-            <div className="sidebar-user-name">{user.display_name}</div>
+            <div className="sidebar-user-name">
+              <DisplayName user={user} />
+            </div>
             <div className="sidebar-user-handle">@{user.username}</div>
           </Link>
           <button
@@ -131,6 +134,10 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
           </button>
         </div>
       )}
+      <div className="sidebar-foot">
+        <ThemeToggle />
+        <span className="sidebar-foot-label">Appearance</span>
+      </div>
     </aside>
   )
 }
@@ -249,9 +256,11 @@ export function Rail() {
           </div>
           {people.map((person) => (
             <Link key={person.id} to={`/u/${person.username}`} className="suggest-row">
-              <Avatar name={person.display_name} color={person.avatar_color} size="sm" />
+              <Avatar name={person.display_name} color={person.avatar_color} url={person.avatar_url} size="sm" />
               <div className="suggest-info">
-                <div className="sidebar-user-name">{person.display_name}</div>
+                <div className="sidebar-user-name">
+                  <DisplayName user={person} />
+                </div>
                 <div className="sidebar-user-handle">{formatCount(person.follower_count)} followers</div>
               </div>
             </Link>

@@ -19,6 +19,11 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     ("users", "is_admin", "BOOLEAN NOT NULL DEFAULT false"),
     ("users", "is_banned", "BOOLEAN NOT NULL DEFAULT false"),
     ("users", "banned_reason", "VARCHAR(280) NOT NULL DEFAULT ''"),
+    ("users", "is_verified", "BOOLEAN NOT NULL DEFAULT false"),
+    # Nullable, so no default is needed; existing users keep the generated
+    # initials avatar until they upload a picture.
+    ("users", "verified_at", "TIMESTAMP NULL"),
+    ("users", "avatar_media_id", "INTEGER NULL"),
 ]
 
 

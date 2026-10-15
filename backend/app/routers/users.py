@@ -1,12 +1,12 @@
 """Profiles, follow graph, suggestions and platform stats."""
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, or_, select
 
-from .. import cache
+from .. import cache, storage
 from ..config import settings
 from ..deps import CurrentUser, DbSession, serialize_posts, serialize_user, serialize_users
-from ..models import Comment, Follow, Like, Notification, Post, User
+from ..models import Comment, Follow, Like, Media, Notification, Post, User
 from ..realtime import manager
 from ..schemas import Page, SuggestedUser, UserPublic, UserUpdate, Stats
 
@@ -93,14 +93,121 @@ def get_user(username: str, db: DbSession, viewer: CurrentUser) -> UserPublic:
     )
 
 
+@router.post("/me/avatar", response_model=UserPublic)
+async def upload_avatar(
+    db: DbSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> UserPublic:
+    """Set the signed-in user's profile picture.
+
+    The upload is sniffed and stored through the same path as post media, so
+    only real image bytes are accepted regardless of the filename or the
+    declared content type.
+    """
+    data = await file.read(storage.MAX_IMAGE_BYTES + 1)
+    if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file")
+    if len(data) > storage.MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"Images are limited to {storage.MAX_IMAGE_BYTES // (1024 * 1024)}MB",
+        )
+
+    try:
+        sniffed = storage.sniff(data[:64])
+    except storage.UnsupportedMedia:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Profile pictures must be a JPEG, PNG, GIF or WebP image",
+        ) from None
+
+    if sniffed.kind != "image":
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Profile pictures must be an image",
+        )
+
+    stored_name = storage.store(data, sniffed.extension)
+    media = Media(
+        owner_id=user.id,
+        stored_name=stored_name,
+        content_type=sniffed.content_type,
+        kind="image",
+        size_bytes=len(data),
+        alt_text=f"{user.display_name}'s profile picture",
+    )
+    db.add(media)
+    db.flush()
+
+    previous_id = user.avatar_media_id
+    previous_name = None
+    if previous_id is not None:
+        previous = db.get(Media, previous_id)
+        # Only the uploader's own picture, and only one that is not also
+        # attached to a post or message, may be cleaned up.
+        if previous is not None and previous.post_id is None and previous.message_id is None:
+            previous_name = previous.stored_name
+            db.delete(previous)
+
+    user.avatar_media_id = media.id
+    db.commit()
+    db.refresh(user)
+    invalidate_user_reads()
+
+    if previous_name:
+        storage.delete(previous_name)
+    return serialize_user(db, user, user)
+
+
+@router.delete("/me/avatar", response_model=UserPublic)
+def clear_avatar(db: DbSession, user: CurrentUser) -> UserPublic:
+    """Revert to the generated initials avatar and drop the uploaded file."""
+    previous_id = user.avatar_media_id
+    user.avatar_media_id = None
+    db.flush()
+
+    stored_name = None
+    if previous_id is not None:
+        previous = db.get(Media, previous_id)
+        if previous is not None and previous.post_id is None and previous.message_id is None:
+            stored_name = previous.stored_name
+            db.delete(previous)
+
+    db.commit()
+    db.refresh(user)
+    invalidate_user_reads()
+
+    if stored_name:
+        storage.delete(stored_name)
+    return serialize_user(db, user, user)
+
+
 @router.patch("/{username}", response_model=UserPublic)
 def update_user(username: str, payload: UserUpdate, db: DbSession, user: CurrentUser) -> UserPublic:
     target = _get_user_or_404(db, username)
     if target.id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only edit your own profile")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+
+    changes = payload.model_dump(exclude_unset=True)
+    avatar_media_id = changes.pop("avatar_media_id", None)
+    for field, value in changes.items():
         if value is not None:
             setattr(target, field, value.strip() if isinstance(value, str) else value)
+
+    if "avatar_media_id" in payload.model_fields_set:
+        if avatar_media_id is None:
+            target.avatar_media_id = None
+        else:
+            media = db.get(Media, avatar_media_id)
+            # Only the caller's own upload may be attached, and only an image,
+            # so a profile cannot be pointed at someone else's attachment.
+            if media is None or media.owner_id != user.id or media.kind != "image":
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "That image cannot be used as a profile picture"
+                )
+            target.avatar_media_id = media.id
+
     db.commit()
     db.refresh(target)
     invalidate_user_reads()

@@ -8,8 +8,10 @@ import { RealtimeProvider } from './context/RealtimeContext'
 import { HomePage } from './pages/HomePage'
 import { ExplorePage } from './pages/ExplorePage'
 import { AdminPage } from './pages/AdminPage'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { PostDetailPage } from './pages/PostDetailPage'
 import { ProfilePage } from './pages/ProfilePage'
@@ -109,6 +111,17 @@ export function App() {
           </RedirectIfAuthed>
         }
       />
+      <Route
+        path="/forgot-password"
+        element={
+          <RedirectIfAuthed>
+            <ForgotPasswordPage />
+          </RedirectIfAuthed>
+        }
+      />
+      {/* Not wrapped in RedirectIfAuthed: the reset itself signs the user in,
+          and a signed-in visitor may still be following an emailed link. */}
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
       {/* Everything below requires a session. */}
       <Route element={<RequireAuth />}>

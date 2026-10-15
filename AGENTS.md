@@ -34,7 +34,7 @@ The venv has **no pip**; use `uv`:
 uv pip install -r requirements.txt        # or: uv pip install redis
 .venv/bin/python -m app.seed --reset      # rebuild pulse.db with demo data
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-.venv/bin/python -m pytest -q             # 88 tests
+.venv/bin/python -m pytest -q             # 142 tests
 ```
 
 ### Frontend (run from `frontend/`)
@@ -197,6 +197,23 @@ the public URL returns 502 until the dev server is bound to 12000.
 - `requirements-prod.txt` is for deployed images and excludes tests; `requirements-dev.txt`
   extends `requirements.txt` with pytest. pip does not parse docstrings, so comments in
   these files must start with `#` — a `"""..."""` header breaks the build.
+- `is_verified` is granted only through `POST /admin/users/{id}/verify`. It is deliberately
+  absent from the profile-update schema, so `PATCH /users/{username}` with `is_verified`
+  silently ignores it rather than letting an account self-verify. `tests/test_profile_features.py`
+  pins that.
+- A display name carries the verified seal via `DisplayName` in `components/Avatar.tsx`.
+  `.display-name` is never `inline-flex`: a container that truncates with an ellipsis clips
+  an atomic `inline-flex` box whole — badge and all — instead of trimming the name. The seal
+  is a sibling `.verified-badge` span, and `.page-head-title` opts into `block` + ellipsis
+  only because it is not itself the truncating container.
+- Avatars resolve through `avatar_url_for` in `deps.py` to `/api/media/{id}`, the same
+  authenticated route as post media, so the URL is useless without a token and every
+  serializer that carries a user must go through it rather than reading `avatar_media_id`.
+- The password-reset link is only returned in the response body when `may_return_reset_token`
+  is true, i.e. no SMTP host is configured *and* `EXPOSE_RESET_TOKEN` is false. That is what
+  makes the demo flow walkable; set `EXPOSE_RESET_TOKEN=true` in production so a live reset
+  link is never handed back to the caller. `POST /auth/forgot-password` answers identically
+  for a known and an unknown address, so it must not branch on whether the account exists.
 - `vercel.json`'s SPA rewrite must stay scoped to `/((?!api/).*)`. A plain `/(.*)`
   catch-all also swallows `/api/*`, and because that happens before the build's
   API base is consulted, the deployed site renders fine while every auth call

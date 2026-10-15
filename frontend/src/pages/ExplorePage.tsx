@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { PostCard } from '../components/PostCard'
-import { Avatar } from '../components/Avatar'
+import { Avatar, DisplayName } from '../components/Avatar'
 import { FollowButton } from '../components/FollowButton'
 import { EditPostModal } from '../components/EditPostModal'
 import { EmptyState, ErrorState, FeedSkeleton } from '../components/UI'
@@ -95,11 +95,13 @@ export function ExplorePage() {
           {suggested.map((item) => (
             <div key={item.user.id} className="user-row">
               <Link to={`/u/${item.user.username}`}>
-                <Avatar name={item.user.display_name} color={item.user.avatar_color} size="md" />
+                <Avatar name={item.user.display_name} color={item.user.avatar_color} url={item.user.avatar_url} size="md" />
               </Link>
               <div className="user-row-main">
                 <div className="user-row-name">
-                  <Link to={`/u/${item.user.username}`}>{item.user.display_name}</Link>
+                  <Link to={`/u/${item.user.username}`}>
+                    <DisplayName user={item.user} />
+                  </Link>
                 </div>
                 <div className="user-row-handle">@{item.user.username}</div>
                 {item.user.bio && <p className="user-row-bio">{item.user.bio}</p>}

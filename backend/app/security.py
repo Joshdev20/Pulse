@@ -39,6 +39,22 @@ def create_access_token(subject: str) -> str:
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
 
+def new_reset_token() -> tuple[str, str]:
+    """Return ``(token, token_hash)`` for a password reset.
+
+    The plaintext token goes in the emailed link; only its hash is stored, so a
+    database leak does not hand out working reset links. SHA-256 is right here
+    (rather than PBKDF2) because the token is 256 bits of entropy already, so
+    there is nothing to brute force.
+    """
+    token = secrets.token_urlsafe(32)
+    return token, hash_reset_token(token)
+
+
+def hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def decode_access_token(token: str) -> str | None:
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])

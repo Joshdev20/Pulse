@@ -19,6 +19,13 @@ DbSession = Annotated[Session, Depends(get_db)]
 MEDIA_URL = "/api/media/{id}"
 
 
+def avatar_url_for(user: User) -> str | None:
+    """URL of a user's uploaded picture, or None to fall back to initials."""
+    if user.avatar_media_id is None:
+        return None
+    return MEDIA_URL.format(id=user.avatar_media_id)
+
+
 def serialize_media(items: list[Media]) -> list[MediaOut]:
     return [
         MediaOut(
@@ -110,12 +117,14 @@ def serialize_user(db: Session, user: User, viewer: User | None = None) -> UserP
         location=user.location,
         website=user.website,
         avatar_color=user.avatar_color,
+        avatar_url=avatar_url_for(user),
         created_at=user.created_at,
         follower_count=user.follower_count,
         following_count=user.following_count,
         post_count=post_count,
         is_following=is_following,
         is_admin=user.is_admin,
+        is_verified=user.is_verified,
     )
 
 
@@ -165,12 +174,14 @@ def serialize_users(db: Session, users: list[User], viewer: User | None = None) 
             location=user.location,
             website=user.website,
             avatar_color=user.avatar_color,
+            avatar_url=avatar_url_for(user),
             created_at=user.created_at,
             follower_count=follower_counts.get(user.id, 0),
             following_count=following_counts.get(user.id, 0),
             post_count=post_counts.get(user.id, 0),
             is_following=user.id in following_ids,
             is_admin=user.is_admin,
+            is_verified=user.is_verified,
         )
         for user in users
     }

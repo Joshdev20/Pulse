@@ -6,12 +6,14 @@ export interface User {
   location: string
   website: string
   avatar_color: string
+  avatar_url: string | null
   created_at: string
   follower_count: number
   following_count: number
   post_count: number
   is_following: boolean
   is_admin: boolean
+  is_verified: boolean
 }
 
 export interface Tag {
@@ -125,11 +127,14 @@ export interface AdminUser {
   location: string
   website: string
   avatar_color: string
+  avatar_url: string | null
   created_at: string
   is_active: boolean
   is_admin: boolean
   is_banned: boolean
   banned_reason: string
+  is_verified: boolean
+  verified_at: string | null
   follower_count: number
   following_count: number
   post_count: number
