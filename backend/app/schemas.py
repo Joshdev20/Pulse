@@ -1,9 +1,27 @@
 """Pydantic request/response schemas."""
 
-from datetime import datetime
-from typing import Literal
+from datetime import datetime, timezone
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Attach UTC to naive datetimes.
+
+    SQLite has no timezone type, so a value written as UTC-aware comes back
+    naive. Serializing that without an offset makes the browser parse it as
+    local time, which is how a just-created post reads as "1h ago". Forcing an
+    explicit UTC offset keeps the wire format unambiguous.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+# Every timestamp the API emits goes through this, so clients can always rely on
+# the offset being present.
+UTCDatetime = Annotated[datetime, PlainSerializer(_as_utc, return_type=datetime)]
 
 
 class UserBase(BaseModel):
@@ -37,7 +55,7 @@ class UserPublic(BaseModel):
     location: str
     website: str
     avatar_color: str
-    created_at: datetime
+    created_at: UTCDatetime
     follower_count: int = 0
     following_count: int = 0
     post_count: int = 0
@@ -70,7 +88,7 @@ class CommentOut(BaseModel):
 
     id: int
     body: str
-    created_at: datetime
+    created_at: UTCDatetime
     author: UserPublic
 
 
@@ -101,8 +119,8 @@ class PostOut(BaseModel):
 
     id: int
     body: str
-    created_at: datetime
-    edited_at: datetime | None
+    created_at: UTCDatetime
+    edited_at: UTCDatetime | None
     author: UserPublic
     tags: list[TagOut] = []
     media: list[MediaOut] = []
@@ -122,7 +140,7 @@ class MessageOut(BaseModel):
     id: int
     conversation_id: int
     body: str
-    created_at: datetime
+    created_at: UTCDatetime
     sender: UserPublic
     media: list[MediaOut] = []
     mine: bool = False
@@ -130,8 +148,8 @@ class MessageOut(BaseModel):
 
 class ConversationOut(BaseModel):
     id: int
-    created_at: datetime
-    last_message_at: datetime
+    created_at: UTCDatetime
+    last_message_at: UTCDatetime
     partner: UserPublic
     last_message: MessageOut | None = None
     unread_count: int = 0
@@ -152,7 +170,7 @@ class NotificationOut(BaseModel):
     id: int
     kind: str
     read: bool
-    created_at: datetime
+    created_at: UTCDatetime
     post_id: int | None
     actor: UserPublic | None
 

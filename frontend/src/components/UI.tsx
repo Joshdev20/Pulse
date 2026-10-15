@@ -1,9 +1,38 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CloseIcon } from './Icons'
+import { timeAgo } from '../lib/format'
+import { useNow } from '../lib/useNow'
 
 export function Spinner({ size = 18 }: { size?: number }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-hidden="true" />
+}
+
+/**
+ * A timestamp that keeps itself current.
+ *
+ * The exact time is always in `title`, so hovering gives the full value while
+ * the visible text stays short and re-renders as the shared clock ticks.
+ */
+export function RelativeTime({
+  iso,
+  className,
+  prefix = '',
+  suffix = '',
+}: {
+  iso: string
+  className?: string
+  prefix?: string
+  suffix?: string
+}) {
+  const now = useNow()
+  return (
+    <time className={className} dateTime={iso} title={new Date(iso).toLocaleString()}>
+      {prefix}
+      {timeAgo(iso, now)}
+      {suffix}
+    </time>
+  )
 }
 
 export function PostSkeleton() {

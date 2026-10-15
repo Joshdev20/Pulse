@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { CloseIcon, ImageIcon } from './Icons'
+import { CloseIcon, UploadIcon } from './Icons'
 import { Spinner } from './UI'
 import { api, ApiError } from '../lib/api'
 import { useMediaUrl } from '../lib/useMediaUrl'
@@ -34,13 +34,11 @@ export function MediaPicker({
   items,
   onChange,
   disabled,
-  compact = false,
   showThumbsOnly = false,
 }: {
   items: Media[]
   onChange: (items: Media[]) => void
   disabled?: boolean
-  compact?: boolean
   /** Render only the thumbnail strip; the trigger button lives elsewhere. */
   showThumbsOnly?: boolean
 }) {
@@ -94,15 +92,14 @@ export function MediaPicker({
 
       <button
         type="button"
-        className={compact ? 'icon-btn' : 'btn btn-ghost btn-sm'}
+        className="icon-btn media-trigger"
         disabled={disabled || full || uploading > 0}
         onClick={() => inputRef.current?.click()}
         title={full ? `Up to ${MAX_ATTACHMENTS} attachments` : 'Add photo, video or file'}
         aria-label="Add attachment"
         hidden={showThumbsOnly}
       >
-        {uploading > 0 ? <Spinner size={17} /> : <ImageIcon size={18} />}
-        {!compact && <span>Media</span>}
+        {uploading > 0 ? <Spinner size={17} /> : <UploadIcon size={18} />}
       </button>
 
       {uploading > 0 && <span className="media-progress">{progress}%</span>}

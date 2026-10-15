@@ -3,9 +3,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Avatar } from './Avatar'
 import { CommentIcon, HeartIcon, MoreIcon, ShareIcon, TrashIcon, EditIcon } from './Icons'
 import { MediaGallery } from './MediaGallery'
-import { Dropdown } from './UI'
+import { Dropdown, RelativeTime } from './UI'
 import { api } from '../lib/api'
-import { formatCount, segmentBody, timeAgo } from '../lib/format'
+import { formatCount, segmentBody } from '../lib/format'
 import type { Post } from '../lib/types'
 
 export function PostText({ body, className }: { body: string; className?: string }) {
@@ -124,9 +124,7 @@ export function PostCard({
           </Link>
           <span className="post-handle">@{post.author.username}</span>
           <span className="post-dot">·</span>
-          <time className="post-time" dateTime={post.created_at} title={new Date(post.created_at).toLocaleString()}>
-            {timeAgo(post.created_at)}
-          </time>
+          <RelativeTime iso={post.created_at} className="post-time" />
           {post.edited_at && <span className="post-time">(edited)</span>}
 
           <div style={{ marginLeft: 'auto' }} onClick={(event) => event.stopPropagation()}>

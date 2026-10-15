@@ -59,6 +59,7 @@ export function Composer({
 
   const ratio = Math.min(body.length / MAX_LENGTH, 1)
   const tone = remaining < 0 ? 'over' : remaining < 100 ? 'warn' : ''
+  const showCounter = body.length > MAX_LENGTH - 200
 
   return (
     <div className="composer">
@@ -79,29 +80,34 @@ export function Composer({
             }
           }}
         />
+
         {attachments.length > 0 && (
           <div className="composer-attachments">
             <MediaPicker items={attachments} onChange={setAttachments} disabled={busy} showThumbsOnly />
           </div>
         )}
+
         <div className="composer-actions">
-          <div className="composer-meta">
+          <div className="composer-tools">
             {attachments.length === 0 && (
               <MediaPicker items={attachments} onChange={setAttachments} disabled={busy} />
             )}
-            {body.length > MAX_LENGTH - 200 && (
-              <span className={`char-count ${tone}`}>{remaining}</span>
-            )}
-            {body.length > MAX_LENGTH - 200 && (
-              <ProgressRing ratio={ratio} over={remaining < 0} />
-            )}
             <span className="composer-hint">
-              <SparkIcon size={14} /> #hashtags and @mentions work
+              <SparkIcon size={13} /> #hashtags and @mentions work
             </span>
           </div>
-          <button type="button" className="btn btn-primary" disabled={!canSubmit} onClick={submit}>
-            {busy ? 'Posting…' : 'Post'}
-          </button>
+
+          <div className="composer-submit">
+            {showCounter && (
+              <span className={`char-count ${tone}`} aria-live="polite">
+                {remaining}
+              </span>
+            )}
+            {showCounter && <ProgressRing ratio={ratio} over={remaining < 0} />}
+            <button type="button" className="btn btn-primary" disabled={!canSubmit} onClick={submit}>
+              {busy ? 'Posting…' : 'Post'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

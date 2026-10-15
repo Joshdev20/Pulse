@@ -1,10 +1,10 @@
 /** Compact relative time, e.g. "3h", "2d", or a date for older items. */
-export function timeAgo(iso: string): string {
+export function timeAgo(iso: string, now: number = Date.now()): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''
-  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  const seconds = Math.max(0, Math.floor((now - then) / 1000))
 
-  if (seconds < 60) return `${seconds}s`
+  if (seconds < 45) return 'now'
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
@@ -17,7 +17,7 @@ export function timeAgo(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
-    year: new Date(iso).getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+    year: new Date(iso).getFullYear() === new Date(now).getFullYear() ? undefined : 'numeric',
   })
 }
 

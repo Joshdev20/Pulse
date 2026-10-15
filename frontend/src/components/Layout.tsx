@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { Avatar } from './Avatar'
 import {
   BellIcon,
@@ -250,6 +250,11 @@ export function AppShell({
   onCompose: () => void
 }) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
+  // An open conversation owns the bottom-right corner: the thread's send button
+  // lives there, so the floating compose button would sit on top of it.
+  const inThread = /^\/messages\/\d+/.test(pathname)
+
   return (
     <div className="app">
       <div className={`shell${withRail ? ' shell-with-rail' : ''}`}>
@@ -257,14 +262,16 @@ export function AppShell({
         <main className="main">{children}</main>
         {withRail && <Rail />}
       </div>
-      <button
-        type="button"
-        className="mobile-compose"
-        onClick={() => navigate('/compose')}
-        aria-label="New post"
-      >
-        <ComposeIcon size={22} />
-      </button>
+      {!inThread && (
+        <button
+          type="button"
+          className="mobile-compose"
+          onClick={() => navigate('/compose')}
+          aria-label="New post"
+        >
+          <ComposeIcon size={22} />
+        </button>
+      )}
       <MobileNav />
     </div>
   )
