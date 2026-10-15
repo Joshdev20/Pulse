@@ -69,6 +69,20 @@ function readError(payload: unknown, fallback: string): string {
   return fallback
 }
 
+/**
+ * Message for a request that the web server's SPA fallback answered with
+ * index.html instead of the backend.
+ *
+ * This is what an unset `VITE_API_BASE` looks like in a split deploy: the site
+ * renders and looks healthy, but every API call comes back as HTML. Without
+ * this check the caller sees a baffling JSON parse error instead.
+ */
+function htmlFallbackMessage(subject: string): string {
+  return API_BASE
+    ? `${API_BASE} returned HTML instead of JSON. Check that VITE_API_BASE points at the backend.`
+    : `The API is not configured for this deployment: ${subject} was answered by the web server instead of the backend. Set VITE_API_BASE to the backend origin and redeploy.`
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   const token = getToken()
@@ -84,12 +98,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // Without this check that surfaces as a baffling JSON parse error.
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('text/html')) {
-    throw new ApiError(
-      response.status,
-      API_BASE
-        ? `${API_BASE} returned HTML instead of JSON. Check that VITE_API_BASE points at the backend.`
-        : 'The API is not configured for this deployment: /api requests are being answered by the web server instead of the backend. Set VITE_API_BASE to the backend origin and redeploy.',
-    )
+    throw new ApiError(response.status, htmlFallbackMessage('the request'))
   }
 
   if (response.status === 204) return undefined as T
@@ -310,7 +319,10 @@ function uploadWithProgress<T>(
     form.append('alt_text', altText)
 
     const xhr = new XMLHttpRequest()
-    xhr.open('POST', path)
+    // Must go through apiUrl like every other request: in a split deploy the
+    // API is on another origin, and a relative path would be answered by the
+    // web server's SPA fallback instead (a 404, or index.html with a 200).
+    xhr.open('POST', apiUrl(path))
     const token = getToken()
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
 
@@ -321,6 +333,13 @@ function uploadWithProgress<T>(
     }
 
     xhr.onload = () => {
+      // Same guard as `request`: an SPA fallback answers an unknown /api path
+      // with index.html, which would otherwise surface as a JSON parse error.
+      const contentType = xhr.getResponseHeader('content-type') ?? ''
+      if (contentType.includes('text/html')) {
+        reject(new ApiError(xhr.status, htmlFallbackMessage('the upload')))
+        return
+      }
       const payload = xhr.responseText ? safeParse(xhr.responseText) : null
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(payload as T)

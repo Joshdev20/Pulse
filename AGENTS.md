@@ -180,7 +180,10 @@ the public URL returns 502 until the dev server is bound to 12000.
   need; set means absolute URLs to the API host. It is inlined by Vite at **build** time, so
   changing it needs a rebuild. All HTTP goes through `apiUrl()` in `src/lib/api.ts` and the
   socket derives its URL from the same variable in `RealtimeContext.tsx` — use those helpers
-  rather than hardcoding a host or path.
+  rather than hardcoding a host or path. This includes the XHR upload path in
+  `uploadWithProgress()`, which cannot use `fetch` because it reports progress: passing a
+  relative path there bypasses `apiUrl()` and the deploy's SPA fallback answers the upload
+  with a 404, so uploads break in a split deploy while every other call keeps working.
 - `CORS_ORIGIN_REGEX` (default `https://[a-zA-Z0-9-]+(\.vercel\.app)$`) is matched in
   addition to `CORS_ORIGINS`, so preview deployments work without listing each hostname.
   It is anchored, so `evil-vercel.app.attacker.com` is rejected — keep it anchored.
