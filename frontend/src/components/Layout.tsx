@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { Avatar } from './Avatar'
 import {
   BellIcon,
+  CompassIcon,
   ComposeIcon,
   HomeIcon,
   LogoutIcon,
@@ -22,10 +23,10 @@ import type { Stats, TrendingTag, User } from '../lib/types'
 
 const NAV = [
   { to: '/', label: 'Home', icon: HomeIcon, end: true, badge: null },
-  { to: '/explore', label: 'Explore', icon: SearchIcon, end: false, badge: null },
+  { to: '/explore', label: 'Explore', icon: CompassIcon, end: false, badge: null },
   { to: '/notifications', label: 'Notifications', icon: BellIcon, end: false, badge: 'notifications' },
   { to: '/messages', label: 'Messages', icon: MailIcon, end: false, badge: 'messages' },
-  { to: '/search', label: 'Search', icon: UserIcon, end: false, badge: null },
+  { to: '/search', label: 'Search', icon: SearchIcon, end: false, badge: null },
 ] as const
 
 /** Live counts for the sidebar badges, driven by realtime events. */

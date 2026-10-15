@@ -35,6 +35,13 @@ export const SearchIcon = (p: IconProps) => (
   </Base>
 )
 
+export const CompassIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m15.6 8.4-2.3 5.2-5.2 2.3 2.3-5.2z" />
+  </Base>
+)
+
 export const BellIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M18 8.5a6 6 0 1 0-12 0c0 4.2-1.5 5.6-2 6.5h16c-.5-.9-2-2.3-2-6.5Z" />
