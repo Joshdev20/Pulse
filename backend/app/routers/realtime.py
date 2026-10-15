@@ -25,8 +25,16 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
 
     The client sends ``{"type": "auth", "token": "..."}`` first. From then on
     the server pushes ``notification``, ``message`` and ``typing`` frames.
+
+    The request-scoped session is released as soon as authentication finishes.
+    A socket outlives its session by minutes or hours, and a session that stays
+    open pins a pooled connection the whole time; a handful of idle sockets
+    would exhaust the pool and stall every HTTP request behind a ~30s pool
+    timeout. Each later database touch closes the session again for the same
+    reason.
     """
     user_id = await authenticate(socket, db)
+    _release(db)
     if user_id is None:
         return
 
@@ -60,6 +68,11 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
         await manager.disconnect(user_id, socket)
 
 
+def _release(db: DbSession) -> None:
+    """Return the session's pooled connection without discarding the session."""
+    db.close()
+
+
 async def _relay_typing(db: DbSession, user_id: int, frame: dict) -> None:
     """Forward a typing indicator to the other member of the conversation.
 
@@ -70,6 +83,20 @@ async def _relay_typing(db: DbSession, user_id: int, frame: dict) -> None:
     if not isinstance(conversation_id, int):
         return
 
+    try:
+        peers = _typing_peers(db, user_id, conversation_id)
+    finally:
+        _release(db)
+
+    for peer_id in peers:
+        await manager.publish(
+            peer_id,
+            {"type": "typing", "conversation_id": conversation_id, "user_id": user_id},
+        )
+
+
+def _typing_peers(db: DbSession, user_id: int, conversation_id: int) -> list[int]:
+    """Other participants of `conversation_id`, or [] if the sender is not in it."""
     mine = db.scalar(
         select(ConversationParticipant.id).where(
             ConversationParticipant.conversation_id == conversation_id,
@@ -77,17 +104,13 @@ async def _relay_typing(db: DbSession, user_id: int, frame: dict) -> None:
         )
     )
     if mine is None:
-        return
+        return []
 
-    peers = db.scalars(
-        select(ConversationParticipant.user_id).where(
-            ConversationParticipant.conversation_id == conversation_id,
-            ConversationParticipant.user_id != user_id,
-        )
-    ).all()
-
-    for peer_id in peers:
-        await manager.publish(
-            peer_id,
-            {"type": "typing", "conversation_id": conversation_id, "user_id": user_id},
-        )
+    return list(
+        db.scalars(
+            select(ConversationParticipant.user_id).where(
+                ConversationParticipant.conversation_id == conversation_id,
+                ConversationParticipant.user_id != user_id,
+            )
+        ).all()
+    )

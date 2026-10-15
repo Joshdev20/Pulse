@@ -10,23 +10,44 @@ component library — all styling is hand-written CSS in `frontend/src/styles.cs
 
 ## Commands
 
-Backend (run from `backend/`):
+### First-time setup in a fresh sandbox
+
+The sandbox is rebuilt from scratch between sessions, so `redis-server`, the venv and
+`node_modules` may be missing. `redis-py` lives in the venv, but the *server* is a system
+package and has to be reinstalled:
 
 ```bash
-pip install -r requirements.txt
-python -m app.seed --reset                  # rebuild pulse.db with demo data
-python -m uvicorn app.main:app --reload --port 8000
-python -m pytest -q                         # 71 tests
+sudo apt-get update -qq && sudo apt-get install -y redis-server
+redis-server --daemonize yes --save '' --appendonly no   # no persistence needed
+redis-cli PING                                           # expect PONG
 ```
 
-Frontend (run from `frontend/`):
+Without a running server the app still works: it falls back to an in-process cache and
+skips the realtime bus. `/api/health` reports which backend is live, so check it before
+assuming Redis is in use.
+
+### Backend (run from `backend/`)
+
+The venv has **no pip**; use `uv`:
+
+```bash
+uv pip install -r requirements.txt        # or: uv pip install redis
+.venv/bin/python -m app.seed --reset      # rebuild pulse.db with demo data
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+.venv/bin/python -m pytest -q             # 88 tests
+```
+
+### Frontend (run from `frontend/`)
 
 ```bash
 npm install
-npm run dev          # port 12000, proxies /api and /api/ws to 127.0.0.1:8000
-npm run typecheck    # tsc --noEmit
-npm run build        # typecheck + vite build
+PORT=12000 npm run dev   # must bind 12000: that is the port the public URL maps to
+npm run typecheck        # tsc --noEmit
+npm run build            # typecheck + vite build
 ```
+
+`PORT` defaults to 5173 in `vite.config.ts`, which the sandbox proxy does **not** expose —
+the public URL returns 502 until the dev server is bound to 12000.
 
 `npm run build` runs `tsc --noEmit` first, so a type error fails the build. Always run
 `npm run typecheck` after touching frontend code.
@@ -70,9 +91,23 @@ npm run build        # typecheck + vite build
   because `Message.mine` is relative to the reader. Do not broadcast one shared payload.
 - `usePageTitle(pathname, suffix?)` keeps `document.title` in step with the route. Login and
   register set their own titles while mounted; signed-in pages go through the hook.
+- The realtime socket must **not** hold a database session for its lifetime. `/api/ws` takes
+  `Depends(get_db)`, so `routers/realtime.py` closes that session as soon as the handshake
+  finishes and closes it again after each typing lookup. A socket that keeps a session open
+  pins a pooled connection for as long as the browser tab lives; ~14 idle sockets exhaust the
+  default pool (5 + 10 overflow) and every HTTP request then blocks on `pool_timeout` (~30s).
+  That is what made the whole app hang on its loading spinner, so the page title stayed at
+  the base `Pulse`. `tests/test_realtime_pool.py` guards this with a deliberately tiny pool.
 
 ## Gotchas
 
+- `AuthProvider` is mounted once, in `main.tsx`, above the router. Do not mount it again in
+  `App.tsx`: a second provider runs a second, unused `api.me()` on every load and doubles
+  every auth request.
+- A failed session check must not end the session. `AuthContext.refresh` only clears the
+  token on a `401`; rate limits (429), dropped connections and 5xx are retried with backoff.
+  Treating every error as "signed out" logged users out whenever they tripped the rate
+  limiter.
 - `RateLimitMiddleware` keeps counters in process-wide state, so tests disable it in
   `conftest.py`. If you add a test that asserts a 429, re-enable it for that test only.
 - Uploaded files land in `backend/uploads/` (gitignored) under random names; the database

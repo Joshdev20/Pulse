@@ -1,7 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { api, setToken, getToken } from '../lib/api'
+import { ApiError, api, setToken, getToken } from '../lib/api'
 import type { User } from '../lib/types'
+
+// A failed session check is retried before the user is shown as signed out, so
+// a rate limit or a dropped connection does not end their session.
+const AUTH_RETRY_LIMIT = 3
+const AUTH_RETRY_BASE_MS = 400
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 interface AuthValue {
   user: User | null
@@ -29,11 +36,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserState(null)
       return
     }
-    try {
-      setUserState(await api.me())
-    } catch {
-      setToken(null)
-      setUserState(null)
+    for (let attempt = 0; ; attempt++) {
+      try {
+        setUserState(await api.me())
+        return
+      } catch (error) {
+        // Only a rejected token ends the session. A rate limit, a dropped
+        // connection or a 5xx is transient, so retry with backoff instead of
+        // discarding credentials the server never invalidated.
+        if (error instanceof ApiError && error.status === 401) {
+          setToken(null)
+          setUserState(null)
+          return
+        }
+        if (attempt >= AUTH_RETRY_LIMIT) {
+          setUserState(null)
+          return
+        }
+        await delay(AUTH_RETRY_BASE_MS * 2 ** attempt)
+      }
     }
   }, [])
 

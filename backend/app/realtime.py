@@ -183,6 +183,11 @@ async def authenticate(socket: WebSocket, db: Session) -> int | None:
     token does not resolve to an active user. Accepting before authenticating is
     required to read the frame at all; a socket that fails auth is closed
     immediately and is never registered with the manager.
+
+    `db` is used only for this initial lookup. A socket must never hold a
+    session for its lifetime: pooled connections are a scarce resource and an
+    idle socket that keeps one starves every HTTP request that needs a
+    connection.
     """
     await socket.accept()
 
