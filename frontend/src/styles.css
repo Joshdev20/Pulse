@@ -37,6 +37,11 @@
   --rose-line: rgba(251, 113, 133, 0.34);
   --sky: #60a5fa;
   --sky-soft: rgba(96, 165, 250, 0.12);
+  /* Reposts get their own hue so an active repost button is distinguishable
+     from the sky-blue hover state every action shares. */
+  --repost: #34d399;
+  --repost-soft: rgba(52, 211, 153, 0.16);
+  --repost-line: rgba(52, 211, 153, 0.34);
 
   /* Semantic colours used by individual components. Named by role rather than
      by hue so the light theme can restate them without touching every rule. */
@@ -123,6 +128,9 @@
   --rose-line: rgba(225, 29, 72, 0.3);
   --sky: #2563eb;
   --sky-soft: rgba(37, 99, 235, 0.1);
+  --repost: #047857;
+  --repost-soft: rgba(4, 120, 87, 0.12);
+  --repost-line: rgba(4, 120, 87, 0.3);
 
   --on-accent: #ffffff;
   --text-strong: #1b2030;
@@ -938,6 +946,41 @@ h4 {
 /* ============================================================
    Post card
    ============================================================ */
+/* A reposted card is an envelope around another post: the flag names the
+   sharer, and the row below is the original, laid out exactly like a normal
+   post so nothing about it looks second-hand. `.post` is a row by default, so
+   a reposted card stacks its two parts instead. */
+.post-repost {
+  flex-direction: column;
+  gap: 0;
+}
+
+.post-row {
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+}
+
+.repost-flag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px 56px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.repost-flag-actor {
+  color: var(--text-muted);
+  font-weight: 640;
+}
+
+.repost-flag-actor:hover {
+  color: var(--repost);
+  text-decoration: underline;
+}
+
 .post {
   display: flex;
   gap: 14px;
@@ -1073,6 +1116,20 @@ h4 {
 .action.share:hover {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.action.repost:hover {
+  color: var(--repost);
+  background: var(--repost-soft);
+}
+
+.action.repost.reposted {
+  color: var(--repost);
+}
+
+.action.repost.reposted:hover {
+  color: var(--repost);
+  background: var(--repost-soft);
 }
 
 .action.like:hover {
@@ -1259,6 +1316,31 @@ h4 {
     radial-gradient(420px 180px at 85% -30%, var(--accent-soft), transparent 70%),
     var(--banner-bg);
   border-bottom: 1px solid var(--border);
+}
+
+/* The cover photo sits on top of the gradient, which stays visible behind it
+   while it loads and is the whole banner when there is no cover. */
+.profile-banner-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* The settings preview reuses the real banner, scaled down, so what you see in
+   the editor is what the profile will show. */
+.cover-preview {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.cover-preview .profile-banner {
+  height: 112px;
+  border-bottom: none;
 }
 
 .profile-head {
@@ -1642,6 +1724,12 @@ h4 {
   color: var(--accent);
   background: var(--accent-soft);
   border-color: var(--accent-line);
+}
+
+.notification-icon.repost {
+  color: var(--repost);
+  background: var(--repost-soft);
+  border-color: var(--repost-line);
 }
 
 .notification-text {

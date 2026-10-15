@@ -24,6 +24,12 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # initials avatar until they upload a picture.
     ("users", "verified_at", "TIMESTAMP NULL"),
     ("users", "avatar_media_id", "INTEGER NULL"),
+    ("users", "cover_media_id", "INTEGER NULL"),
+    # Nullable: only reposts carry it. No FK constraint is declared here because
+    # ALTER TABLE cannot add one to an existing table on every backend, and the
+    # repost endpoints delete their rows explicitly rather than leaning on a
+    # cascade that a legacy database would not have.
+    ("posts", "repost_of_id", "INTEGER NULL"),
 ]
 
 

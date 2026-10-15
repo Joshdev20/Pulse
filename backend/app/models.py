@@ -46,6 +46,10 @@ class User(Base):
     # foreign key: users <-> media would be a circular reference, and the id is
     # validated against the caller's own uploads in the avatar endpoints.
     avatar_media_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # The profile header image, same rules as avatar_media_id. Both are checked
+    # when deciding whether an upload is publicly readable, since either one is
+    # shown to anyone who can view the profile.
+    cover_media_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Moderators can reach the admin endpoints; a banned account keeps its data
@@ -114,6 +118,13 @@ class Post(Base):
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # A repost is a row pointing at the post it shares, so it flows through the
+    # existing feed, pagination and serialization untouched. A repost row has an
+    # empty body, no media and no tags: everything shown comes from `repost_of`.
+    # Nesting stops at one level — a repost always points at an original.
+    repost_of_id: Mapped[int | None] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     author: Mapped[User] = relationship(back_populates="posts")
     comments: Mapped[list["Comment"]] = relationship(
@@ -126,6 +137,11 @@ class Post(Base):
         foreign_keys="Media.post_id",
         cascade="all, delete-orphan",
         order_by="Media.id",
+        lazy="selectin",
+    )
+    repost_of: Mapped["Post | None"] = relationship(
+        remote_side=[id],
+        foreign_keys=[repost_of_id],
         lazy="selectin",
     )
 

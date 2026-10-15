@@ -82,6 +82,20 @@ export const MoreIcon = (p: IconProps) => (
   </Base>
 )
 
+/**
+ * Two arrows in a loop, the conventional repost glyph. `active` thickens the
+ * stroke instead of swapping in a second icon, so the button keeps one shape
+ * as it toggles between reposted and not.
+ */
+export const RepostIcon = ({ active, ...p }: IconProps & { active?: boolean }) => (
+  <Base {...p} strokeWidth={active ? 2.4 : 1.8}>
+    <path d="M4 9V7.5A2.5 2.5 0 0 1 6.5 5H17" />
+    <path d="m14.5 2.5 3 2.5-3 2.5" />
+    <path d="M20 15v1.5a2.5 2.5 0 0 1-2.5 2.5H7" />
+    <path d="m9.5 21.5-3-2.5 3-2.5" />
+  </Base>
+)
+
 export const TrashIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M4 7h16M9.5 7V5.4A1.4 1.4 0 0 1 10.9 4h2.2a1.4 1.4 0 0 1 1.4 1.4V7" />

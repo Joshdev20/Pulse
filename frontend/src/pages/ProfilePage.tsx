@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
 import { FollowButton } from '../components/FollowButton'
 import { PostCard } from '../components/PostCard'
+import { ProfileBanner } from '../components/ProfileBanner'
 import { UserRow } from '../components/UserRow'
 import { EditPostModal } from '../components/EditPostModal'
 import { EmptyState, ErrorState, FeedSkeleton, Modal, Spinner } from '../components/UI'
@@ -117,7 +118,7 @@ export function ProfilePage() {
         </div>
       </header>
 
-      <div className="profile-banner" />
+      <ProfileBanner url={person.cover_url} name={person.display_name} />
 
       <div className="profile-head">
         <div className="profile-avatar">

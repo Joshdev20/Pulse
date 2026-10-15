@@ -1,7 +1,7 @@
 """Post CRUD, feed, likes and comments."""
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from .. import cache
 from ..config import settings
@@ -186,6 +186,8 @@ def update_post(post_id: int, payload: PostUpdate, db: DbSession, user: CurrentU
     post = _get_post_or_404(db, post_id)
     if post.author_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only edit your own posts")
+    if post.repost_of_id is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A repost has no text to edit")
     post.body = payload.body.strip()
     post.edited_at = utcnow()
     post.tags = resolve_tags(db, extract_tag_names(post.body))
@@ -200,6 +202,13 @@ def delete_post(post_id: int, db: DbSession, user: CurrentUser) -> None:
     post = _get_post_or_404(db, post_id)
     if post.author_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only delete your own posts")
+    # Remove shares of this post first. The ON DELETE CASCADE on repost_of_id
+    # would cover a database created by this version, but a pre-existing one
+    # gets the column from ensure_schema(), which cannot add the constraint —
+    # and the test suite builds its tables without the SQLite foreign_keys
+    # pragma, so the cascade does not fire there either. Doing it explicitly is
+    # both correct everywhere and self-evident.
+    db.execute(delete(Post).where(Post.repost_of_id == post.id))
     db.delete(post)
     db.commit()
     invalidate_post_reads()
@@ -285,6 +294,80 @@ def delete_comment(comment_id: int, db: DbSession, user: CurrentUser) -> None:
     db.delete(comment)
     db.commit()
     invalidate_post_reads()
+
+
+def _original_of(db: DbSession, post: Post) -> Post:
+    """The post a share refers to.
+
+    Reposting a repost shares the underlying original, so nesting never goes
+    past one level and a chain of shares cannot be built up.
+    """
+    if post.repost_of_id is None:
+        return post
+    return db.get(Post, post.repost_of_id) or post
+
+
+@router.post("/posts/{post_id}/repost", response_model=PostOut, status_code=status.HTTP_201_CREATED)
+async def repost(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
+    """Share a post to your own followers.
+
+    Returns the *original* post, like the like/unlike endpoints do, so the
+    caller can update its counts and repost state in place. The new share
+    appears in followers' feeds as a separate row.
+    """
+    post = _original_of(db, _get_post_or_404(db, post_id))
+    if post.author_id == user.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot repost your own post")
+
+    existing = db.scalar(
+        select(Post).where(Post.author_id == user.id, Post.repost_of_id == post.id)
+    )
+    if existing is None:
+        db.add(Post(author_id=user.id, body="", repost_of_id=post.id))
+        await _notify(
+            db,
+            Notification(user_id=post.author_id, actor_id=user.id, kind="repost", post_id=post.id),
+            post.author_id,
+        )
+        db.commit()
+        db.refresh(post)
+        invalidate_post_reads()
+    return serialize_posts(db, [post], user)[0]
+
+
+@router.delete("/posts/{post_id}/repost", response_model=PostOut)
+def unrepost(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
+    """Undo a share. Idempotent, like unlike."""
+    post = _original_of(db, _get_post_or_404(db, post_id))
+    existing = db.scalar(
+        select(Post).where(Post.author_id == user.id, Post.repost_of_id == post.id)
+    )
+    if existing is not None:
+        db.delete(existing)
+        db.commit()
+        db.refresh(post)
+        invalidate_post_reads()
+    return serialize_posts(db, [post], user)[0]
+
+
+@router.get("/posts/{post_id}/reposts", response_model=list[UserPublic])
+def list_reposts(post_id: int, db: DbSession, viewer: CurrentUser) -> list[UserPublic]:
+    """Accounts that have shared this post, most recent first."""
+
+    def produce() -> list[dict]:
+        post = _original_of(db, _get_post_or_404(db, post_id))
+        sharers = list(
+            db.scalars(
+                select(User)
+                .join(Post, Post.author_id == User.id)
+                .where(Post.repost_of_id == post.id)
+                .order_by(Post.created_at.desc())
+            ).all()
+        )
+        serialized = serialize_users(db, sharers, viewer)
+        return [serialized[u.id].model_dump(mode="json") for u in sharers]
+
+    return cache.get_or_set("posts", settings.cache_ttl_seconds, (viewer.id, "reposts", post_id), produce)
 
 
 @router.get("/trending/tags", response_model=list[dict])

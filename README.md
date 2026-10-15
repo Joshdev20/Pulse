@@ -48,7 +48,7 @@ Every seeded user has the password `password123`. Try `ada`, `grace`, `linus`,
 
 ```bash
 cd backend
-python -m pytest -q             # 142 tests
+python -m pytest -q             # 178 tests
 ```
 
 ```bash
@@ -61,12 +61,12 @@ npm run build                   # typecheck + production bundle
 
 | Area | What works |
 | --- | --- |
-| Accounts | Register, sign in, JWT bearer sessions, edit profile (name, bio, location, website, avatar colour), upload or clear a profile picture |
+| Accounts | Register, sign in, JWT bearer sessions, edit profile (name, bio, location, website, avatar colour), upload or clear a profile picture and a profile cover photo |
 | Password reset | Request a link by email, choose a new password, single-use token with a 30-minute expiry |
 | Posts | Create, edit, delete, hashtag extraction, `#tag` and `@mention` linking |
 | Social | Follow / unfollow, followers and following lists, follow suggestions |
-| Engagement | Likes (idempotent), threaded replies on a post detail page |
-| Notifications | Generated on like, reply and follow; unread count, mark one or all read |
+| Engagement | Likes (idempotent), threaded replies on a post detail page, repost / unrepost with a repost envelope in the timeline |
+| Notifications | Generated on like, reply, follow and repost; unread count, mark one or all read |
 | Media | Image and video attachments on posts, authenticated delivery through `/api/media/{id}` |
 | Messages | One-to-one conversations with read receipts and typing indicators over a websocket |
 | Moderation | Admin console: analytics, user search and status filters, ban/unban, promote/demote, verified badges, content queues with delete |
@@ -142,6 +142,7 @@ All endpoints are under `/api`. Routes marked *auth* require an
 | `PATCH` | `/posts/{id}` | Edit body — author only |
 | `DELETE` | `/posts/{id}` | Delete — author only |
 | `POST` / `DELETE` | `/posts/{id}/like` | Like / unlike — *auth*, idempotent |
+| `POST` / `DELETE` | `/posts/{id}/repost` | Repost / undo a repost — *auth*. Returns the original post |
 | `GET` / `POST` | `/posts/{id}/comments` | List / add replies |
 | `DELETE` | `/comments/{id}` | Delete a reply — author or post owner |
 
@@ -159,6 +160,7 @@ All endpoints are under `/api`. Routes marked *auth* require an
 | `GET` | `/users/suggested` | Who to follow |
 | `GET` | `/users/stats` | Platform-wide counts |
 | `POST` / `DELETE` | `/users/me/avatar` | Upload or clear the caller's profile picture — *auth* |
+| `POST` / `DELETE` | `/users/me/cover` | Upload or clear the caller's profile cover photo — *auth* |
 
 ### Discovery
 

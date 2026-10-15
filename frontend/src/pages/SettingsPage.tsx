@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Avatar } from '../components/Avatar'
 import { ArrowLeftIcon, CheckIcon, LogoutIcon, TrashIcon, UploadIcon } from '../components/Icons'
 import { Spinner } from '../components/UI'
+import { ProfileBanner } from '../components/ProfileBanner'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
@@ -13,6 +14,8 @@ const COLORS = [
 ]
 
 const MAX_AVATAR_MB = 5
+/** Covers are wide banners, so they are allowed a larger file than a picture. */
+const MAX_COVER_MB = 8
 
 export function SettingsPage() {
   const { user, setUser, logout } = useAuth()
@@ -30,6 +33,10 @@ export function SettingsPage() {
   const [photoProgress, setPhotoProgress] = useState(0)
   const [photoError, setPhotoError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [coverBusy, setCoverBusy] = useState(false)
+  const [coverProgress, setCoverProgress] = useState(0)
+  const [coverError, setCoverError] = useState<string | null>(null)
+  const coverRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!user) return
@@ -87,6 +94,47 @@ export function SettingsPage() {
       setPhotoError(caught instanceof Error ? caught.message : 'Could not remove your picture')
     } finally {
       setPhotoBusy(false)
+    }
+  }
+
+  async function uploadCover(file: File) {
+    setCoverError(null)
+    // Checked here as well as on the server so a large file fails instantly
+    // instead of after a long upload.
+    if (!file.type.startsWith('image/')) {
+      setCoverError('Choose an image file')
+      return
+    }
+    if (file.size > MAX_COVER_MB * 1024 * 1024) {
+      setCoverError(`Cover photos must be under ${MAX_COVER_MB}MB`)
+      return
+    }
+
+    setCoverBusy(true)
+    setCoverProgress(0)
+    try {
+      const updated = await api.uploadCover(file, setCoverProgress)
+      setUser(updated)
+      notify('Cover photo updated')
+    } catch (caught) {
+      setCoverError(caught instanceof Error ? caught.message : 'Could not upload that image')
+    } finally {
+      setCoverBusy(false)
+      setCoverProgress(0)
+    }
+  }
+
+  async function removeCover() {
+    setCoverError(null)
+    setCoverBusy(true)
+    try {
+      const updated = await api.clearCover()
+      setUser(updated)
+      notify('Cover photo removed')
+    } catch (caught) {
+      setCoverError(caught instanceof Error ? caught.message : 'Could not remove your cover photo')
+    } finally {
+      setCoverBusy(false)
     }
   }
 
@@ -272,6 +320,69 @@ export function SettingsPage() {
             />
           </div>
         </section>
+
+        <section className="card card-pad">
+          <div className="card-title">Cover photo</div>
+          <div className="card-sub">
+            {user.cover_url
+              ? 'Shown as the banner at the top of your profile.'
+              : 'Add a banner image. JPEG, PNG, GIF or WebP up to 8MB.'}
+          </div>
+
+          <div className="cover-preview">
+            <ProfileBanner url={user.cover_url} name={displayName || user.username} />
+          </div>
+
+          {coverError && <div className="form-error">{coverError}</div>}
+
+          <div className="avatar-actions">
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={coverBusy}
+              onClick={() => coverRef.current?.click()}
+            >
+              {coverBusy ? <Spinner size={16} /> : <UploadIcon size={16} />}
+              {coverBusy ? 'Uploading…' : user.cover_url ? 'Replace' : 'Upload'}
+            </button>
+            {user.cover_url && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={coverBusy}
+                onClick={removeCover}
+              >
+                <TrashIcon size={16} /> Remove
+              </button>
+            )}
+          </div>
+
+          {coverBusy && coverProgress > 0 && (
+            <div
+              className="upload-bar"
+              role="progressbar"
+              aria-valuenow={coverProgress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span className="upload-bar-fill" style={{ width: `${coverProgress}%` }} />
+            </div>
+          )}
+
+          <input
+            ref={coverRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              // Reset so picking the same file twice fires a change again.
+              event.target.value = ''
+              if (file) void uploadCover(file)
+            }}
+          />
+        </section>
+
 
         <section className="card card-pad">
           <div className="card-title">Account</div>

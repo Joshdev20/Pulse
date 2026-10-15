@@ -72,6 +72,7 @@ def test_ensure_schema_adds_the_admin_columns(legacy_engine):
         "is_verified",
         "verified_at",
         "avatar_media_id",
+        "cover_media_id",
     }
     assert not expected & before
 
@@ -80,6 +81,54 @@ def test_ensure_schema_adds_the_admin_columns(legacy_engine):
     assert set(applied) == {f"users.{column}" for column in expected}
     after = {column["name"] for column in inspect(legacy_engine).get_columns("users")}
     assert expected <= after
+
+
+def test_ensure_schema_adds_repost_of_to_an_existing_posts_table(legacy_engine):
+    """An older database gains repost_of_id, so reposts work after an upgrade.
+
+    The legacy fixture has no `posts` table at all, which is why the test above
+    sees only the user columns: `ensure_schema` skips a table that create_all
+    will build complete.
+    """
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE posts ("
+                "id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, "
+                "body TEXT NOT NULL, created_at DATETIME NOT NULL, edited_at DATETIME)"
+            )
+        )
+    assert "repost_of_id" not in {
+        column["name"] for column in inspect(legacy_engine).get_columns("posts")
+    }
+
+    applied = ensure_schema(legacy_engine)
+    assert "posts.repost_of_id" in applied
+    assert "repost_of_id" in {
+        column["name"] for column in inspect(legacy_engine).get_columns("posts")
+    }
+
+
+def test_existing_posts_are_not_reposts(legacy_engine):
+    """The migrated column is null, so nothing already posted becomes a share."""
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE posts ("
+                "id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL, "
+                "body TEXT NOT NULL, created_at DATETIME NOT NULL, edited_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO posts (id, author_id, body, created_at) "
+                "VALUES (1, 1, 'an original', CURRENT_TIMESTAMP)"
+            )
+        )
+    ensure_schema(legacy_engine)
+    with _session_for(legacy_engine)() as session:
+        row = session.execute(text("SELECT repost_of_id FROM posts WHERE id = 1")).one()
+    assert row[0] is None
 
 
 def test_ensure_schema_is_idempotent(legacy_engine):

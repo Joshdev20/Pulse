@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
 from .. import cache, storage
-from ..deps import CurrentAdmin, DbSession, avatar_url_for
+from ..deps import CurrentAdmin, DbSession, avatar_url_for, cover_url_for
 from ..models import (
     Comment,
     Conversation,
@@ -103,6 +103,7 @@ def _serialize_admin_users(db: DbSession, users: list[User]) -> list[AdminUser]:
             website=user.website,
             avatar_color=user.avatar_color,
             avatar_url=avatar_url_for(user),
+            cover_url=cover_url_for(user),
             created_at=user.created_at,
             is_active=user.is_active,
             is_admin=user.is_admin,

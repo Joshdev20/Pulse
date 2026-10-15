@@ -4,7 +4,7 @@ import os
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from .. import storage
 from ..deps import CurrentUser, DbSession, serialize_media
@@ -89,21 +89,31 @@ def _visible_to(db, media: Media, viewer: User) -> bool:
             is not None
         )
 
-    if is_public_avatar(db, media):
+    if is_public_profile_image(db, media):
         return True
 
     return viewer.id == media.owner_id
 
 
-def is_public_avatar(db, media: Media) -> bool:
-    """Whether ``media`` is currently in use as somebody's profile picture.
+def is_public_profile_image(db, media: Media) -> bool:
+    """Whether ``media`` is currently in use as somebody's picture or header.
 
-    A picture shown as an avatar appears beside every post and profile the
-    account owns, so it is readable by any signed-in user. The check is what
-    keeps that exception narrow: an upload that is *not* an avatar stays private
-    to its owner until it is attached to a post or message.
+    These appear beside every post and profile the account owns, so they are
+    readable by any signed-in user. The check is what keeps that exception
+    narrow: an upload that is *not* a profile image stays private to its owner
+    until it is attached to a post or message. Both columns have to be checked
+    here — missing one means the image loads for its owner and 404s for
+    everyone else, which looks like a broken profile rather than a permissions
+    problem.
     """
-    return db.scalar(select(User.id).where(User.avatar_media_id == media.id).limit(1)) is not None
+    return (
+        db.scalar(
+            select(User.id)
+            .where(or_(User.avatar_media_id == media.id, User.cover_media_id == media.id))
+            .limit(1)
+        )
+        is not None
+    )
 
 
 @router.get("/{media_id}")
