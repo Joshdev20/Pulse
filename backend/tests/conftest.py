@@ -15,6 +15,7 @@ from app.config import settings  # noqa: E402
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.middleware import RateLimitMiddleware  # noqa: E402
+from app.models import User  # noqa: E402
 
 
 @pytest.fixture
@@ -86,5 +87,31 @@ def make_user(client):
         headers = {"Authorization": f"Bearer {token}"}
         me = client.get("/api/auth/me", headers=headers).json()
         return headers, me
+
+    return _make
+
+
+@pytest.fixture
+def make_admin(client, make_user):
+    """Register a user and promote them, returning (headers, user_dict).
+
+    There is no API route that grants admin (deliberately — it would be a
+    privilege-escalation path), so the flag is set directly in the database.
+    """
+    from app.database import get_db
+
+    def _make(username: str = "root", **extra):
+        headers, me = make_user(username, **extra)
+        override = client.app.dependency_overrides[get_db]
+        session = next(override())
+        try:
+            user = session.get(User, me["id"])
+            user.is_admin = True
+            session.commit()
+        finally:
+            session.close()
+        refreshed = client.get("/api/auth/me", headers=headers).json()
+        assert refreshed["is_admin"] is True
+        return headers, refreshed
 
     return _make

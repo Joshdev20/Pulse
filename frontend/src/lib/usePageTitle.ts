@@ -11,6 +11,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/messages': 'Messages',
   '/settings': 'Settings',
   '/compose': 'New post',
+  '/admin': 'Admin',
 }
 
 /**

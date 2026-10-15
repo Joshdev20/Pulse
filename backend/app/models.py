@@ -43,6 +43,11 @@ class User(Base):
     avatar_color: Mapped[str] = mapped_column(String(16), default="#6366f1")
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Moderators can reach the admin endpoints; a banned account keeps its data
+    # but cannot sign in or use an existing token.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    banned_reason: Mapped[str] = mapped_column(String(280), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     posts: Mapped[list["Post"]] = relationship(

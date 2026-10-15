@@ -62,6 +62,8 @@ def login(payload: LoginRequest, db: DbSession) -> Token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect username or password")
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account is disabled")
+    if user.is_banned:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been suspended")
 
     return Token(access_token=create_access_token(str(user.id)))
 

@@ -60,6 +60,8 @@ class UserPublic(BaseModel):
     following_count: int = 0
     post_count: int = 0
     is_following: bool = False
+    # Lets the client show the moderation entry point only to moderators.
+    is_admin: bool = False
 
 
 class Token(BaseModel):
@@ -193,3 +195,121 @@ class Stats(BaseModel):
     posts: int
     likes: int
     comments: int
+
+
+# --------------------------------------------------------------------------
+# Admin
+# --------------------------------------------------------------------------
+
+
+class AdminUser(BaseModel):
+    """A user as seen by a moderator, including moderation state."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    email: str
+    display_name: str
+    bio: str
+    location: str
+    website: str
+    avatar_color: str
+    created_at: UTCDatetime
+    is_active: bool
+    is_admin: bool
+    is_banned: bool
+    banned_reason: str = ""
+    follower_count: int = 0
+    following_count: int = 0
+    post_count: int = 0
+    comment_count: int = 0
+
+
+class AdminUserPage(BaseModel):
+    items: list[AdminUser]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
+class AdminPost(BaseModel):
+    """A post in the moderation queue, with enough context to judge it."""
+
+    id: int
+    body: str
+    created_at: UTCDatetime
+    author_id: int
+    author_username: str
+    author_display_name: str
+    like_count: int = 0
+    comment_count: int = 0
+    media_count: int = 0
+
+
+class AdminPostPage(BaseModel):
+    items: list[AdminPost]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
+class AdminCount(BaseModel):
+    label: str
+    value: int
+
+
+class AdminStats(BaseModel):
+    """Analytics for the admin dashboard."""
+
+    total_users: int
+    active_users: int
+    banned_users: int
+    admin_users: int
+    new_users_7d: int
+    new_users_30d: int
+    total_posts: int
+    posts_7d: int
+    posts_30d: int
+    total_comments: int
+    total_likes: int
+    total_messages: int
+    total_conversations: int
+    total_media: int
+    engagement_rate: float
+    avg_posts_per_user: float
+    top_posters: list[AdminCount]
+    top_tags: list[AdminCount]
+
+
+class UserModeration(BaseModel):
+    """Ban a user, optionally recording why."""
+
+    banned: bool = True
+    reason: str = Field(default="", max_length=280)
+
+
+class AdminFlagUpdate(BaseModel):
+    is_admin: bool
+
+
+class AdminComment(BaseModel):
+    """A comment in the moderation queue."""
+
+    id: int
+    body: str
+    created_at: UTCDatetime
+    post_id: int
+    author_id: int
+    author_username: str
+    author_display_name: str
+
+
+class AdminCommentPage(BaseModel):
+    items: list[AdminComment]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool

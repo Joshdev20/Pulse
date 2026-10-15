@@ -214,7 +214,7 @@ def seed(reset: bool = False) -> None:
 
         random.seed(7)
         users: dict[str, User] = {}
-        for username, display_name, email, bio, location, website, color in USERS:
+        for index, (username, display_name, email, bio, location, website, color) in enumerate(USERS):
             user = User(
                 username=username,
                 email=email,
@@ -224,6 +224,9 @@ def seed(reset: bool = False) -> None:
                 website=website,
                 avatar_color=color,
                 password_hash=hash_password(DEMO_PASSWORD),
+                # Without one administrator the moderation endpoints are
+                # unreachable, so the first demo account can moderate.
+                is_admin=index == 0,
             )
             db.add(user)
             users[username] = user
@@ -301,7 +304,59 @@ def seed(reset: bool = False) -> None:
         db.close()
 
 
+def grant_admin(username: str) -> bool:
+    """Give an existing account moderator rights.
+
+    Needed because the demo seeding path only runs on an empty database, and a
+    deployment that already has users has no other way to reach the admin
+    endpoints.
+    """
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(func.lower(User.username) == username.lower()))
+        if user is None:
+            print(f"No user named '{username}'.")
+            return False
+        user.is_admin = True
+        db.commit()
+        print(f"'{user.username}' can now moderate.")
+        return True
+    finally:
+        db.close()
+
+
+def revoke_admin(username: str) -> bool:
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(func.lower(User.username) == username.lower()))
+        if user is None:
+            print(f"No user named '{username}'.")
+            return False
+        remaining = db.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.is_admin.is_(True), User.id != user.id)
+        )
+        if not remaining:
+            print("Refusing: this is the only administrator.")
+            return False
+        user.is_admin = False
+        db.commit()
+        print(f"'{user.username}' is no longer an administrator.")
+        return True
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed the Pulse database with demo content.")
     parser.add_argument("--reset", action="store_true", help="drop all tables before seeding")
-    seed(reset=parser.parse_args().reset)
+    parser.add_argument("--grant-admin", metavar="USERNAME", help="give an account moderator rights")
+    parser.add_argument("--revoke-admin", metavar="USERNAME", help="remove moderator rights")
+    args = parser.parse_args()
+
+    if args.grant_admin:
+        raise SystemExit(0 if grant_admin(args.grant_admin) else 1)
+    if args.revoke_admin:
+        raise SystemExit(0 if revoke_admin(args.revoke_admin) else 1)
+    seed(reset=args.reset)

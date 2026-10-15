@@ -7,6 +7,7 @@ import { useAuth } from './context/AuthContext'
 import { RealtimeProvider } from './context/RealtimeContext'
 import { HomePage } from './pages/HomePage'
 import { ExplorePage } from './pages/ExplorePage'
+import { AdminPage } from './pages/AdminPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { NotificationsPage } from './pages/NotificationsPage'
@@ -127,6 +128,7 @@ export function App() {
           <Route path="/messages" element={<MessagesPage />} />
           <Route path="/messages/:conversationId" element={<MessagesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/admin" element={<AdminPage />} />
           <Route path="/compose" element={<ComposerPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
