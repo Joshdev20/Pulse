@@ -13,6 +13,11 @@ from .config import settings
 SENSITIVE_PATHS = {"/api/auth/login", "/api/auth/register"}
 SENSITIVE_LIMIT = 10
 
+# Routes that accept a file upload. These get the larger upload budget instead of
+# the small JSON ceiling, otherwise a picture well under the route's own limit is
+# rejected at the door with 413 before the handler ever sees it.
+UPLOAD_PATH_PREFIXES = ("/api/media", "/api/users/me/avatar", "/api/users/me/cover")
+
 # The SPA is served from the same origin as the API, so it needs no external
 # script, style or font origins. `data:` is allowed for inline SVG and blobs for
 # locally previewed uploads; websockets are needed for realtime.
@@ -92,7 +97,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if declared and declared.isdigit():
             ceiling = (
                 settings.max_upload_bytes
-                if path.startswith("/api/media")
+                if path.startswith(UPLOAD_PATH_PREFIXES)
                 else settings.max_body_bytes
             )
             if int(declared) > ceiling:

@@ -25,7 +25,7 @@
   /* Accents */
   --accent: #b8f24a;
   --accent-ink: #10160a;
-  --accent-soft: var(--accent-soft);
+  --accent-soft: rgba(184, 242, 74, 0.14);
   --accent-wash: rgba(184, 242, 74, 0.045);
   --accent-line: rgba(184, 242, 74, 0.28);
   --accent-glow: rgba(184, 242, 74, 0.6);
@@ -306,6 +306,27 @@ h4 {
 .main {
   min-width: 0;
   padding: 26px 0 96px;
+}
+
+/* The conversation view is an app pane rather than a document: its page head
+   and the inbox/thread below it together fill the viewport exactly, so the
+   page itself never scrolls and the inbox and thread scroll on their own.
+   Scoped with `:has` so no other page's layout is touched. `min-height` uses
+   the box height, so the inherited padding is accounted for. */
+.main:has(> .messages) {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.main:has(> .messages) > .page-head {
+  flex: none;
+}
+
+.main:has(> .messages) > .messages {
+  flex: 1 1 auto;
+  height: auto;
 }
 
 /* ============================================================
@@ -2621,7 +2642,14 @@ h4 {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   align-items: stretch;
-  min-height: calc(100vh - 120px);
+  /* The conversation view is an app pane, not a document: it claims the space
+     between the sticky header and the bottom padding and scrolls its own inbox
+     and thread. Its height comes from the flex layout on `.main`, so the whole
+     pane stays on screen and a single chat leaves no stray page scroll. */
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 
 .messages-inbox {
@@ -3283,10 +3311,16 @@ h4 {
     display: none;
   }
 
-  /* On narrow screens the inbox and the thread swap rather than shrink. */
+  /* On narrow screens the inbox and the thread swap rather than shrink. The
+     pane keeps filling the same viewport box, so swapping panels never changes
+     how far the page scrolls. */
   .messages {
     grid-template-columns: minmax(0, 1fr);
-    min-height: calc(100vh - 180px);
+  }
+
+  .main:has(> .messages) {
+    /* Leave room for the fixed bottom bar, which overlays the page. */
+    padding-bottom: 76px;
   }
 
   .messages-inbox {
@@ -3310,8 +3344,10 @@ h4 {
   }
 
   .thread-body {
+    /* The pane already fixes the height, so the thread fills it instead of
+       forcing its own viewport-relative minimum, which could exceed the pane. */
     max-height: none;
-    min-height: 50vh;
+    min-height: 0;
   }
 
   .bubble-row {

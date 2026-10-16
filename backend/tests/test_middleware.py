@@ -1,5 +1,7 @@
 """Rate limiting, body-size ceilings and security headers."""
 
+import io
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -10,6 +12,8 @@ from app.middleware import (
     SENSITIVE_LIMIT,
     RateLimitMiddleware,
 )
+
+from .test_media import PNG
 
 
 @pytest.fixture
@@ -93,3 +97,46 @@ def test_normal_sized_body_is_not_rejected(client):
     response = client.post("/api/posts", json={"body": "hello"})
     # Rejected for missing auth, not for size.
     assert response.status_code == 401
+
+
+def test_avatar_upload_gets_the_upload_ceiling(client, make_user, tmp_path, monkeypatch):
+    """An avatar between the JSON and upload ceilings must reach the handler.
+
+    Regression guard: profile picture and cover routes were left on the small
+    JSON body limit, so a picture comfortably under the 8MB image cap was
+    rejected at the door with 413 before the route could accept it.
+    """
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    # Larger than max_body_bytes, smaller than the image limit.
+    payload = PNG + b"\x00" * (settings.max_body_bytes + 1024)
+    assert len(payload) < settings.max_upload_bytes
+
+    response = client.post(
+        "/api/users/me/avatar",
+        headers=headers,
+        files={"file": ("big.png", io.BytesIO(payload), "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["avatar_url"]
+
+
+def test_cover_upload_gets_the_upload_ceiling(client, make_user, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    payload = PNG + b"\x00" * (settings.max_body_bytes + 1024)
+    response = client.post(
+        "/api/users/me/cover",
+        headers=headers,
+        files={"file": ("big.png", io.BytesIO(payload), "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["cover_url"]
+
+
+def test_json_endpoint_keeps_the_small_ceiling(client):
+    """Widening the upload routes must not widen ordinary JSON payloads."""
+    oversized = "x" * (settings.max_body_bytes + 1024)
+    assert client.post("/api/posts", json={"body": oversized}).status_code == 413
