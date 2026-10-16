@@ -345,3 +345,48 @@ the public URL returns 502 until the dev server is bound to 12000.
   an existing media row loads with a null `blob` until the startup backfill or a re-upload
   fills it. `media.blob` is declared `BYTEA NULL`, which SQLite accepts as a column type
   name even though it stores it as ordinary BLOB affinity.
+
+## Feed ordering and rate-limit budgets
+
+- The home feed is a *weighted random permutation*, not newest-first. `_ordered_feed`
+  gives each of the most recent `FEED_POOL_SIZE` (300) posts an exponential draw key
+  scaled by its relevance weight and sorts on that, so a fresh or engaging post is
+  more likely to lead without the order being fixed. The pool is bounded on purpose:
+  ordering every post in the table would make the feed cost grow with the site.
+- The feed order is a pure function of `(seed, post_id)`, hashed per post rather than
+  drawn from one shared random stream. That is what keeps page 2 of a session
+  continuing page 1's order instead of reshuffling and repeating or skipping posts.
+  The client sends `seed` (one per scope change, in `HomePage.tsx`); without it the
+  server derives a per-viewer default. Do not replace the key function with
+  `random.shuffle` — that reintroduces duplicate and skipped posts across pages.
+- `_age_hours` exists because SQLite returns naive datetimes. Subtracting one from an
+  aware `now` raises `TypeError`, which broke the whole feed. Read the naive value as
+  UTC, which is how it was written.
+- `RateLimitMiddleware` has three independent budgets: `auth` (credential minting,
+  `SENSITIVE_LIMIT`), `media` (downloads only, `MEDIA_LIMIT_MULTIPLIER` x the read
+  limit) and `api` (everything else). They used to share one bucket, which meant one
+  media-heavy feed page exhausted the read budget and then every picture answered 429
+  — the app looked broken rather than rate-limited. Only `GET`/`HEAD` on
+  `/api/media...` gets the media budget; an upload must stay on the ordinary budget or
+  a client can fill the instance's storage. `tests/test_middleware.py` pins both.
+- Idle buckets are swept so a burst of distinct clients cannot grow the counter table
+  without bound.
+- `MemoryStore` is bounded (`MAX_ENTRIES`). Its keys include the viewer id, so without
+  a ceiling it grows with the number of people browsing rather than with the content.
+- Media downloads stream `media.blob` in slices (`_stream_blob`) rather than passing
+  the whole buffer to `Response`, which copies it again while rendering. The response
+  also carries an `ETag` and honours an exact `If-None-Match` with a bodyless 304;
+  `Vary: Authorization` is required because the response is per-viewer, so a shared
+  cache must never hand one account's bytes to another. Do not drop that `Vary`.
+- A lost race on a double-tap like or follow is a success, not a 500: the unique
+  constraint rejects the duplicate insert and the caller's intent is already met.
+  `IntegrityError` is caught and rolled back around the flush.
+- Videos get a poster from a frame decoded in the browser (`src/lib/videoPoster.ts`).
+  The backend has no ffmpeg, so no thumbnail can be made at upload time; the bytes are
+  already downloaded to render the tile, so a `<video>` decodes one frame, it is drawn
+  to a canvas and kept as a data URL, shared per media path and reference counted.
+  `captureFrame` returning null on a tainted canvas is a guard — media is same-origin.
+- Uploads that predate storing bytes in `media.blob` were lost with the ephemeral
+  disk and answer 404 forever; on this deployment that is a normal response, not a
+  bug. The gallery says "Image unavailable"/"Video unavailable" for a failed download
+  rather than leaving an empty frame.
