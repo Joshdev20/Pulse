@@ -311,3 +311,19 @@ the public URL returns 502 until the dev server is bound to 12000.
   cache (`Cache-Control: private, max-age=86400` on the download route) and keeps rendering it
   after the server copy is gone. Re-seeding does not bring the bytes back; attach the disk and
   set `UPLOAD_DIR=/data/uploads`, or move uploads to object storage.
+- The inbox (`GET /api/conversations`) must stay a constant number of queries. Building each
+  row with its own partner lookup, last-message query and unread count made an eight-thread
+  inbox cost 98 SELECTs and grow with the conversation count. `routers/messages.py` now does
+  it with one joined query plus batched serialization — 11 SELECTs for any inbox size. Guard
+  it with the `_count_selects` SQLAlchemy event counter in `tests/test_messages.py`, which
+  asserts the count does not rise when conversations are added. `GET /api/conversations/unread-count`
+  had the same shape and is a single aggregate now.
+- Deleting a comment must remove its whole subtree. A parent's replies are one level down, so
+  deleting only the row you were handed orphans deeper replies; `delete_comment` in
+  `routers/posts.py` walks descendants with a frontier loop. Do not rely on the ORM cascade
+  for the bulk delete — a database migrated from before threading has no FK constraint for it
+  to follow.
+- A new nullable column on an existing table needs an entry in `schema.py` `_ADDITIONS`;
+  `create_all` only creates missing tables, never columns. `comment_likes` is a new table so
+  `create_all` handles it, but `comments.parent_id` is an `ALTER TABLE`. The migration is
+  additive and idempotent, so existing comments stay top-level rows.
