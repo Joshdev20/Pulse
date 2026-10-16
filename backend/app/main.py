@@ -14,6 +14,27 @@ from .routers import admin, auth, media, messages, notifications, posts, realtim
 from .schema import ensure_schema
 
 
+def _backfill_media_blobs() -> None:
+    """Copy on-disk uploads written before the ``blob`` column into the database.
+
+    Runs once per boot. A host that still has its files gets them preserved
+    before the next redeploy; one that has already lost them — the free Render
+    tier — repairs nothing and must not fail startup.
+    """
+    from .database import SessionLocal
+    from .routers.media import backfill_blobs
+
+    db = SessionLocal()
+    try:
+        repaired = backfill_blobs(db)
+        if repaired:
+            print(f"Backfilled {repaired} media file(s) into the database.")
+    except Exception as exc:  # noqa: BLE001 - startup must survive a bad row
+        print(f"Media blob backfill skipped: {exc}")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -22,6 +43,7 @@ async def lifespan(_app: FastAPI):
     # columns added here.
     ensure_schema(engine)
     storage.ensure_upload_dir()
+    _backfill_media_blobs()
     if settings.auto_seed:
         # Demo deploys start with an empty database; populate it once. `seed`
         # is a no-op when users already exist, so restarts are safe.

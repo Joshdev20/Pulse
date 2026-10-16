@@ -43,6 +43,28 @@ def test_avatar_upload_sets_a_resolved_url(client, make_user, tmp_path, monkeypa
     assert client.get(f"/api/media/{media_id}", headers=other).status_code == 200
 
 
+def test_avatar_survives_a_lost_upload_directory(client, make_user, tmp_path, monkeypatch):
+    """A profile picture keeps resolving after the filesystem is wiped.
+
+    The picture lives in the same table as post media, so on a host whose disk
+    is ephemeral (the free Render tier) it has to come from the database row or
+    every other user sees a broken avatar after a redeploy.
+    """
+    import os
+
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, me = make_user("ada")
+    media_id = avatar_upload(client, headers).json()["avatar_url"].rsplit("/", 1)[-1]
+
+    for name in os.listdir(tmp_path):
+        os.unlink(os.path.join(tmp_path, name))
+
+    other, _ = make_user("grace")
+    response = client.get(f"/api/media/{media_id}", headers=other)
+    assert response.status_code == 200, response.text
+    assert response.content == PNG
+
+
 def test_avatar_upload_rejects_a_non_image(client, make_user, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     headers, _ = make_user("ada")

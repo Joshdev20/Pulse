@@ -14,7 +14,9 @@ serverless breaks, so the split is a requirement rather than a preference:
 
 1. **SQLite on local disk** — wiped on every deploy and not shared between
    instances. Writes would silently disappear.
-2. **Uploads on local disk** — same problem.
+2. **Media on a local disk** — uploaded bytes are stored in the database
+   row (`media.blob`) as well as the file, so an ephemeral disk no longer
+   loses them. Only the database has to persist.
 3. **The rate limiter counts in process memory** — limits would multiply by the
    number of instances.
 4. **WebSockets** — capped at 300s per connection, and there is no way to
@@ -45,14 +47,17 @@ The repo contains `render.yaml`, so this is a blueprint deploy.
 > **Free tier caveats.** A free web service **cannot attach a persistent disk**
 > (Render rejects `plan: free` together with a `disk:` block), so:
 >
-> - **Uploads are ephemeral** — lost on every redeploy. Fine for a demo.
+> - **Uploads are kept in the database** (`media.blob`), so they survive a
+>   redeploy even without a disk. A mounted volume is still worth setting for
+>   large files.
 > - **It sleeps after ~15 minutes idle** and takes ~30–60s to wake, so the first
 >   request after a pause is slow.
 > - **Render's own free Postgres expires 30 days after creation.** Use a Neon or
 >   Supabase URL for anything you want to keep.
 >
-> To persist uploads, upgrade to a paid instance type, change `plan` in
-> `render.yaml`, uncomment the `disk:` block, and add `UPLOAD_DIR=/data/uploads`.
+> To offload large files to a volume as well, upgrade to a paid instance type,
+> change `plan` in `render.yaml`, uncomment the `disk:` block, and add
+> `UPLOAD_DIR=/data/uploads`.
 
 ### Option B — Railway / Fly.io
 
@@ -193,7 +198,7 @@ console: the WebSocket should connect to `wss://<backend>/api/ws`, and the
 | Render: "unable to read the render.yaml file" | The Blueprint is invalid or unprovisionable. Validate with `render blueprints validate` or against https://render.com/schema/render.yaml.json. The most common trap is a `disk:` block on `plan: free` — Render's JSON schema accepts it, but free web services cannot have disks. |
 | Browser console: CORS error | `CORS_ORIGINS` does not include the Vercel origin and the regex was overridden |
 | Login returns 401 on a fresh deploy | `AUTO_SEED` was not `true`, so there are no users — seed manually with `python -m app.seed` |
-| Uploads vanish after a redeploy | No persistent disk, or `UPLOAD_DIR` does not point at the mount. Free Render instances cannot have a disk at all. |
+| Media vanish after a redeploy | Should not happen now: bytes are stored in `media.blob` and served from the database. If it does, the row predates that column *and* the file is gone — re-upload the file. |
 | WebSocket fails to connect | Backend host is unreachable, or a proxy in front of it does not forward `Upgrade` |
 | First request after idle takes ~60s | Render free tier cold start |
 | `FUNCTION_PAYLOAD_TOO_LARGE` | A Vercel Function received >4.5 MB — the backend is on the wrong host |

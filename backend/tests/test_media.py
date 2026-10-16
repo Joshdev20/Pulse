@@ -159,3 +159,69 @@ def test_resolve_refuses_traversal(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     with pytest.raises(ValueError):
         storage.resolve("../escape.png")
+
+
+def test_uploaded_bytes_are_stored_in_the_database(client, make_user, tmp_path, monkeypatch):
+    """The row carries the bytes, so media survives a lost UPLOAD_DIR.
+
+    The hosted demo runs on a free Render instance: the database is an external
+    Postgres and outlives a redeploy, but the filesystem does not. If the bytes
+    lived only on disk every attachment would 404 for every account after the
+    next deploy, which is the failure this pins.
+    """
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, me = make_user("ada")
+    media_id = upload(client, headers, PNG).json()["id"]
+
+    # Simulate a redeploy: the upload directory is gone.
+    for name in os.listdir(tmp_path):
+        os.unlink(os.path.join(tmp_path, name))
+
+    response = client.get(f"/api/media/{media_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.content == PNG
+
+
+def test_legacy_row_without_a_blob_falls_back_to_disk(client, make_user, tmp_path, monkeypatch):
+    """A row written before the blob column still serves from its file."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, me = make_user("ada")
+    media_id = upload(client, headers, PNG).json()["id"]
+
+    from app.database import get_db
+    from app.models import Media
+
+    override = client.app.dependency_overrides[get_db]
+    session = next(override())
+    try:
+        # Clear the blob to mimic a row that predates the column.
+        session.get(Media, media_id).blob = None
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get(f"/api/media/{media_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.content == PNG
+
+
+def test_missing_media_is_a_404_even_for_its_owner(client, make_user, tmp_path, monkeypatch):
+    """Bytes lost with no database copy stay a 404, not a 500."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, me = make_user("ada")
+    media_id = upload(client, headers, PNG).json()["id"]
+
+    from app.database import get_db
+    from app.models import Media
+
+    override = client.app.dependency_overrides[get_db]
+    session = next(override())
+    try:
+        session.get(Media, media_id).blob = None
+        session.commit()
+    finally:
+        session.close()
+    for name in os.listdir(tmp_path):
+        os.unlink(os.path.join(tmp_path, name))
+
+    assert client.get(f"/api/media/{media_id}", headers=headers).status_code == 404

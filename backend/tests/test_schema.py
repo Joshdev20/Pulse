@@ -131,6 +131,40 @@ def test_existing_posts_are_not_reposts(legacy_engine):
     assert row[0] is None
 
 
+def test_ensure_schema_adds_blob_to_an_existing_media_table(legacy_engine):
+    """An older database gains `media.blob`, so media can be stored durably.
+
+    The column is nullable: an existing row loads with a null blob and the
+    download route falls back to the file on disk (or backfills it at startup),
+    so the migration never strands a row it cannot fill.
+    """
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE media ("
+                "id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL, "
+                "stored_name VARCHAR(255) NOT NULL, content_type VARCHAR(64) NOT NULL, "
+                "kind VARCHAR(16) NOT NULL, size_bytes INTEGER NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO media (id, owner_id, stored_name, content_type, kind, size_bytes) "
+                "VALUES (1, 1, 'x.png', 'image/png', 'image', 74)"
+            )
+        )
+    assert "blob" not in {
+        column["name"] for column in inspect(legacy_engine).get_columns("media")
+    }
+
+    applied = ensure_schema(legacy_engine)
+    assert "media.blob" in applied
+
+    with _session_for(legacy_engine)() as session:
+        blob = session.execute(text("SELECT blob FROM media WHERE id = 1")).scalar()
+    assert blob is None
+
+
 def test_ensure_schema_is_idempotent(legacy_engine):
     ensure_schema(legacy_engine)
     assert ensure_schema(legacy_engine) == []

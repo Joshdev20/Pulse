@@ -157,6 +157,9 @@ def _seed_media(db, users: dict[str, User], posts: list[Post]) -> int:
             content_type="image/png",
             kind="image",
             size_bytes=len(data),
+            # Also keep the bytes in the row, so seeded media survives a redeploy
+            # on a host without a persistent disk — the same reason uploads do.
+            blob=data,
             width=8,
             height=8,
             alt_text=alt,

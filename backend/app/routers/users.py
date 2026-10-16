@@ -138,6 +138,10 @@ async def _set_profile_image(
         content_type=sniffed.content_type,
         kind="image",
         size_bytes=len(data),
+        # Same reason as post uploads: the bytes go in the row so a profile
+        # picture still resolves for every other account after the host's
+        # ephemeral filesystem is wiped by a redeploy.
+        blob=data,
         alt_text=f"{user.display_name}'s {alt}",
     )
     db.add(media)

@@ -119,9 +119,14 @@ the public URL returns 502 until the dev server is bound to 12000.
   limiter.
 - `RateLimitMiddleware` keeps counters in process-wide state, so tests disable it in
   `conftest.py`. If you add a test that asserts a 429, re-enable it for that test only.
-- Uploaded files land in `backend/uploads/` (gitignored) under random names; the database
-  stores only the generated filename. `storage.resolve` re-checks containment, so never
-  build an upload path by hand.
+- Uploaded files are written to `backend/uploads/` (gitignored) under random names, and the
+  bytes are *also* stored in `media.blob`. `storage.resolve` re-checks containment, so never
+  build an upload path by hand. The database copy is what makes media durable: a host with an
+  ephemeral filesystem loses the directory on every redeploy while the database row survives.
+  `GET /api/media/{id}` serves `media.blob` when present and falls back to the file on disk,
+  which is how a row written before the column existed still resolves. Any new upload path
+  (`routers/media.py` upload, `_set_profile_image` in `routers/users.py`, `seed._seed_media`)
+  must set `blob` or the file is the only copy and will be lost with the disk.
 - The body-size ceiling in `middleware.py` has two tiers, and the upload routes must stay on
   the larger one. `max_body_bytes` is a JSON ceiling (~1 MB) while `max_upload_bytes` is the
   real cap for images (~8 MB), so a route that accepts a file has to be listed in
@@ -224,11 +229,13 @@ the public URL returns 502 until the dev server is bound to 12000.
   logged a full traceback each time — 88 errors in 45 seconds in a container test. The
   listener also backs off exponentially to a 30s ceiling. Keep both: a single-process hub is
   the correct behaviour when the bus is optional and missing.
-- Uploads are written to `UPLOAD_DIR`. On a host with an ephemeral filesystem this must
-  point at a mounted volume (e.g. `/data/uploads`) or uploaded media is lost on redeploy.
-  Note that Render free web services cannot attach a disk at all, so `render.yaml` omits the
-  `disk:` block and leaves `UPLOAD_DIR` unset; combining `plan: free` with a `disk:` block
-  makes the Blueprint unprovisionable even though it passes Render's JSON schema.
+- Uploads are written to `UPLOAD_DIR` *and* to `media.blob`. The database copy is the
+  durable one and is what a free instance relies on: Render free web services cannot attach a
+  disk at all, so `render.yaml` omits the `disk:` block and leaves `UPLOAD_DIR` unset
+  (combining `plan: free` with a `disk:` block makes the Blueprint unprovisionable even though
+  it passes Render's JSON schema). With the bytes in the row, that configuration keeps media
+  across redeploys instead of losing it. A mounted volume is still worth setting for large
+  files, but it is no longer the difference between media surviving a deploy and not.
 - `requirements-prod.txt` is for deployed images and excludes tests; `requirements-dev.txt`
   extends `requirements.txt` with pytest. pip does not parse docstrings, so comments in
   these files must start with `#` — a `"""..."""` header breaks the build.
@@ -300,17 +307,25 @@ the public URL returns 502 until the dev server is bound to 12000.
   excluded because at 17px it already clears the threshold.
 - A failed media download is only retried when it can plausibly succeed: 429, 5xx and a
   transport failure. A 404 is not retried, because it means the bytes are not there and
-  retrying cannot change that. That is the normal answer on the hosted demo, where the free
-  Render instance has no disk and every upload is lost on each deploy.
-- Uploads live on the instance's own filesystem (`UPLOAD_DIR`, default `./uploads`) and the
-  database stores only the filename, so the two can disagree. On a host without a persistent
-  disk — `render.yaml` sets `plan: free`, which cannot attach one — a redeploy wipes the files
-  while `DATABASE_URL` (an external Postgres) keeps the rows. `GET /api/media/{id}` then 404s
-  for *every* account while posts still carry `media` entries pointing at it. The symptom
-  looks account-scoped because the browser that uploaded the file still has it in its HTTP
-  cache (`Cache-Control: private, max-age=86400` on the download route) and keeps rendering it
-  after the server copy is gone. Re-seeding does not bring the bytes back; attach the disk and
-  set `UPLOAD_DIR=/data/uploads`, or move uploads to object storage.
+  retrying cannot change that. That can still happen for a row that predates `media.blob`
+  whose file is gone, so keep it: a retry would only delay the "unavailable" state.
+- Media bytes live in `media.blob`, which is a `deferred` column so listing a feed never
+  loads them. `serialize_media` never touches `blob`, so the deferral is what keeps a feed
+  response from pulling megabytes of attachments into memory — do not remove `deferred`, and
+  read `blob` only in the download handler (and the backfill). A row whose `blob` is null and
+  whose file is gone is a genuine 404; `GET /api/media/{id}` must answer 404, never 500.
+  Row-stored bytes are bounded by the same caps as the files (images 8MB, video 32MB), which
+  keeps the largest row modest; a deployment serving much larger video should put those bytes
+  in object storage instead.
+- On a host without a persistent disk — `render.yaml` sets `plan: free`, which cannot attach
+  one — a redeploy wipes `UPLOAD_DIR` while `DATABASE_URL` (an external Postgres) keeps the
+  rows. Before media moved into `blob`, every attachment 404'd at once and the symptom looked
+  account-scoped, because the browser that uploaded the file still had it in its HTTP cache
+  (`Cache-Control: private, max-age=86400` on the download route) and kept rendering it. With
+  the bytes in the row that failure mode is gone; a redeploy keeps serving the same media.
+  `_backfill_media_blobs` runs at startup to copy any legacy on-disk file into its row, which
+  preserves a local database's files before they are lost and is a no-op on a host that has
+  already lost them.
 - The inbox (`GET /api/conversations`) must stay a constant number of queries. Building each
   row with its own partner lookup, last-message query and unread count made an eight-thread
   inbox cost 98 SELECTs and grow with the conversation count. `routers/messages.py` now does
@@ -325,5 +340,8 @@ the public URL returns 502 until the dev server is bound to 12000.
   to follow.
 - A new nullable column on an existing table needs an entry in `schema.py` `_ADDITIONS`;
   `create_all` only creates missing tables, never columns. `comment_likes` is a new table so
-  `create_all` handles it, but `comments.parent_id` is an `ALTER TABLE`. The migration is
-  additive and idempotent, so existing comments stay top-level rows.
+  `create_all` handles it, but `comments.parent_id` and `media.blob` are `ALTER TABLE`s.
+  The migration is additive and idempotent, so existing comments stay top-level rows and
+  an existing media row loads with a null `blob` until the startup backfill or a re-upload
+  fills it. `media.blob` is declared `BYTEA NULL`, which SQLite accepts as a column type
+  name even though it stores it as ordinary BLOB affinity.

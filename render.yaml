@@ -3,14 +3,14 @@
 # Deploy: Render Dashboard -> New -> Blueprint -> pick this repo.
 #
 # This file targets the FREE instance type. A free web service CANNOT attach a
-# persistent disk (https://render.com/docs/free), so two things follow:
+# persistent disk (https://render.com/docs/free), but that no longer costs us the
+# uploads: the bytes are stored in the database row (`media.blob`) as well as on
+# the local filesystem, so media survives a redeploy with the data. The disk
+# block below is only needed if you want large files off the database.
 #
-#   * Uploads land on the ephemeral filesystem and are lost on every redeploy.
-#     Fine for a demo. To persist them, upgrade to a paid instance type and
-#     uncomment the `disk` block at the bottom, then set UPLOAD_DIR.
-#   * DATABASE_URL must point at an external Postgres. Render's own free
-#     Postgres expires 30 days after creation, so a Neon or Supabase URL is a
-#     better choice for anything you want to keep.
+# DATABASE_URL must point at an external Postgres. Render's own free Postgres
+# expires 30 days after creation, so a Neon or Supabase URL is a better choice
+# for anything you want to keep.
 
 services:
   - type: web
