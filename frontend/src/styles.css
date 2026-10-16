@@ -3552,3 +3552,27 @@ h4 {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------------------
+   Mobile text fields
+   ------------------------------------------------------------
+   Safari on iOS zooms the entire page in when a text field it focuses has a
+   computed font-size under 16px, and the page then needs a manual pinch to
+   return to scale. The search page focuses its field on mount, so it zoomed
+   the moment it opened. Every field here is defined below that threshold, so
+   on narrow screens they are raised to it. The specific selectors are listed
+   so they outrank the more specific rules they override. The composer textarea
+   is left out: at 17px it already clears the threshold. */
+@media (max-width: 900px) {
+  input,
+  textarea,
+  select,
+  .input,
+  .textarea,
+  .search-bar input,
+  .admin-search input,
+  .admin-field input,
+  .comment-form textarea {
+    font-size: 16px;
+  }
+}

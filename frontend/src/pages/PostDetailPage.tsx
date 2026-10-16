@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
 import { PostText } from '../components/PostCard'
+import { MediaGallery } from '../components/MediaGallery'
 import { EditPostModal } from '../components/EditPostModal'
 import { EmptyState, ErrorState, FeedSkeleton, Spinner, Dropdown, RelativeTime } from '../components/UI'
 import {
@@ -207,6 +208,8 @@ export function PostDetailPage() {
             </div>
 
             <PostText body={post.body} className="detail-text" />
+
+            <MediaGallery items={post.media} />
 
             <div className="detail-time">
               {formatFullDate(post.created_at)}
