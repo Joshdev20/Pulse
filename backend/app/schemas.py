@@ -116,6 +116,8 @@ class TagOut(BaseModel):
 
 class CommentCreate(BaseModel):
     body: str = Field(min_length=1, max_length=1000)
+    # Present when the comment answers another comment in the same thread.
+    parent_id: int | None = None
 
 
 class CommentOut(BaseModel):
@@ -125,6 +127,12 @@ class CommentOut(BaseModel):
     body: str
     created_at: UTCDatetime
     author: UserPublic
+    parent_id: int | None = None
+    like_count: int = 0
+    liked_by_me: bool = False
+    # Answers to this comment, nested to whatever depth the thread reaches. The
+    # client decides how far to indent.
+    replies: list["CommentOut"] = []
 
 
 class PostCreate(BaseModel):

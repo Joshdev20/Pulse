@@ -30,6 +30,9 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # repost endpoints delete their rows explicitly rather than leaning on a
     # cascade that a legacy database would not have.
     ("posts", "repost_of_id", "INTEGER NULL"),
+    # Replies. Nullable, so a database that predates threading keeps every
+    # existing row as a top-level comment.
+    ("comments", "parent_id", "INTEGER NULL"),
 ]
 
 

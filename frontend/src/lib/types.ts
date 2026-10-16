@@ -60,6 +60,10 @@ export interface Comment {
   body: string
   created_at: string
   author: User
+  parent_id: number | null
+  like_count: number
+  liked_by_me: boolean
+  replies: Comment[]
 }
 
 export interface Message {

@@ -2,6 +2,8 @@
 
 import json
 
+from sqlalchemy import event
+
 
 def start(client, headers, username: str):
     return client.post("/api/conversations", headers=headers, json={"username": username})
@@ -296,3 +298,107 @@ def test_websocket_rejects_malformed_first_frame(client):
         except Exception:
             closed = True
         assert closed
+
+
+def _count_selects(client, fn):
+    """Run ``fn`` and return ``(result, SELECT statements it issued)``.
+
+    The inbox used to issue a dozen queries per conversation. That is invisible
+    against SQLite in a test but costs a network round-trip each against the
+    hosted database, so the query count is pinned down here.
+    """
+    from app.database import get_db
+
+    override = client.app.dependency_overrides[get_db]
+    session = next(override())
+    engine = session.get_bind()
+    session.close()
+
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, _params, _context, _many):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        result = fn()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    return result, selects
+
+
+def test_inbox_reports_partner_preview_and_unread(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+
+    cid = start(client, ada, "grace").json()["id"]
+    send(client, grace, cid, "hey ada")
+
+    inbox = client.get("/api/conversations", headers=ada).json()
+    assert len(inbox) == 1
+    entry = inbox[0]
+    assert entry["id"] == cid
+    assert entry["partner"]["username"] == "grace"
+    assert entry["last_message"]["body"] == "hey ada"
+    assert entry["last_message"]["mine"] is False
+    assert entry["unread_count"] == 1
+
+    # The sender's own copy is theirs, and already read.
+    grace_view = client.get("/api/conversations", headers=grace).json()[0]
+    assert grace_view["partner"]["username"] == "ada"
+    assert grace_view["last_message"]["mine"] is True
+    assert grace_view["unread_count"] == 0
+
+    assert client.get("/api/conversations/unread-count", headers=ada).json() == {"count": 1}
+    assert client.get("/api/conversations/unread-count", headers=grace).json() == {"count": 0}
+
+
+def test_inbox_handles_a_thread_with_no_messages(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    entry = client.get("/api/conversations", headers=ada).json()[0]
+    assert entry["id"] == cid
+    assert entry["last_message"] is None
+    assert entry["unread_count"] == 0
+    assert entry["partner"]["username"] == "grace"
+
+
+def test_inbox_query_count_does_not_grow_with_conversations(client, make_user):
+    """The inbox costs a fixed number of queries, not one per conversation."""
+    ada, _ = make_user("ada")
+
+    for index in range(3):
+        peer = f"peer{index}"
+        make_user(peer)
+        cid = start(client, ada, peer).json()["id"]
+        send(client, ada, cid, f"message {index}")
+
+    _, few = _count_selects(client, lambda: client.get("/api/conversations", headers=ada).json())
+
+    for index in range(3, 15):
+        peer = f"peer{index}"
+        make_user(peer)
+        cid = start(client, ada, peer).json()["id"]
+        send(client, ada, cid, f"message {index}")
+
+    inbox, many = _count_selects(client, lambda: client.get("/api/conversations", headers=ada).json())
+
+    assert len(inbox) == 15
+    # Five times the conversations must not mean five times the queries.
+    assert len(many) <= len(few) + 2, (len(few), len(many))
+
+
+def test_mark_read_clears_the_unread_count(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    send(client, grace, cid, "one")
+    send(client, grace, cid, "two")
+
+    assert client.get("/api/conversations/unread-count", headers=ada).json() == {"count": 2}
+    client.post(f"/api/conversations/{cid}/read", headers=ada)
+    assert client.get("/api/conversations/unread-count", headers=ada).json() == {"count": 0}
+    assert client.get("/api/conversations", headers=ada).json()[0]["unread_count"] == 0

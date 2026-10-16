@@ -68,6 +68,12 @@ export const CommentIcon = (p: IconProps) => (
   </Base>
 )
 
+export const ReplyIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M10 8V5l-6 5 6 5v-3h3.5a4.5 4.5 0 0 1 4.5 4.5V18" />
+  </Base>
+)
+
 export const ShareIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M4 12.5 20 4l-8.5 16-.9-6.6L4 12.5Z" />

@@ -1937,6 +1937,67 @@ h4 {
   color: var(--violet);
 }
 
+/* Threaded replies. A reply is indented once; deeper levels keep the same
+   indent so a long back-and-forth does not march off the right edge. */
+.comment-thread.is-reply {
+  border-left: 2px solid var(--border);
+  margin-left: 18px;
+  padding-left: 10px;
+}
+
+.comment-thread.is-reply .comment {
+  padding-left: 8px;
+}
+
+.comment-replies {
+  margin-top: 2px;
+}
+
+.comment-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 6px;
+}
+
+.comment-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.16s ease, background 0.16s ease;
+}
+
+.comment-action:hover {
+  color: var(--accent);
+  background: var(--hover-wash);
+}
+
+.comment-action.liked {
+  color: var(--danger);
+}
+
+.comment-action.liked:hover {
+  color: var(--danger);
+}
+
+.comment-action.active {
+  color: var(--accent);
+}
+
+.comment-form.is-reply-form {
+  padding: 10px 0 2px;
+  border-bottom: none;
+}
+
 /* ============================================================
    User list / rows
    ============================================================ */
@@ -3514,6 +3575,15 @@ h4 {
 @media (max-width: 480px) {
   .auth-panel {
     padding: 28px 18px;
+  }
+  /* A phone is narrow enough that a full indent leaves a reply too little room
+     to read, so the thread marker does the work instead. */
+  .comment-thread.is-reply {
+    margin-left: 8px;
+    padding-left: 6px;
+  }
+  .comment-thread.is-reply .comment {
+    padding-left: 4px;
   }
   .profile-counts {
     gap: 14px;

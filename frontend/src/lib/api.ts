@@ -206,10 +206,17 @@ export const api = {
 
   comments: (postId: number) => request<Comment[]>(`/api/posts/${postId}/comments`),
 
-  addComment: (postId: number, body: string) =>
-    request<Comment>(`/api/posts/${postId}/comments`, { method: 'POST', body: JSON.stringify({ body }) }),
+  addComment: (postId: number, body: string, parentId?: number) =>
+    request<Comment>(`/api/posts/${postId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify(parentId === undefined ? { body } : { body, parent_id: parentId }),
+    }),
 
   deleteComment: (id: number) => request<void>(`/api/comments/${id}`, { method: 'DELETE' }),
+
+  likeComment: (id: number) => request<Comment>(`/api/comments/${id}/like`, { method: 'POST' }),
+
+  unlikeComment: (id: number) => request<Comment>(`/api/comments/${id}/like`, { method: 'DELETE' }),
 
   user: (username: string) => request<User>(`/api/users/${username}`),
 

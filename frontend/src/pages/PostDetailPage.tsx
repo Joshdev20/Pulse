@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
 import { PostText } from '../components/PostCard'
 import { MediaGallery } from '../components/MediaGallery'
+import { CommentNode } from '../components/CommentThread'
 import { EditPostModal } from '../components/EditPostModal'
 import { EmptyState, ErrorState, FeedSkeleton, Spinner, Dropdown, RelativeTime } from '../components/UI'
 import {
@@ -36,6 +37,7 @@ export function PostDetailPage() {
   const [busy, setBusy] = useState(false)
   const [pop, setPop] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [replyingTo, setReplyingTo] = useState<Comment | null>(null)
 
   useEffect(() => {
     if (!Number.isFinite(id)) {
@@ -104,14 +106,44 @@ export function PostDetailPage() {
     }
   }
 
-  async function deleteComment(commentId: number) {
-    try {
-      await api.deleteComment(commentId)
-      setComments((current) => current.filter((comment) => comment.id !== commentId))
-      setPost((current) => (current ? { ...current, comment_count: Math.max(0, current.comment_count - 1) } : current))
-    } catch (caught) {
-      notify(caught instanceof Error ? caught.message : 'Could not delete the reply', 'error')
+  // Replies are returned nested under their parent, so each update walks the
+  // tree rather than touching a flat list.
+  function mapTree(nodes: Comment[], fn: (node: Comment) => Comment | null): Comment[] {
+    const out: Comment[] = []
+    for (const node of nodes) {
+      const next = fn(node)
+      if (next === null) continue
+      out.push({ ...next, replies: mapTree(next.replies, fn) })
     }
+    return out
+  }
+
+  function countComments(nodes: Comment[]): number {
+    return nodes.reduce((total, node) => total + 1 + countComments(node.replies), 0)
+  }
+
+  function handleReplied(parentId: number, reply: Comment) {
+    setComments((current) =>
+      mapTree(current, (node) =>
+        node.id === parentId ? { ...node, replies: [...node.replies, reply] } : node,
+      ),
+    )
+    setPost((current) => (current ? { ...current, comment_count: current.comment_count + 1 } : current))
+  }
+
+  function handleCommentDeleted(deleted: Comment) {
+    // Deleting a comment also removes everything answered under it.
+    const removed = 1 + countComments(deleted.replies)
+    setComments((current) => mapTree(current, (node) => (node.id === deleted.id ? null : node)))
+    setPost((current) =>
+      current ? { ...current, comment_count: Math.max(0, current.comment_count - removed) } : current,
+    )
+  }
+
+  function handleCommentLikeToggled(updated: Comment) {
+    setComments((current) =>
+      mapTree(current, (node) => (node.id === updated.id ? { ...node, ...updated, replies: node.replies } : node)),
+    )
   }
 
   async function deletePost() {
@@ -243,7 +275,16 @@ export function PostDetailPage() {
               </span>
               {post.liked_by_me ? 'Liked' : 'Like'}
             </button>
-            <button type="button" className="action comment" onClick={() => document.getElementById('reply')?.focus()}>
+            <button
+              type="button"
+              className="action comment"
+              onClick={() => {
+                // Answering the post itself, so clear any reply target and put
+                // the cursor in the main composer.
+                setReplyingTo(null)
+                document.getElementById('reply')?.focus()
+              }}
+            >
               <CommentIcon size={19} /> Reply
             </button>
             <button type="button" className="action share" onClick={copyLink}>
@@ -292,34 +333,17 @@ export function PostDetailPage() {
             />
           ) : (
             comments.map((comment) => (
-              <div key={comment.id} className="comment">
-                <Link to={`/u/${comment.author.username}`}>
-                  <Avatar name={comment.author.display_name} color={comment.author.avatar_color} url={comment.author.avatar_url} size="sm" />
-                </Link>
-                <div className="comment-main">
-                  <div className="comment-head">
-                    <Link to={`/u/${comment.author.username}`} className="post-author">
-                      <DisplayName user={comment.author} />
-                    </Link>
-                    <span className="post-handle">@{comment.author.username}</span>
-                    <span className="post-dot">·</span>
-                    <RelativeTime iso={comment.created_at} className="post-time" />
-                    {(user?.id === comment.author.id || user?.id === post.author.id) && (
-                      <div style={{ marginLeft: 'auto' }}>
-                        <button
-                          type="button"
-                          className="icon-btn danger"
-                          aria-label="Delete reply"
-                          onClick={() => void deleteComment(comment.id)}
-                        >
-                          <TrashIcon size={15} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <PostText body={comment.body} className="comment-body" />
-                </div>
-              </div>
+              <CommentNode
+                key={comment.id}
+                comment={comment}
+                postId={post.id}
+                postAuthorId={post.author.id}
+                replyingTo={replyingTo?.id ?? null}
+                onReplyTarget={setReplyingTo}
+                onReplied={handleReplied}
+                onDeleted={handleCommentDeleted}
+                onLikeToggled={handleCommentLikeToggled}
+              />
             ))
           )}
         </>
