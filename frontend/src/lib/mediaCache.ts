@@ -15,11 +15,24 @@ import { apiUrl, getToken } from './api'
  */
 export type MediaAsset = { url: string; filename: string | null }
 
-type Entry = {
+export type Entry = {
   promise: Promise<MediaAsset>
   refs: number
   asset: MediaAsset | null
   released: boolean
+}
+
+/** A failed download, carrying enough for the caller to decide when to retry. */
+export class MediaError extends Error {
+  status: number
+  retryAfterMs: number | null
+
+  constructor(status: number, retryAfterMs: number | null) {
+    super(`Media request failed with ${status}`)
+    this.name = 'MediaError'
+    this.status = status
+    this.retryAfterMs = retryAfterMs
+  }
 }
 
 const cache = new Map<string, Entry>()
@@ -36,7 +49,12 @@ async function fetchAsset(path: string): Promise<MediaAsset> {
   const response = await fetch(apiUrl(path), {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   })
-  if (!response.ok) throw new Error(`Media request failed with ${response.status}`)
+  if (!response.ok) {
+    // `Retry-After` is seconds; the rate limiter sets it, so a retry can wait
+    // out the window exactly instead of guessing.
+    const after = Number(response.headers.get('retry-after'))
+    throw new MediaError(response.status, Number.isFinite(after) && after > 0 ? after * 1000 : null)
+  }
   const blob = await response.blob()
   return {
     url: URL.createObjectURL(blob),

@@ -278,3 +278,23 @@ the public URL returns 502 until the dev server is bound to 12000.
   `VITE_API_BASE` is empty, so a misconfigured bundle cannot ship silently;
   `VITE_SAME_ORIGIN=1` opts out for a genuine single-origin deploy. `api.ts`
   raises a descriptive error when a response comes back as `text/html`.
+- Media never renders with a bare `<img src>` pointing at `/api/media/{id}`: the route
+  requires a bearer token, so only `useMediaUrl`/`useMediaStatus` can load it into a blob
+  URL. Anything that renders an `<img>` from a media path directly will show its alt text for
+  a signed-in viewer too.
+- `useMediaStatus` retries a failed download on a backoff. A one-shot load leaves the
+  element showing its alt text for the whole session, because the effect never runs again for
+  the same path — a transient 429, a token mid-refresh or a briefly-down backend all become
+  permanent. A 429 is retried on its own larger schedule (`RATE_LIMIT_DELAYS_MS`) and honours
+  the server's `Retry-After`, since this API's window is a minute and a short backoff would
+  exhaust itself inside it. `fetchAsset` throws `MediaError`, which carries the status and
+  `Retry-After`.
+- `PostDetailPage` renders `MediaGallery` for `post.media`, like `PostCard` does. The page
+  grew a custom layout for the large-format post and missed the attachment block, so an
+  attached image showed on the feed and profile but not on the post's own URL.
+- iOS Safari zooms the page when it focuses a text field whose computed `font-size` is under
+  16px, and then needs a pinch to recover. The base `.input`/`.textarea` are 15px and the
+  admin search 14px, and the search page *autofocuses*, so it zoomed on open. A single
+  `@media (max-width: 900px)` block raises every field to 16px; the specific selectors are
+  listed there so they outrank the more specific rules they override. The composer textarea is
+  excluded because at 17px it already clears the threshold.
