@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from .. import cache, storage
 from ..config import settings
@@ -343,24 +344,31 @@ async def follow_user(username: str, db: DbSession, user: CurrentUser) -> UserPu
         db.add(Follow(follower_id=user.id, following_id=target.id))
         notification = Notification(user_id=target.id, actor_id=user.id, kind="follow")
         db.add(notification)
-        db.flush()
-        await manager.publish(
-            target.id,
-            {
-                "type": "notification",
-                "notification": {
-                    "id": notification.id,
-                    "kind": "follow",
-                    "read": False,
-                    "created_at": notification.created_at,
-                    "post_id": None,
-                    "actor_id": user.id,
+        try:
+            # A double-tap can insert two follow rows at once; the unique
+            # constraint on the pair rejects the loser, and following someone
+            # twice is the same end state as following once, so it is a success.
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+        else:
+            await manager.publish(
+                target.id,
+                {
+                    "type": "notification",
+                    "notification": {
+                        "id": notification.id,
+                        "kind": "follow",
+                        "read": False,
+                        "created_at": notification.created_at,
+                        "post_id": None,
+                        "actor_id": user.id,
+                    },
                 },
-            },
-        )
-        db.commit()
-        db.refresh(target)
-        invalidate_user_reads()
+            )
+            db.commit()
+            db.refresh(target)
+            invalidate_user_reads()
     return serialize_user(db, target, user)
 
 

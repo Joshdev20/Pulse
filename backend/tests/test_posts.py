@@ -251,3 +251,159 @@ def test_read_endpoints_require_authentication(client, make_user):
     for path in reads:
         assert client.get(path).status_code == 401, f"anonymous GET {path} was allowed"
         assert client.get(path, headers=headers).status_code == 200, f"authed GET {path} failed"
+
+
+def test_feed_is_shuffled_per_seed_and_stable_within_one(client, make_user):
+    """The home feed varies by seed but not between pages of the same seed.
+
+    Two things must hold at once: a reload should not replay the same order (the
+    "random instead of most recent" requirement), and paging through one session
+    must not repeat or skip posts, which is what a fresh shuffle per request
+    would do.
+    """
+    headers, _ = make_user("ada")
+    for index in range(12):
+        client.post("/api/posts", headers=headers, json={"body": f"post {index}"})
+
+    def order(seed: str, page: int = 1, page_size: int = 6) -> list[int]:
+        response = client.get(
+            f"/api/feed?scope=all&page={page}&page_size={page_size}&seed={seed}", headers=headers
+        )
+        assert response.status_code == 200, response.text
+        return [item["id"] for item in response.json()["items"]]
+
+    first = order("seed-one")
+    # Same seed, first page again: identical, so pagination can be trusted.
+    assert order("seed-one") == first
+
+    # A different seed produces a different arrangement (12 posts, so a
+    # collision is vanishingly unlikely and would be a real bug in the shuffle).
+    assert order("seed-two") != first
+
+    # Page two of one seed shares nothing with page one: no repeats across pages.
+    page_two = order("seed-one", page=2)
+    assert not set(page_two) & set(first)
+
+    # Together the two pages cover the whole pool exactly once.
+    assert sorted(first + page_two) == sorted(order("seed-one", page=1, page_size=12))
+
+
+def test_feed_prefers_recent_posts(client, make_user):
+    """Relevance leans on recency: a fresh post beats an old one most draws.
+
+    The order is random, so this is asserted statistically over many seeds
+    rather than at a fixed index. With one post from now and one from a week
+    ago, the fresh post has roughly eight times the weight, so it should lead
+    the large majority of draws — while still losing some, which is what makes
+    the feed feel random rather than sorted.
+    """
+    from datetime import timedelta
+
+    from app.database import get_db
+    from app.models import Post, utcnow
+
+    headers, me = make_user("ada")
+
+    override = client.app.dependency_overrides[get_db]
+    session = next(override())
+    try:
+        session.add(Post(author_id=me["id"], body="old", created_at=utcnow() - timedelta(days=7)))
+        session.commit()
+        fresh = Post(author_id=me["id"], body="fresh", created_at=utcnow())
+        session.add(fresh)
+        session.commit()
+        fresh_id = fresh.id
+    finally:
+        session.close()
+
+    trials = 60
+    wins = 0
+    for index in range(trials):
+        page = client.get(
+            f"/api/feed?scope=all&page=1&page_size=1&seed=s{index}", headers=headers
+        ).json()
+        if page["items"][0]["id"] == fresh_id:
+            wins += 1
+
+    # Expected ~88%: high, but not 100%, because the ordering is random.
+    assert wins > trials * 0.6, f"fresh post only led {wins}/{trials} draws"
+    assert wins < trials, "fresh post led every draw, so nothing is being shuffled"
+
+
+def test_feed_does_not_merely_reverse_chronologically(client, make_user):
+    """The feed must be shuffled, not just newest-first under another name."""
+    headers, _ = make_user("ada")
+    for index in range(15):
+        client.post("/api/posts", headers=headers, json={"body": f"p{index}"})
+
+    orders = set()
+    for index in range(8):
+        page = client.get(
+            f"/api/feed?scope=all&page=1&page_size=15&seed=s{index}", headers=headers
+        ).json()
+        orders.add(tuple(item["id"] for item in page["items"]))
+
+    # Different seeds must produce different orders; a strict timestamp sort
+    # would give one order every time.
+    assert len(orders) > 1
+
+
+def test_feed_defaults_to_following_scope(client, make_user):
+    """The API default stays `following`; the client opts into Everyone."""
+    ada_headers, _ = make_user("ada")
+    grace_headers, _ = make_user("grace")
+    client.post("/api/posts", headers=grace_headers, json={"body": "from grace"})
+
+    default = client.get("/api/feed", headers=ada_headers).json()
+    assert default["total"] == 0
+
+    everyone = client.get("/api/feed?scope=all", headers=ada_headers).json()
+    assert everyone["total"] == 1
+
+
+def test_like_is_idempotent(client, make_user):
+    """Liking twice is one like, and the second tap is not an error."""
+    ada_headers, _ = make_user("ada")
+    grace_headers, _ = make_user("grace")
+    post_id = client.post("/api/posts", headers=grace_headers, json={"body": "hi"}).json()["id"]
+
+    first = client.post(f"/api/posts/{post_id}/like", headers=ada_headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["liked_by_me"] is True
+    assert first.json()["like_count"] == 1
+
+    second = client.post(f"/api/posts/{post_id}/like", headers=ada_headers)
+    assert second.status_code == 200, second.text
+    assert second.json()["like_count"] == 1
+
+
+def test_like_survives_a_lost_insert_race(client, make_user, monkeypatch):
+    """The loser of a racing duplicate insert still gets a 200, not a 500.
+
+    Two taps can both see "no like yet" and both try to insert. The unique
+    constraint rejects the second, which is the correct outcome — so the handler
+    must treat that IntegrityError as success rather than letting it escape as a
+    500, which is what a burst of new users tapping the same post produced.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+
+    from app.models import Like
+
+    ada_headers, _ = make_user("ada")
+    grace_headers, _ = make_user("grace")
+    post_id = client.post("/api/posts", headers=grace_headers, json={"body": "hi"}).json()["id"]
+
+    original_flush = Session.flush
+
+    def racy_flush(self, *args, **kwargs):
+        # Simulate the constraint firing on this request's insert.
+        if any(isinstance(obj, Like) for obj in self.new):
+            raise IntegrityError("INSERT INTO likes", {}, Exception("UNIQUE constraint failed"))
+        return original_flush(self, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "flush", racy_flush)
+
+    response = client.post(f"/api/posts/{post_id}/like", headers=ada_headers)
+    assert response.status_code == 200, response.text
+

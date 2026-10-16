@@ -11,12 +11,38 @@ import { usePostFeed } from '../lib/usePostFeed'
 import type { Post } from '../lib/types'
 import { EditPostModal } from '../components/EditPostModal'
 
+/**
+ * A fresh seed for one feed ordering.
+ *
+ * The server shuffles by seed, so a new seed is a new arrangement of the same
+ * candidate posts. It is short and random rather than derived from the clock so
+ * two users loading at the same moment still see different orders.
+ */
+function randomSeed(): string {
+  return Math.random().toString(36).slice(2, 10)
+}
+
 export function HomePage() {
   const { user } = useAuth()
-  const [scope, setScope] = useState<'following' | 'all'>('following')
+  // Everyone is the default view: a new account with no follows would otherwise
+  // land on an empty timeline. Following stays one tap away.
+  const [scope, setScope] = useState<'following' | 'all'>('all')
   const [editing, setEditing] = useState<Post | null>(null)
 
-  const feed = usePostFeed((page) => api.feed(scope, page, 20), [scope, user?.id])
+  // One seed per scope change, so "load more" keeps the same shuffled order
+  // while switching tabs reshuffles. Regenerated when the tab is re-selected
+  // via the button below, so a manual refresh of Everyone gives fresh posts.
+  const [feedSeed, setFeedSeed] = useState(() => randomSeed())
+
+  const feed = usePostFeed(
+    (page) => api.feed(scope, page, 20, feedSeed),
+    [scope, user?.id, feedSeed],
+  )
+
+  const chooseScope = (next: 'following' | 'all') => {
+    setScope(next)
+    setFeedSeed(randomSeed())
+  }
 
   return (
     <>
@@ -30,14 +56,14 @@ export function HomePage() {
             <button
               type="button"
               className={`segment${scope === 'following' ? ' active' : ''}`}
-              onClick={() => setScope('following')}
+              onClick={() => chooseScope('following')}
             >
               Following
             </button>
             <button
               type="button"
               className={`segment${scope === 'all' ? ' active' : ''}`}
-              onClick={() => setScope('all')}
+              onClick={() => chooseScope('all')}
             >
               Everyone
             </button>
@@ -62,7 +88,7 @@ export function HomePage() {
               title={scope === 'following' ? 'Your timeline is quiet' : 'No posts yet'}
               description={
                 scope === 'following'
-                  ? 'Follow a few people, or switch to Everyone to see what the whole community is posting.'
+                  ? 'Follow a few people to fill this timeline, or switch to Everyone to see what the whole community is posting.'
                   : 'Be the first to share something with the community.'
               }
               action={
@@ -70,7 +96,7 @@ export function HomePage() {
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
-                    onClick={() => setScope('all')}
+                    onClick={() => chooseScope('all')}
                   >
                     Browse everyone
                   </button>
