@@ -1941,12 +1941,22 @@ h4 {
    indent so a long back-and-forth does not march off the right edge. */
 .comment-thread.is-reply {
   border-left: 2px solid var(--border);
-  margin-left: 18px;
-  padding-left: 10px;
+  margin-left: 14px;
+  padding-left: 8px;
 }
 
+/* A reply lives inside its parent's content column, so it needs less air than a
+   top-level comment. The 15px a root comment uses stacks into a 31px gap between
+   two replies and reads as padding rather than as one conversation, so replies
+   use 10px. */
 .comment-thread.is-reply .comment {
-  padding-left: 8px;
+  padding: 10px 18px 10px 8px;
+}
+
+/* Adjacent replies each bring a divider, and the last one doubles with its
+   parent's, so the shared edges are collapsed to a single line. */
+.comment-replies > .comment-thread:last-child > .comment {
+  border-bottom: none;
 }
 
 .comment-replies {
@@ -1981,12 +1991,15 @@ h4 {
   background: var(--hover-wash);
 }
 
+/* Matches the post-like active colour (`.detail-actions .action.liked`); there
+   is no `--danger` token in the palette, so this was resolving to nothing and
+   the liked state was indistinguishable from an idle button. */
 .comment-action.liked {
-  color: var(--danger);
+  color: var(--rose);
 }
 
 .comment-action.liked:hover {
-  color: var(--danger);
+  color: var(--rose);
 }
 
 .comment-action.active {
@@ -2480,6 +2493,20 @@ h4 {
   transform: scale(1.025);
 }
 
+/* A tile whose download failed keeps its box but shows why, instead of the
+   empty frame an `opacity: 0` element leaves behind. */
+.media-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .media-play {
   position: absolute;
   inset: 0;
@@ -2578,6 +2605,13 @@ h4 {
   width: min(100%, 900px);
   height: min(70vh, 560px);
   border-radius: var(--radius);
+}
+
+.lightbox-error {
+  position: absolute;
+  color: var(--text-muted);
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .lightbox-close {
@@ -3583,7 +3617,7 @@ h4 {
     padding-left: 6px;
   }
   .comment-thread.is-reply .comment {
-    padding-left: 4px;
+    padding: 9px 14px 9px 4px;
   }
   .profile-counts {
     gap: 14px;

@@ -44,6 +44,7 @@ function Lightbox({ item, onClose }: { item: Media; onClose: () => void }) {
         ✕
       </button>
       {showSkeleton && <span className="lightbox-skeleton skeleton" aria-hidden="true" />}
+      {failed && <p className="lightbox-error">This {item.kind} is no longer available.</p>}
       {item.kind === 'video' ? (
         <video
           ref={mediaRef}
@@ -52,6 +53,9 @@ function Lightbox({ item, onClose }: { item: Media; onClose: () => void }) {
           controls
           autoPlay
           playsInline
+          /* See MediaCell: `loadedmetadata` fires under `preload="metadata"` on
+             every engine, `loadeddata` does not. */
+          onLoadedMetadata={markReady}
           onLoadedData={markReady}
           onError={markReady}
         />
@@ -121,17 +125,27 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
         <>
           <video
             ref={mediaRef}
-            className={`media-el${ready ? ' ready' : ''}`}
+            className={`media-el${ready ? ' ready' : ''}${failed ? ' failed' : ''}`}
             src={asset?.url}
             muted
             playsInline
             preload="metadata"
+            /* `loadeddata` alone is not reliable under `preload="metadata"`:
+               Safari (notably on iOS) fetches the header only, reports
+               `readyState` 1 and never fires `loadeddata`, leaving the tile
+               stuck behind `opacity: 0`. `loadedmetadata` fires everywhere and
+               is enough to reveal the first frame behind the play badge. */
+            onLoadedMetadata={markReady}
             onLoadedData={markReady}
             onError={markReady}
           />
-          <span className="media-play">
-            <PlayIcon size={30} />
-          </span>
+          {failed ? (
+            <span className="media-error">Video unavailable</span>
+          ) : (
+            <span className="media-play">
+              <PlayIcon size={30} />
+            </span>
+          )}
         </>
       ) : (
         <img
