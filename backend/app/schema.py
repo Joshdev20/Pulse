@@ -33,6 +33,10 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # Replies. Nullable, so a database that predates threading keeps every
     # existing row as a top-level comment.
     ("comments", "parent_id", "INTEGER NULL"),
+    # The file bytes, moved into the database so media survives a host whose
+    # filesystem is ephemeral. Nullable: rows written before this column keep
+    # working through the on-disk fallback until they are backfilled.
+    ("media", "blob", "BYTEA NULL"),
 ]
 
 

@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Table,
     Text,
@@ -231,6 +232,18 @@ class Media(Base):
     content_type: Mapped[str] = mapped_column(String(64))
     kind: Mapped[str] = mapped_column(String(16))
     size_bytes: Mapped[int] = mapped_column(Integer)
+    # The bytes themselves. A host with an ephemeral filesystem (the free Render
+    # tier) loses `UPLOAD_DIR` on every redeploy while the database — typically
+    # an external Postgres — keeps these rows, which is how every attachment
+    # 404s at once. Keeping the bytes in the row makes media survive with the
+    # data. Nullable so a row written before this column existed still loads and
+    # can fall back to the file on disk.
+    #
+    # Deferred: the column is only read when a download actually needs it, so
+    # listing a feed never pulls every attachment's bytes into memory. Do not
+    # remove `deferred` — `serialize_media` never touches `blob`, so a feed
+    # would otherwise load megabytes per post for nothing.
+    blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     alt_text: Mapped[str] = mapped_column(String(280), default="")

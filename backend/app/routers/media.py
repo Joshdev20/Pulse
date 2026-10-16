@@ -3,7 +3,7 @@
 import os
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import or_, select
 
 from .. import storage
@@ -56,6 +56,10 @@ async def upload(
         content_type=sniffed.content_type,
         kind=sniffed.kind,
         size_bytes=len(data),
+        # The bytes live in the row, not only on disk. A host with an ephemeral
+        # filesystem loses `UPLOAD_DIR` on every redeploy while the database
+        # keeps the row, so the file alone is not a durable copy of an upload.
+        blob=data,
         alt_text=alt_text.strip()[:280],
     )
     db.add(media)
@@ -116,13 +120,31 @@ def is_public_profile_image(db, media: Media) -> bool:
     )
 
 
+def _content_disposition(media: Media) -> str:
+    extension = media.stored_name.rsplit(".", 1)[-1]
+    return f'inline; filename="{media.id}.{extension}"'
+
+
 @router.get("/{media_id}")
-def download(media_id: int, db: DbSession, viewer: CurrentUser) -> FileResponse:
+def download(media_id: int, db: DbSession, viewer: CurrentUser) -> Response:
     media = db.get(Media, media_id)
     if media is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
     if not _visible_to(db, media, viewer):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
+
+    # Bytes stored in the row are the durable copy and are preferred. Older
+    # rows have no blob, and a local deployment may still hold the file, so the
+    # filesystem is a fallback rather than the only source.
+    headers = {
+        # Inline images/video so they render, but force a download for anything
+        # else (PDF) and never let the browser sniff a different type.
+        "Content-Disposition": _content_disposition(media),
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=86400",
+    }
+    if media.blob is not None:
+        return Response(content=media.blob, media_type=media.content_type, headers=headers)
 
     try:
         path = storage.resolve(media.stored_name)
@@ -131,14 +153,29 @@ def download(media_id: int, db: DbSession, viewer: CurrentUser) -> FileResponse:
     if not os.path.exists(path):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
 
-    return FileResponse(
-        path,
-        media_type=media.content_type,
-        # Inline images/video so they render, but force a download for anything
-        # else (PDF) and never let the browser sniff a different type.
-        headers={
-            "Content-Disposition": f'inline; filename="{media.id}.{media.stored_name.rsplit(".", 1)[-1]}"',
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, max-age=86400",
-        },
-    )
+    return FileResponse(path, media_type=media.content_type, headers=headers)
+
+
+def backfill_blobs(db) -> int:
+    """Copy any on-disk upload that has no database copy into its row.
+
+    Best-effort repair for a database that predates the ``blob`` column: on a
+    host that still has its files this preserves them before a redeploy loses
+    them, and on one that has already lost them it is a no-op. Never raises —
+    startup must not fail because a file could not be read.
+    """
+    repaired = 0
+    rows = db.scalars(select(Media).where(Media.blob.is_(None)).order_by(Media.id)).all()
+    for media in rows:
+        try:
+            path = storage.resolve(media.stored_name)
+            if not os.path.exists(path):
+                continue
+            with open(path, "rb") as file:
+                media.blob = file.read()
+            repaired += 1
+        except (ValueError, OSError):
+            continue
+    if repaired:
+        db.commit()
+    return repaired
