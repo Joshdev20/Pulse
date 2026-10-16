@@ -69,7 +69,18 @@ export function useMediaStatus(path: string | null | undefined): {
         })
         .catch((error: unknown) => {
           if (cancelled) return
-          const rateLimited = error instanceof MediaError && error.status === 429
+          const status = error instanceof MediaError ? error.status : 0
+          // A 404 is the server saying the bytes are not there: retrying cannot
+          // change that, and on this deployment it is the normal answer for
+          // uploads lost with the instance's disk. Only 429, 5xx and a transport
+          // failure are worth another attempt.
+          const retryable = status === 0 || status === 429 || status >= 500
+          if (!retryable) {
+            setAsset(null)
+            setFailed(true)
+            return
+          }
+          const rateLimited = status === 429
           const schedule = rateLimited ? RATE_LIMIT_DELAYS_MS : RETRY_DELAYS_MS
           const fallback = schedule[attempt]
           attempt += 1
@@ -79,7 +90,7 @@ export function useMediaStatus(path: string | null | undefined): {
             return
           }
           // Honour the server's own wait when it is longer than the schedule.
-          const wait = rateLimited ? Math.max(error.retryAfterMs ?? 0, fallback) : fallback
+          const wait = rateLimited ? Math.max((error as MediaError).retryAfterMs ?? 0, fallback) : fallback
           timer = window.setTimeout(start, wait)
         })
     }

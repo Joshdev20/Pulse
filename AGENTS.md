@@ -298,3 +298,16 @@ the public URL returns 502 until the dev server is bound to 12000.
   `@media (max-width: 900px)` block raises every field to 16px; the specific selectors are
   listed there so they outrank the more specific rules they override. The composer textarea is
   excluded because at 17px it already clears the threshold.
+- A failed media download is only retried when it can plausibly succeed: 429, 5xx and a
+  transport failure. A 404 is not retried, because it means the bytes are not there and
+  retrying cannot change that. That is the normal answer on the hosted demo, where the free
+  Render instance has no disk and every upload is lost on each deploy.
+- Uploads live on the instance's own filesystem (`UPLOAD_DIR`, default `./uploads`) and the
+  database stores only the filename, so the two can disagree. On a host without a persistent
+  disk — `render.yaml` sets `plan: free`, which cannot attach one — a redeploy wipes the files
+  while `DATABASE_URL` (an external Postgres) keeps the rows. `GET /api/media/{id}` then 404s
+  for *every* account while posts still carry `media` entries pointing at it. The symptom
+  looks account-scoped because the browser that uploaded the file still has it in its HTTP
+  cache (`Cache-Control: private, max-age=86400` on the download route) and keeps rendering it
+  after the server copy is gone. Re-seeding does not bring the bytes back; attach the disk and
+  set `UPLOAD_DIR=/data/uploads`, or move uploads to object storage.
