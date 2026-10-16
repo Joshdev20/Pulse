@@ -34,7 +34,7 @@ The venv has **no pip**; use `uv`:
 uv pip install -r requirements.txt        # or: uv pip install redis
 .venv/bin/python -m app.seed --reset      # rebuild pulse.db with demo data
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-.venv/bin/python -m pytest -q             # 178 tests
+.venv/bin/python -m pytest -q             # 181 tests
 ```
 
 ### Frontend (run from `frontend/`)
@@ -80,6 +80,15 @@ the public URL returns 502 until the dev server is bound to 12000.
   and an error state (`ErrorState`) from `components/UI.tsx`.
 - Style with existing classes in `styles.css` and the CSS custom properties at the top of
   that file. Do not introduce a styling library or inline hex colours.
+- Every token in the theme blocks must resolve to a literal, never to itself. A typo like
+  `--accent-soft: var(--accent-soft)` is a cycle, so the custom property is invalid at
+  computed-value time and anything using it silently loses its background. Both themes are
+  covered because the light block sits above the dark one.
+- `/messages` is an app pane, not a document. `.main:has(> .messages)` is a flex column of
+  `100dvh` so the page head and the inbox/thread fill the viewport exactly and the page
+  itself never scrolls; the inbox and thread scroll inside their own boxes. Do not give the
+  pane a `calc(100vh - Npx)` height — that magic constant drifts out of step with the
+  header and bottom padding and leaves a stray page scroll.
 
 ### Realtime
 
@@ -113,6 +122,11 @@ the public URL returns 502 until the dev server is bound to 12000.
 - Uploaded files land in `backend/uploads/` (gitignored) under random names; the database
   stores only the generated filename. `storage.resolve` re-checks containment, so never
   build an upload path by hand.
+- The body-size ceiling in `middleware.py` has two tiers, and the upload routes must stay on
+  the larger one. `max_body_bytes` is a JSON ceiling (~1 MB) while `max_upload_bytes` is the
+  real cap for images (~8 MB), so a route that accepts a file has to be listed in
+  `UPLOAD_PATH_PREFIXES` or a picture well under its own limit is rejected at the door with
+  413 before the handler runs. `tests/test_middleware.py` pins both tiers.
 - Vite HMR replaces a changed module but does not re-run effects whose dependencies are
   unchanged, so a new `useEffect` may not fire until a full page reload. Hard-reload when
   verifying hook changes in the browser.
@@ -131,6 +145,16 @@ the public URL returns 502 until the dev server is bound to 12000.
   mounts, unmounts and remounts every effect in one tick; releasing inline cancelled a
   download that the remount immediately re-requested, so each image was fetched twice on
   every mount. Keep the deferral when touching that file.
+- A failed media download must not stay cached. The cache is keyed by path and an entry is
+  created before its fetch settles, so a rejection left in place makes the element show a
+  broken image for the rest of the session — even after the cause clears, which a
+  rate-limited burst (429) does on its own within a minute. `refMedia` deletes the entry in
+  its `catch` so the next consumer retries; `primeMedia` does the same.
+- The media cache holds the *previous* account's bytes after a sign-in change, because a
+  path carries no notion of who fetched it. `clearMediaCache()` revokes and forgets every
+  entry; `AuthContext` calls it on login, register, logout and a 401, so a shared tab never
+  renders one user's avatar or cover for the next. The backend needs no equivalent: every
+  viewer-relative read keys its cache by `viewer.id`.
 - A placeholder must distinguish "still loading" from "will never load": read `failed` from
   `useMediaStatus`, or a broken avatar or attachment shimmers forever. Use
   `useMediaReady` rather than a bare `onLoad` — blob bytes are already in memory, so the

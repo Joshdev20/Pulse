@@ -68,7 +68,14 @@ export function refMedia(path: string): Entry {
         if (created.released) URL.revokeObjectURL(result.url)
         else created.asset = result
       })
-      .catch(() => undefined)
+      .catch(() => {
+        // A failure is not a durable fact. Leaving the rejected entry cached
+        // would show a broken image for the rest of the session even after the
+        // cause clears — a rate-limited burst, a token that was being refreshed,
+        // or a backend that was momentarily down. Drop it so the next consumer
+        // gets a fresh attempt.
+        if (cache.get(path) === created) cache.delete(path)
+      })
     cache.set(path, created)
     entry = created
   }
@@ -90,6 +97,20 @@ export function unrefMedia(path: string, entry: Entry) {
     cache.delete(path)
     release(entry)
   })
+}
+
+/**
+ * Drop every cached download.
+ *
+ * Called when the credentials change. The cache is keyed by path, and a path
+ * carries no notion of who fetched it, so signing out (or into another
+ * account) in the same tab must not leave the previous account's bytes on
+ * screen — the avatar and header of whoever was signed in would keep rendering
+ * for the next user.
+ */
+export function clearMediaCache() {
+  for (const entry of cache.values()) release(entry)
+  cache.clear()
 }
 
 /**

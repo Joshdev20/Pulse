@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ApiError, api, setToken, getToken } from '../lib/api'
+import { clearMediaCache } from '../lib/mediaCache'
 import type { User } from '../lib/types'
 
 // A failed session check is retried before the user is shown as signed out, so
@@ -45,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // connection or a 5xx is transient, so retry with backoff instead of
         // discarding credentials the server never invalidated.
         if (error instanceof ApiError && error.status === 401) {
+          clearMediaCache()
           setToken(null)
           setUserState(null)
           return
@@ -64,6 +66,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const { access_token } = await api.login(username, password)
+    // The previous session's media is keyed only by path, so it has to go
+    // before the new account renders anything.
+    clearMediaCache()
     setToken(access_token)
     setUserState(await api.me())
   }, [])
@@ -71,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     async (data: { username: string; email: string; display_name: string; password: string }) => {
       const { access_token } = await api.register(data)
+      clearMediaCache()
       setToken(access_token)
       setUserState(await api.me())
     },
@@ -78,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const logout = useCallback(() => {
+    clearMediaCache()
     setToken(null)
     setUserState(null)
   }, [])
