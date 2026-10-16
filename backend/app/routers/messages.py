@@ -1,8 +1,8 @@
 """Direct messages: conversations, message history and read state."""
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from ..deps import CurrentUser, DbSession, serialize_media, serialize_user, serialize_users
 from ..models import Conversation, ConversationParticipant, Media, Message, User, utcnow
@@ -30,6 +30,85 @@ def serialize_messages(db: Session, messages: list[Message], viewer: User | None
         )
         for m in messages
     ]
+
+
+# A conversation summary needs one row per conversation; this module does it
+# with a handful of set-based queries instead of a query per conversation,
+# which matters because every one of those is a round-trip to the database host.
+
+# Unread messages for a participant row: everything from the other side newer
+# than the last read, or all of it when the thread has never been opened.
+_UNREAD_FOR_PARTICIPANT = (
+    select(func.count(Message.id))
+    .where(
+        Message.conversation_id == ConversationParticipant.conversation_id,
+        Message.sender_id != ConversationParticipant.user_id,
+        or_(
+            ConversationParticipant.last_read_at.is_(None),
+            Message.created_at > ConversationParticipant.last_read_at,
+        ),
+    )
+    .correlate(ConversationParticipant)
+    .scalar_subquery()
+)
+
+
+def _summarize(db: Session, user: User) -> list[ConversationOut]:
+    """Build the inbox for ``user`` with a constant number of queries."""
+    # The viewer's own participant row drives the filter and the unread count;
+    # the partner is a second, aliased participant row so the two do not fight
+    # over a single join.
+    partner_cp = aliased(ConversationParticipant)
+    person = aliased(User)
+    last_id = (
+        select(func.max(Message.id))
+        .where(Message.conversation_id == Conversation.id)
+        .correlate(Conversation)
+        .scalar_subquery()
+    )
+
+    rows = db.execute(
+        select(Conversation, person, Message, _UNREAD_FOR_PARTICIPANT.label("unread_count"))
+        .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
+        .join(partner_cp, partner_cp.conversation_id == Conversation.id)
+        .join(person, person.id == partner_cp.user_id)
+        .outerjoin(Message, Message.id == last_id)
+        .where(
+            ConversationParticipant.user_id == user.id,
+            partner_cp.user_id != user.id,
+        )
+        .order_by(Conversation.last_message_at.desc())
+    ).all()
+
+    # The partner profiles carry follower and post counts, so serialize them in
+    # one batch rather than relying on the per-user counts on UserPublic.
+    serialized_partners = serialize_users(db, [row[1] for row in rows], user)
+    senders = serialize_users(db, [row[2].sender for row in rows if row[2] is not None], user)
+
+    out: list[ConversationOut] = []
+    for conversation, partner, last, unread_count in rows:
+        preview = None
+        if last is not None:
+            preview = MessageOut(
+                id=last.id,
+                conversation_id=last.conversation_id,
+                body=last.body,
+                created_at=last.created_at,
+                sender=senders[last.sender_id],
+                media=serialize_media(last.media),
+                mine=last.sender_id == user.id,
+            )
+        out.append(
+            ConversationOut(
+                id=conversation.id,
+                created_at=conversation.created_at,
+                last_message_at=conversation.last_message_at,
+                partner=serialized_partners[partner.id],
+                last_message=preview,
+                unread_count=unread_count or 0,
+            )
+        )
+    return out
 
 
 def _participant(db: Session, conversation_id: int, user_id: int) -> ConversationParticipant | None:
@@ -67,57 +146,20 @@ def _partner_of(db: Session, conversation_id: int, viewer_id: int) -> User:
     return row[0]
 
 
-def _unread_count(db: Session, conversation_id: int, participant: ConversationParticipant) -> int:
-    query = select(func.count(Message.id)).where(
-        Message.conversation_id == conversation_id, Message.sender_id != participant.user_id
-    )
-    if participant.last_read_at is not None:
-        query = query.where(Message.created_at > participant.last_read_at)
-    return db.scalar(query) or 0
-
-
 @router.get("", response_model=list[ConversationOut])
 def list_conversations(db: DbSession, user: CurrentUser) -> list[ConversationOut]:
     """The inbox, newest activity first, with a preview and unread count."""
-    rows = db.execute(
-        select(Conversation, ConversationParticipant)
-        .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
-        .where(ConversationParticipant.user_id == user.id)
-        .order_by(Conversation.last_message_at.desc())
-    ).all()
-
-    out: list[ConversationOut] = []
-    for conversation, participant in rows:
-        partner = _partner_of(db, conversation.id, user.id)
-        last = db.scalar(
-            select(Message)
-            .where(Message.conversation_id == conversation.id)
-            .order_by(Message.created_at.desc(), Message.id.desc())
-            .limit(1)
-        )
-        preview = serialize_messages(db, [last], user)[0] if last is not None else None
-        out.append(
-            ConversationOut(
-                id=conversation.id,
-                created_at=conversation.created_at,
-                last_message_at=conversation.last_message_at,
-                partner=serialize_user(db, partner, user),
-                last_message=preview,
-                unread_count=_unread_count(db, conversation.id, participant),
-            )
-        )
-    return out
+    return _summarize(db, user)
 
 
 @router.get("/unread-count")
 def unread_total(db: DbSession, user: CurrentUser) -> dict[str, int]:
-    total = 0
-    participants = db.scalars(
-        select(ConversationParticipant).where(ConversationParticipant.user_id == user.id)
-    ).all()
-    for participant in participants:
-        total += _unread_count(db, participant.conversation_id, participant)
-    return {"count": total}
+    total = db.scalar(
+        select(func.coalesce(func.sum(_UNREAD_FOR_PARTICIPANT), 0)).where(
+            ConversationParticipant.user_id == user.id
+        )
+    )
+    return {"count": int(total or 0)}
 
 
 @router.post("", response_model=ConversationOut, status_code=status.HTTP_201_CREATED)

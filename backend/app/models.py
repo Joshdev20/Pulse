@@ -152,11 +152,40 @@ class Comment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), index=True)
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # Set when this comment answers another one; null for a top-level comment.
+    # Deleting a parent removes its replies rather than orphaning them, so the
+    # cascade is declared on both the relationship and the key.
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("comments.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     post: Mapped[Post] = relationship(back_populates="comments")
     author: Mapped[User] = relationship(back_populates="comments")
+    parent: Mapped["Comment | None"] = relationship(
+        remote_side=[id], back_populates="replies"
+    )
+    replies: Mapped[list["Comment"]] = relationship(
+        back_populates="parent", cascade="all, delete-orphan"
+    )
+
+
+class CommentLike(Base):
+    """A like on a comment, separate from a like on the post it belongs to."""
+
+    __tablename__ = "comment_likes"
+    __table_args__ = (UniqueConstraint("user_id", "comment_id", name="uq_comment_like_pair"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    comment_id: Mapped[int] = mapped_column(
+        ForeignKey("comments.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship()
+    comment: Mapped["Comment"] = relationship()
 
 
 class Like(Base):

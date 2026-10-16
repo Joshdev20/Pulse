@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime } from '../components/UI'
-import { BellIcon, CommentIcon, HeartIcon, RepostIcon, UserIcon } from '../components/Icons'
+import { BellIcon, CommentIcon, HeartIcon, RepostIcon, ReplyIcon, UserIcon } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import { api } from '../lib/api'
 import type { Notification } from '../lib/types'
@@ -10,6 +10,8 @@ import type { Notification } from '../lib/types'
 const ICONS = {
   like: HeartIcon,
   comment: CommentIcon,
+  reply: ReplyIcon,
+  comment_like: HeartIcon,
   follow: UserIcon,
   repost: RepostIcon,
 } as const
@@ -17,6 +19,8 @@ const ICONS = {
 const VERB = {
   like: 'liked your post',
   comment: 'replied to your post',
+  reply: 'replied to your comment',
+  comment_like: 'liked your comment',
   follow: 'started following you',
   repost: 'reposted your post',
 } as const

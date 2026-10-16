@@ -11,7 +11,17 @@ from ..deps import (
     serialize_posts,
     serialize_users,
 )
-from ..models import Comment, Follow, Like, Media, Notification, Post, User, utcnow
+from ..models import (
+    Comment,
+    CommentLike,
+    Follow,
+    Like,
+    Media,
+    Notification,
+    Post,
+    User,
+    utcnow,
+)
 from ..realtime import manager
 from ..schemas import (
     CommentCreate,
@@ -244,43 +254,161 @@ def unlike_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
     return serialize_posts(db, [post], user)[0]
 
 
+def serialize_comments(db: DbSession, comments: list[Comment], viewer: User | None) -> list[CommentOut]:
+    """Serialize a page's comments, newest replies attached to their parent.
+
+    All counts and viewer flags are computed with one query each over the whole
+    batch, so a thread of any length costs a fixed number of round-trips rather
+    than one per comment.
+    """
+    if not comments:
+        return []
+    ids = [comment.id for comment in comments]
+    authors = serialize_users(db, [comment.author for comment in comments], viewer)
+
+    like_counts = dict(
+        db.execute(
+            select(CommentLike.comment_id, func.count(CommentLike.id))
+            .where(CommentLike.comment_id.in_(ids))
+            .group_by(CommentLike.comment_id)
+        ).all()
+    )
+    liked_ids: set[int] = set()
+    if viewer is not None:
+        liked_ids = {
+            row[0]
+            for row in db.execute(
+                select(CommentLike.comment_id).where(
+                    CommentLike.comment_id.in_(ids), CommentLike.user_id == viewer.id
+                )
+            ).all()
+        }
+
+    return [
+        CommentOut(
+            id=comment.id,
+            body=comment.body,
+            created_at=comment.created_at,
+            author=authors[comment.author_id],
+            parent_id=comment.parent_id,
+            like_count=like_counts.get(comment.id, 0),
+            liked_by_me=comment.id in liked_ids,
+            replies=[],
+        )
+        for comment in comments
+    ]
+
+
 @router.get("/posts/{post_id}/comments", response_model=list[CommentOut])
 def list_comments(post_id: int, db: DbSession, viewer: CurrentUser) -> list[CommentOut]:
-    def produce() -> list[dict]:
-        _get_post_or_404(db, post_id)
-        comments = db.scalars(
-            select(Comment).where(Comment.post_id == post_id).order_by(Comment.created_at.asc())
-        ).all()
-        authors = serialize_users(db, [comment.author for comment in comments])
-        return [
-            CommentOut(
-                id=comment.id,
-                body=comment.body,
-                created_at=comment.created_at,
-                author=authors[comment.author_id],
-            ).model_dump(mode="json")
-            for comment in comments
-        ]
+    """Every comment on a post, top-level first with one level of replies.
 
-    return cache.get_or_set("comments", settings.cache_ttl_seconds, (post_id,), produce)
+    The whole thread is returned in reading order: a comment, then its replies,
+    then the next comment. Replies are attached to their parent rather than sent
+    as a separate list, so the client does not have to stitch them together.
+    """
+    _get_post_or_404(db, post_id)
+    comments = list(
+        db.scalars(
+            select(Comment)
+            .where(Comment.post_id == post_id)
+            .order_by(Comment.created_at.asc(), Comment.id.asc())
+        ).all()
+    )
+    flat = serialize_comments(db, comments, viewer)
+    by_id = {item.id: item for item in flat}
+    roots: list[CommentOut] = []
+    for item in flat:
+        parent = by_id.get(item.parent_id) if item.parent_id is not None else None
+        # A reply whose parent is not in this post (should not happen) surfaces
+        # as a top-level comment instead of being dropped.
+        if parent is None:
+            roots.append(item)
+        else:
+            parent.replies.append(item)
+    return roots
 
 
 @router.post("/posts/{post_id}/comments", response_model=CommentOut, status_code=status.HTTP_201_CREATED)
 async def create_comment(post_id: int, payload: CommentCreate, db: DbSession, user: CurrentUser) -> CommentOut:
     post = _get_post_or_404(db, post_id)
-    comment = Comment(post_id=post.id, author_id=user.id, body=payload.body.strip())
+    parent = None
+    if payload.parent_id is not None:
+        parent = db.get(Comment, payload.parent_id)
+        if parent is None or parent.post_id != post.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Comment not found")
+
+    comment = Comment(post_id=post.id, author_id=user.id, body=payload.body.strip(), parent_id=parent.id if parent else None)
     db.add(comment)
+    # Notify the post author about a top-level comment, and the person being
+    # answered about a reply. The wording is chosen per recipient: a reply to
+    # someone else's comment is not also "a reply to your post". When both point
+    # at the same account, one notification is enough.
+    recipients: list[tuple[int, str]] = []
     if post.author_id != user.id:
+        recipients.append((post.author_id, "reply" if parent is not None else "comment"))
+    if parent is not None and parent.author_id != user.id and parent.author_id != post.author_id:
+        recipients.append((parent.author_id, "reply"))
+    for recipient_id, kind in recipients:
         await _notify(
             db,
-            Notification(user_id=post.author_id, actor_id=user.id, kind="comment", post_id=post.id),
-            post.author_id,
+            Notification(
+                user_id=recipient_id,
+                actor_id=user.id,
+                kind=kind,
+                post_id=post.id,
+            ),
+            recipient_id,
         )
     db.commit()
     db.refresh(comment)
     invalidate_post_reads()
-    author = serialize_users(db, [user])[user.id]
-    return CommentOut(id=comment.id, body=comment.body, created_at=comment.created_at, author=author)
+    return serialize_comments(db, [comment], user)[0]
+
+
+@router.post("/comments/{comment_id}/like", response_model=CommentOut)
+async def like_comment(comment_id: int, db: DbSession, user: CurrentUser) -> CommentOut:
+    comment = db.get(Comment, comment_id)
+    if comment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Comment not found")
+    existing = db.scalar(
+        select(CommentLike).where(
+            CommentLike.comment_id == comment.id, CommentLike.user_id == user.id
+        )
+    )
+    if existing is None:
+        db.add(CommentLike(comment_id=comment.id, user_id=user.id))
+        if comment.author_id != user.id:
+            await _notify(
+                db,
+                Notification(
+                    user_id=comment.author_id,
+                    actor_id=user.id,
+                    kind="comment_like",
+                    post_id=comment.post_id,
+                ),
+                comment.author_id,
+            )
+        db.commit()
+        db.refresh(comment)
+    return serialize_comments(db, [comment], user)[0]
+
+
+@router.delete("/comments/{comment_id}/like", response_model=CommentOut)
+def unlike_comment(comment_id: int, db: DbSession, user: CurrentUser) -> CommentOut:
+    comment = db.get(Comment, comment_id)
+    if comment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Comment not found")
+    existing = db.scalar(
+        select(CommentLike).where(
+            CommentLike.comment_id == comment.id, CommentLike.user_id == user.id
+        )
+    )
+    if existing is not None:
+        db.delete(existing)
+        db.commit()
+        db.refresh(comment)
+    return serialize_comments(db, [comment], user)[0]
 
 
 @router.delete("/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -291,7 +419,20 @@ def delete_comment(comment_id: int, db: DbSession, user: CurrentUser) -> None:
     # The comment author or the post author may remove a comment.
     if comment.author_id != user.id and comment.post.author_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot delete this comment")
-    db.delete(comment)
+    # Remove the whole subtree. A database migrated from an earlier version has
+    # no FK constraint for the cascade to follow, and the ORM cascade does not
+    # apply to these bulk deletes, so walk the descendants explicitly.
+    doomed = [comment.id]
+    frontier = [comment.id]
+    while frontier:
+        children = list(
+            db.scalars(select(Comment.id).where(Comment.parent_id.in_(frontier))).all()
+        )
+        if not children:
+            break
+        doomed.extend(children)
+        frontier = children
+    db.execute(delete(Comment).where(Comment.id.in_(doomed)))
     db.commit()
     invalidate_post_reads()
 
