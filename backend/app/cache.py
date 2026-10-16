@@ -32,12 +32,25 @@ class CacheStore(Protocol):
 
 
 class MemoryStore:
-    """Thread-safe TTL dictionary used when Redis is not configured or is down."""
+    """Thread-safe TTL dictionary used when Redis is not configured or is down.
+
+    Bounded on purpose. Cache keys include the viewer's id, so an unbounded
+    store grows with the number of people browsing rather than with the amount
+    of content — exactly the wrong axis on a small instance. Past the ceiling
+    the oldest keys are dropped, and a periodic sweep clears expired ones so a
+    write burst cannot pin memory.
+    """
+
+    # Entries are small JSON responses, so this is a few MB at most.
+    MAX_ENTRIES = 4096
+    # Sweep at most this often, so pruning stays amortised rather than per-write.
+    SWEEP_INTERVAL_SECONDS = 30
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._values: dict[str, tuple[str, float]] = {}
         self._counters: dict[str, int] = {}
+        self._last_sweep = 0.0
 
     def _live(self, key: str) -> str | None:
         entry = self._values.get(key)
@@ -49,13 +62,29 @@ class MemoryStore:
             return None
         return value
 
+    def _prune(self, now: float) -> None:
+        """Drop expired entries, then the oldest ones if still over the ceiling."""
+        if now - self._last_sweep >= self.SWEEP_INTERVAL_SECONDS:
+            self._last_sweep = now
+            for key in [k for k, (_, expires_at) in self._values.items() if expires_at < now]:
+                self._values.pop(key, None)
+
+        overflow = len(self._values) - self.MAX_ENTRIES
+        if overflow > 0:
+            # Insertion order is expiry order for a fixed TTL, so the first keys
+            # are the ones closest to expiry — the cheapest to lose.
+            for key in list(self._values)[:overflow]:
+                self._values.pop(key, None)
+
     def get(self, key: str) -> str | None:
         with self._lock:
             return self._live(key)
 
     def set(self, key: str, value: str, ttl: int) -> None:
         with self._lock:
-            self._values[key] = (value, time.monotonic() + ttl)
+            now = time.monotonic()
+            self._values[key] = (value, now + ttl)
+            self._prune(now)
 
     def incr(self, key: str) -> int:
         with self._lock:

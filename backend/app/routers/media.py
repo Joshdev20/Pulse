@@ -1,9 +1,10 @@
 """Media upload and authenticated delivery."""
 
 import os
+from collections.abc import Iterator
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse, Response
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import or_, select
 
 from .. import storage
@@ -125,8 +126,44 @@ def _content_disposition(media: Media) -> str:
     return f'inline; filename="{media.id}.{extension}"'
 
 
+def _etag(media: Media) -> str:
+    """A validator that changes whenever the bytes could have.
+
+    Media rows are immutable once written — a replacement upload is a new row —
+    so the id plus the stored name identifies one exact byte sequence.
+    """
+    return f'"{media.id}-{media.stored_name}"'
+
+
+def _is_immutable_cache_hit(media: Media, headers) -> bool:
+    """Whether the client already holds these exact bytes.
+
+    Only an exact-match ETag counts. An `If-None-Match: *` is deliberately not
+    treated as a hit: it asserts "any copy will do", which is not the same as
+    holding these bytes, and answering 304 for it would show the wrong picture.
+    """
+    candidate = headers.get("if-none-match")
+    if not candidate:
+        return False
+    expected = _etag(media)
+    return any(part.strip() in (expected, expected[1:-1]) for part in candidate.split(","))
+
+
+def _stream_blob(data: bytes, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+    """Yield a loaded blob in slices.
+
+    A video can be tens of megabytes, and a plain `Response(content=blob)` makes
+    Starlette hold the whole buffer again while rendering it. Slicing keeps peak
+    memory near one copy instead of two, which matters on a small instance where
+    several people may be watching a video at once.
+    """
+    view = memoryview(data)
+    for start in range(0, len(view), chunk_size):
+        yield bytes(view[start : start + chunk_size])
+
+
 @router.get("/{media_id}")
-def download(media_id: int, db: DbSession, viewer: CurrentUser) -> Response:
+def download(media_id: int, db: DbSession, viewer: CurrentUser, request: Request) -> Response:
     media = db.get(Media, media_id)
     if media is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
@@ -142,9 +179,22 @@ def download(media_id: int, db: DbSession, viewer: CurrentUser) -> Response:
         "Content-Disposition": _content_disposition(media),
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, max-age=86400",
+        # The bytes never change for an id, so a validator makes a repeat load a
+        # 304 with no body. `Vary: Authorization` is required because the
+        # response is per-viewer: a shared cache must not hand one account's
+        # bytes to another. Do not drop it when adding a shared cache.
+        "ETag": _etag(media),
+        "Vary": "Authorization",
     }
+    if _is_immutable_cache_hit(media, request.headers):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
     if media.blob is not None:
-        return Response(content=media.blob, media_type=media.content_type, headers=headers)
+        return StreamingResponse(
+            _stream_blob(media.blob),
+            media_type=media.content_type,
+            headers=headers,
+        )
 
     try:
         path = storage.resolve(media.stored_name)

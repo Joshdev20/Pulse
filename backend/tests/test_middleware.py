@@ -54,6 +54,58 @@ def test_rate_limit_is_scoped_per_endpoint_class(limited_client):
     assert limited_client.get("/api/posts").status_code == 200
 
 
+def test_media_has_its_own_budget(limited_client):
+    """A busy media budget must not stop ordinary reads, and vice versa.
+
+    Regression guard: media and general reads shared one bucket, so a
+    media-heavy feed — which is every feed — exhausted the allowance and then
+    every picture and avatar was answered with 429. That looked like the app
+    breaking rather than like a rate limit.
+    """
+    from app.middleware import MEDIA_LIMIT_MULTIPLIER
+
+    app = limited_client.app
+
+    @app.get("/api/media/{media_id}")
+    def media(media_id: int) -> dict[str, bool]:
+        return {"ok": True}
+
+    media_budget = settings.rate_limit_requests * MEDIA_LIMIT_MULTIPLIER
+
+    # Burn the whole general-read allowance.
+    for _ in range(settings.rate_limit_requests):
+        assert limited_client.get("/api/posts").status_code == 200
+    assert limited_client.get("/api/posts").status_code == 429
+
+    # Media still works, because it is counted separately.
+    assert limited_client.get("/api/media/1").status_code == 200
+
+    # And the media allowance is genuinely larger than the read one.
+    assert media_budget > settings.rate_limit_requests
+
+
+def test_media_upload_does_not_get_the_download_budget(limited_client):
+    """A write must not inherit the generous read allowance.
+
+    Uploads share the `/api/media` prefix, so a prefix-only check would hand
+    them the 12x download ceiling — 2880 uploads a minute of up to 32MB each,
+    which is a way to fill the instance's storage rather than to serve a feed.
+    """
+    from app.middleware import MEDIA_LIMIT_MULTIPLIER
+
+    app = limited_client.app
+
+    @app.post("/api/media")
+    def upload() -> dict[str, bool]:
+        return {"ok": True}
+
+    for _ in range(settings.rate_limit_requests):
+        assert limited_client.post("/api/media").status_code == 200
+    # The upload budget is the ordinary one, not the media download one.
+    assert limited_client.post("/api/media").status_code == 429
+    assert MEDIA_LIMIT_MULTIPLIER > 1
+
+
 def test_limiter_counts_per_client(limited_client):
     """One noisy caller must not consume another caller's budget."""
     for _ in range(SENSITIVE_LIMIT):

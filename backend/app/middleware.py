@@ -13,6 +13,18 @@ from .config import settings
 SENSITIVE_PATHS = {"/api/auth/login", "/api/auth/register"}
 SENSITIVE_LIMIT = 10
 
+# Media downloads are their own budget class. A single feed page shows many
+# avatars and attachments, so folding media reads into the general API budget
+# meant one ordinary page view could exhaust it and then every picture 429'd —
+# the whole app read as broken. Giving media reads a separate, larger allowance
+# isolates that.
+MEDIA_PATH_PREFIXES = ("/api/media",)
+# Multiplier applied to the general read budget for media downloads.
+MEDIA_LIMIT_MULTIPLIER = 12
+
+# Sweep at most this often; the sweep itself is O(number of buckets).
+SWEEP_INTERVAL_SECONDS = 30
+
 # Routes that accept a file upload. These get the larger upload budget instead of
 # the small JSON ceiling, otherwise a picture well under the route's own limit is
 # rejected at the door with 413 before the handler ever sees it.
@@ -40,16 +52,23 @@ CONTENT_SECURITY_POLICY = "; ".join(
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """A fixed-window counter keyed by client IP.
+    """A fixed-window counter keyed by client IP and request class.
 
     In-process and therefore per-worker; it exists to blunt credential stuffing
     and accidental hot loops in a single-node deployment. A multi-node setup
     should move this counter into Redis.
+
+    Requests are split into three independent budgets — credential minting,
+    media downloads and ordinary reads. They used to share one bucket, which
+    made a media-heavy feed consume the read allowance and then have every
+    picture answered with 429; because media is what fills a feed, that looked
+    like the app breaking rather than like a rate limit.
     """
 
     def __init__(self, app) -> None:
         super().__init__(app)
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._last_sweep = time.monotonic()
 
     def _client_key(self, request: Request) -> str:
         # Honour the proxy header the runtime sets, falling back to the socket.
@@ -58,13 +77,39 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return forwarded.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
 
+    def _budget(self, request: Request) -> tuple[str, int]:
+        """Return the (class, limit) a request is counted against.
+
+        Only media *reads* get the larger allowance. An upload shares the media
+        prefix but writes to the database and the disk, so it is deliberately
+        left on the ordinary budget rather than inheriting a 12x ceiling it
+        could use to fill the instance's storage.
+        """
+        path = request.url.path
+        if path in SENSITIVE_PATHS:
+            return "auth", SENSITIVE_LIMIT
+        if path.startswith(MEDIA_PATH_PREFIXES) and request.method in ("GET", "HEAD"):
+            return "media", settings.rate_limit_requests * MEDIA_LIMIT_MULTIPLIER
+        return "api", settings.rate_limit_requests
+
+    def _sweep(self, now: float) -> None:
+        """Drop buckets whose whole window has passed, bounding the table size."""
+        if now - self._last_sweep < SWEEP_INTERVAL_SECONDS:
+            return
+        self._last_sweep = now
+        window = settings.rate_limit_window_seconds
+        for key in [key for key, bucket in self._hits.items() if not bucket or now - bucket[-1] > window]:
+            self._hits.pop(key, None)
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if path.startswith("/api/"):
-            limit = SENSITIVE_LIMIT if path in SENSITIVE_PATHS else settings.rate_limit_requests
+            bucket_class, limit = self._budget(request)
             window = settings.rate_limit_window_seconds
-            key = f"{self._client_key(request)}:{'auth' if path in SENSITIVE_PATHS else 'api'}"
+            key = f"{self._client_key(request)}:{bucket_class}"
             now = time.monotonic()
+
+            self._sweep(now)
 
             bucket = self._hits[key]
             while bucket and now - bucket[0] > window:

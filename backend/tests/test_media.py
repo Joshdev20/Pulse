@@ -225,3 +225,50 @@ def test_missing_media_is_a_404_even_for_its_owner(client, make_user, tmp_path, 
         os.unlink(os.path.join(tmp_path, name))
 
     assert client.get(f"/api/media/{media_id}", headers=headers).status_code == 404
+
+
+def test_media_sends_a_validator_and_answers_304(client, make_user, tmp_path, monkeypatch):
+    """A repeat load costs a 304, not the bytes again.
+
+    Feeds are image-heavy, so re-fetching every avatar and attachment on each
+    visit is most of the load. An ETag lets the browser reuse what it already
+    has; this pins that the validator is present and honoured.
+    """
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    media_id = upload(client, headers, PNG).json()["id"]
+
+    first = client.get(f"/api/media/{media_id}", headers=headers)
+    assert first.status_code == 200
+    etag = first.headers["ETag"]
+    assert etag
+    # The response is per-viewer, so a shared cache must key on the credential.
+    assert "Authorization" in first.headers["Vary"]
+
+    repeat = client.get(f"/api/media/{media_id}", headers={**headers, "If-None-Match": etag})
+    assert repeat.status_code == 304
+    assert repeat.content == b""
+
+
+def test_media_revalidates_when_the_etag_differs(client, make_user, tmp_path, monkeypatch):
+    """A stale validator must not be treated as a hit, or the wrong bytes show."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    media_id = upload(client, headers, PNG).json()["id"]
+
+    response = client.get(
+        f"/api/media/{media_id}", headers={**headers, "If-None-Match": '"not-this-one"'}
+    )
+    assert response.status_code == 200
+    assert response.content == PNG
+
+
+def test_wildcard_if_none_match_is_not_a_hit(client, make_user, tmp_path, monkeypatch):
+    """`If-None-Match: *` asserts "any copy", not "these bytes", so serve them."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    media_id = upload(client, headers, PNG).json()["id"]
+
+    response = client.get(f"/api/media/{media_id}", headers={**headers, "If-None-Match": "*"})
+    assert response.status_code == 200
+    assert response.content == PNG

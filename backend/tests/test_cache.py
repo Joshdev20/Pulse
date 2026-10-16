@@ -36,6 +36,38 @@ def test_memory_counters_increment():
     assert store.get_int("c") == 2
 
 
+def test_memory_store_is_bounded(monkeypatch):
+    """A burst of distinct viewers must not grow the store without limit.
+
+    Cache keys embed the viewer id, so an unbounded store grows with the number
+    of people browsing. On a small instance that is a slow memory leak that ends
+    in an OOM kill — the "crashes as new users join" failure.
+    """
+    store = cache.MemoryStore()
+    monkeypatch.setattr(store, "MAX_ENTRIES", 50)
+    # Defeat the sweep interval so the ceiling is what does the pruning.
+    monkeypatch.setattr(store, "SWEEP_INTERVAL_SECONDS", 10_000)
+
+    for index in range(500):
+        store.set(f"viewer:{index}", "x", ttl=3600)
+
+    assert len(store._values) <= 50
+    # The most recent writes are the ones kept.
+    assert store.get("viewer:499") == "x"
+
+
+def test_memory_store_prunes_expired_entries(monkeypatch):
+    store = cache.MemoryStore()
+    monkeypatch.setattr(store, "SWEEP_INTERVAL_SECONDS", 0)
+    store.set("old", "x", ttl=0)
+    store.set("new", "y", ttl=60)
+
+    # A write triggers a sweep, which drops the expired key.
+    store.set("trigger", "z", ttl=60)
+    assert "old" not in store._values
+    assert store.get("new") == "y"
+
+
 def test_get_or_set_computes_once():
     calls = []
 

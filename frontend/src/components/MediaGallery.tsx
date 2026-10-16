@@ -3,6 +3,8 @@ import { DownloadIcon, FileIcon, PlayIcon } from './Icons'
 import { useMediaStatus, useMediaUrl } from '../lib/useMediaUrl'
 import { primeMedia } from '../lib/mediaCache'
 import { useMediaReady } from '../lib/useMediaReady'
+import { useVideoPoster } from '../lib/videoPoster'
+import { formatDuration } from '../lib/format'
 import type { Media } from '../lib/types'
 
 function humanSize(bytes: number): string {
@@ -102,6 +104,8 @@ function Attachment({ item }: { item: Media }) {
 function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
   const { asset, failed } = useMediaStatus(item.url)
   const { ref: mediaRef, ready, markReady } = useMediaReady(asset?.url)
+  const poster = useVideoPoster(item.kind === 'video' ? asset?.url : null)
+  const [duration, setDuration] = useState<number | null>(null)
   const showSkeleton = !ready && !failed
 
   // A pointer resting on a tile is a strong hint the click is coming, so start
@@ -135,29 +139,45 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
                `readyState` 1 and never fires `loadeddata`, leaving the tile
                stuck behind `opacity: 0`. `loadedmetadata` fires everywhere and
                is enough to reveal the first frame behind the play badge. */
-            onLoadedMetadata={markReady}
+            onLoadedMetadata={(event) => {
+              markReady()
+              const value = event.currentTarget.duration
+              if (Number.isFinite(value)) setDuration(value)
+            }}
             onLoadedData={markReady}
             onError={markReady}
           />
+          {/* The captured frame covers the video's own first frame, so the
+              tile shows a real preview even where the element paints black. */}
+          {poster && !failed && <img className="media-poster" src={poster} alt="" aria-hidden="true" />}
           {failed ? (
             <span className="media-error">Video unavailable</span>
           ) : (
-            <span className="media-play">
-              <PlayIcon size={30} />
-            </span>
+            <>
+              <span className="media-play">
+                <PlayIcon size={30} />
+              </span>
+              {duration !== null && <span className="media-duration">{formatDuration(duration)}</span>}
+            </>
           )}
         </>
       ) : (
-        <img
-          ref={mediaRef}
-          className={`media-el${ready ? ' ready' : ''}`}
-          src={asset?.url}
-          alt={item.alt_text}
-          loading="lazy"
-          decoding="async"
-          onLoad={markReady}
-          onError={markReady}
-        />
+        <>
+          <img
+            ref={mediaRef}
+            className={`media-el${ready ? ' ready' : ''}`}
+            src={asset?.url}
+            alt={item.alt_text}
+            loading="lazy"
+            decoding="async"
+            onLoad={markReady}
+            onError={markReady}
+          />
+          {/* A 404 here is normal on this deployment: uploads made before the
+              bytes were stored in the database were lost with the instance's
+              disk, so say so rather than leaving an empty frame. */}
+          {failed && <span className="media-error">Image unavailable</span>}
+        </>
       )}
     </button>
   )

@@ -176,8 +176,13 @@ export const api = {
 
   clearCover: () => request<User>('/api/users/me/cover', { method: 'DELETE' }),
 
-  feed: (scope: 'following' | 'all', page = 1, pageSize = 20) =>
-    request<Page<Post>>(`/api/feed${query({ scope, page, page_size: pageSize })}`),
+  /**
+   * The home timeline. `seed` pins the server's shuffled ordering so paging
+   * through one session stays consistent; omit it and the server derives a
+   * per-viewer default.
+   */
+  feed: (scope: 'following' | 'all', page = 1, pageSize = 20, seed?: string) =>
+    request<Page<Post>>(`/api/feed${query({ scope, page, page_size: pageSize, seed })}`),
 
   posts: (page = 1, pageSize = 20) =>
     request<Page<Post>>(`/api/posts${query({ page, page_size: pageSize })}`),

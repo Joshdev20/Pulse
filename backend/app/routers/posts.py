@@ -1,7 +1,12 @@
 """Post CRUD, feed, likes and comments."""
 
+import hashlib
+import math
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from .. import cache
 from ..config import settings
@@ -38,6 +43,12 @@ router = APIRouter(prefix="/api", tags=["posts"])
 
 MAX_PAGE_SIZE = 50
 MAX_ATTACHMENTS = 4
+
+# How many recent posts the home feed considers before ordering them. The pool
+# is bounded on purpose: ordering every post in the table would make the feed
+# slower with every post ever written. A few hundred is enough to feel varied
+# while keeping the cost of a feed request flat as the site grows.
+FEED_POOL_SIZE = 300
 
 # Namespaces whose cached reads a post write invalidates. `users` carries the
 # post counts and `trending`/`search`/`comments` the aggregates and lists that a
@@ -109,6 +120,122 @@ def _paginate(db: DbSession, query, page: int, page_size: int, viewer: User | No
     )
 
 
+def _feed_seed(seed: str | None, viewer: User) -> int:
+    """A stable integer seed for one viewer's feed ordering.
+
+    The client sends a seed so that paging through the feed keeps one order —
+    without it, page 2 would be a different shuffle of the same pool and the
+    same post could appear twice while another was skipped. When no seed is
+    supplied, derive a per-viewer one so a bare request still varies between
+    accounts but stays put across a reload.
+    """
+    material = seed if seed else f"viewer:{viewer.id}"
+    digest = hashlib.sha256(material.encode()).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def _age_hours(created_at: datetime, now: datetime) -> float:
+    """Hours between two timestamps, tolerating SQLite's naive datetimes.
+
+    SQLite has no timezone type, so a value written as UTC-aware comes back
+    naive. Subtracting that from an aware `now` raises, so the naive case is
+    read as UTC — which is how it was written.
+    """
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - created_at).total_seconds() / 3600.0)
+
+
+def _feed_weight(post: Post, like_counts: dict[int, int], comment_counts: dict[int, int], now: datetime) -> float:
+    """How strongly a post should be pulled toward the top of the feed.
+
+    Recency dominates — it halves over a day — and engagement only nudges, so a
+    month-old post with a lot of likes cannot outrank something from this
+    morning. Engagement is damped logarithmically so a single very popular post
+    does not monopolise the top of every feed.
+    """
+    recency = 1.0 / (1.0 + _age_hours(post.created_at, now) / 24.0)
+    engagement = like_counts.get(post.id, 0) + 2 * comment_counts.get(post.id, 0)
+    return recency * (1.0 + math.log1p(engagement))
+
+
+def _unit_interval(seed: int, post_id: int) -> float:
+    """A deterministic value in (0, 1) for one seed and post.
+
+    Hashed from the seed and id rather than drawn from a shared random stream so
+    the value for a post never depends on how many posts came before it — which
+    is what keeps a page's order identical to its order within the whole feed.
+    """
+    digest = hashlib.sha256(f"{seed}:{post_id}".encode()).digest()
+    return (int.from_bytes(digest[:8], "big") + 0.5) / 2**64
+
+
+def _ordered_feed(
+    db: DbSession,
+    query,
+    viewer: User,
+    seed: str | None,
+    page: int,
+    page_size: int,
+) -> Page:
+    """Order a feed as a random draw weighted by relevance, stable per seed.
+
+    Each post gets a random key scaled by its relevance weight, and the feed is
+    the ascending sort of those keys. That is a weighted random permutation: the
+    order is genuinely random rather than "newest first", but a fresh or engaging
+    post is more likely to land near the top, which is what makes it a relevance
+    ordering rather than a coin toss.
+
+    Doing it with a key per post (instead of shuffling a list) means the order is
+    a pure function of the seed and the post, so page two of a session continues
+    the same ordering instead of reshuffling and repeating or skipping posts.
+
+    The candidate pool is the most recent ``FEED_POOL_SIZE`` rows, so the cost
+    does not grow with the size of the site.
+    """
+    pool = list(db.scalars(query.limit(FEED_POOL_SIZE)).all())
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    if not pool:
+        return Page(items=[], total=total, page=page, page_size=page_size, has_more=False)
+
+    ids = [post.id for post in pool]
+    like_counts = dict(
+        db.execute(
+            select(Like.post_id, func.count(Like.id)).where(Like.post_id.in_(ids)).group_by(Like.post_id)
+        ).all()
+    )
+    comment_counts = dict(
+        db.execute(
+            select(Comment.post_id, func.count(Comment.id))
+            .where(Comment.post_id.in_(ids))
+            .group_by(Comment.post_id)
+        ).all()
+    )
+
+    feed_seed = _feed_seed(seed, viewer)
+    now = utcnow()
+
+    def draw_key(post: Post) -> float:
+        # -log(u) is exponential with rate 1, so dividing by the weight gives
+        # rate `weight`: the smallest key is the post most likely to be drawn
+        # first, in proportion to its weight.
+        return -math.log(_unit_interval(feed_seed, post.id)) / _feed_weight(
+            post, like_counts, comment_counts, now
+        )
+
+    ordered = sorted(pool, key=draw_key)
+
+    window = ordered[(page - 1) * page_size : page * page_size]
+    items = serialize_posts(db, window, viewer)
+    return Page(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=page * page_size < total and page * page_size < len(ordered),
+    )
+
+
 @router.get("/feed", response_model=Page)
 def feed(
     db: DbSession,
@@ -116,8 +243,14 @@ def feed(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
     scope: str = Query("following", pattern="^(following|all)$"),
+    seed: str | None = Query(None, max_length=64),
 ) -> Page:
-    """The home timeline: posts from followed accounts, or everything when scope=all."""
+    """The home timeline: posts from followed accounts, or everything when scope=all.
+
+    Ordered by relevance rather than strictly by time, with a per-load shuffle
+    so the feed varies between visits. ``seed`` pins the shuffle for the whole
+    of one browsing session so "load more" stays consistent.
+    """
 
     def produce() -> dict:
         query = select(Post).order_by(Post.created_at.desc(), Post.id.desc())
@@ -131,12 +264,12 @@ def feed(
             ]
             query = query.where(Post.author_id.in_(author_ids))
 
-        return _paginate(db, query, page, page_size, viewer).model_dump(mode="json")
+        return _ordered_feed(db, query, viewer, seed, page, page_size).model_dump(mode="json")
 
     return cache.get_or_set(
         "feed",
         settings.cache_ttl_seconds,
-        (viewer.id, page, page_size, scope),
+        (viewer.id, page, page_size, scope, seed or ""),
         produce,
     )
 
@@ -230,14 +363,24 @@ async def like_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
     existing = db.scalar(select(Like).where(Like.post_id == post.id, Like.user_id == user.id))
     if existing is None:
         db.add(Like(post_id=post.id, user_id=user.id))
-        if post.author_id != user.id:
-            await _notify(
-                db,
-                Notification(user_id=post.author_id, actor_id=user.id, kind="like", post_id=post.id),
-                post.author_id,
-            )
-        db.commit()
-        db.refresh(post)
+        try:
+            # Flush the like on its own so a lost race with a second tap is
+            # caught here, before the notification is queued. The unique
+            # constraint is what makes the duplicate insert fail; the loser
+            # should still report success, because liking twice ends in the
+            # same state as liking once.
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+        else:
+            if post.author_id != user.id:
+                await _notify(
+                    db,
+                    Notification(user_id=post.author_id, actor_id=user.id, kind="like", post_id=post.id),
+                    post.author_id,
+                )
+            db.commit()
+            db.refresh(post)
     invalidate_post_reads()
     return serialize_posts(db, [post], user)[0]
 
@@ -378,19 +521,26 @@ async def like_comment(comment_id: int, db: DbSession, user: CurrentUser) -> Com
     )
     if existing is None:
         db.add(CommentLike(comment_id=comment.id, user_id=user.id))
-        if comment.author_id != user.id:
-            await _notify(
-                db,
-                Notification(
-                    user_id=comment.author_id,
-                    actor_id=user.id,
-                    kind="comment_like",
-                    post_id=comment.post_id,
-                ),
-                comment.author_id,
-            )
-        db.commit()
-        db.refresh(comment)
+        try:
+            # Same race as a post like: the unique constraint rejects the
+            # duplicate insert, and that is a success from the caller's view.
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+        else:
+            if comment.author_id != user.id:
+                await _notify(
+                    db,
+                    Notification(
+                        user_id=comment.author_id,
+                        actor_id=user.id,
+                        kind="comment_like",
+                        post_id=comment.post_id,
+                    ),
+                    comment.author_id,
+                )
+            db.commit()
+            db.refresh(comment)
     return serialize_comments(db, [comment], user)[0]
 
 
