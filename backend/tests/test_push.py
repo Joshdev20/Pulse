@@ -419,6 +419,74 @@ def test_schedule_notify_is_a_noop_without_keys(monkeypatch):
     push_module.schedule_notify(1, {"body": "hi"})
 
 
+def test_schedule_notify_does_not_spawn_a_thread_per_notification(vapid, monkeypatch):
+    """A burst must not create one thread per notification.
+
+    Sending on a thread per event is unbounded: a slow push service makes every
+    send outlive its request, so a burst piles up threads — each holding a DB
+    session — until the process hits its memory ceiling. The pool is fixed, so
+    the thread count must stay flat while the sends are in flight.
+    """
+    import threading
+    import time
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_send(db, user_id, payload):
+        started.set()
+        release.wait(timeout=5)
+        return 1
+
+    monkeypatch.setattr(push_module, "notify_user", slow_send)
+    push_module._dispatcher.reset()
+
+    before = threading.active_count()
+    try:
+        for i in range(200):
+            push_module.schedule_notify(i, {"body": "hi"})
+        assert started.wait(timeout=5), "no send ever started"
+        # Give any (buggy) extra threads a moment to appear before counting.
+        time.sleep(0.2)
+        after = threading.active_count()
+    finally:
+        release.set()
+
+    spawned = after - before
+    assert spawned <= push_module.PUSH_WORKERS, (
+        f"{spawned} threads spawned for 200 notifications; "
+        f"the pool should be capped at {push_module.PUSH_WORKERS}"
+    )
+
+
+def test_schedule_notify_drops_when_the_backlog_is_full(vapid, monkeypatch):
+    """A full queue drops the newest event instead of growing without bound."""
+    import threading
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow_send(db, user_id, payload):
+        started.set()
+        release.wait(timeout=5)
+        return 1
+
+    monkeypatch.setattr(push_module, "notify_user", slow_send)
+    push_module._dispatcher.reset()
+
+    try:
+        accepted = sum(
+            push_module._dispatcher.submit(i, {"body": "hi"})
+            for i in range(push_module.PUSH_QUEUE_MAX + push_module.PUSH_WORKERS + 25)
+        )
+        assert push_module._dispatcher.dropped > 0, "the queue grew past its ceiling"
+        # Everything accepted fits in the queue plus what the workers took.
+        assert accepted <= push_module.PUSH_QUEUE_MAX + push_module.PUSH_WORKERS
+    finally:
+        release.set()
+        push_module._dispatcher.reset()
+
+
 def test_notify_user_sends_to_every_device(client, make_user, vapid, monkeypatch):
     headers, user = make_user("ada")
     subscribe(client, headers, "phone")

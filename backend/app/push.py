@@ -19,6 +19,7 @@ or fail to boot if the wheel is missing.
 import json
 import logging
 import threading
+from collections import deque
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -38,6 +39,108 @@ GONE_STATUSES = {404, 410}
 # short because sends happen inline after a commit; a slow push service must not
 # hold a worker or delay the response to the sender.
 PUSH_TIMEOUT_SECONDS = 10.0
+
+# Delivery runs on a small fixed pool of long-lived threads, not one thread per
+# notification. A thread per event is unbounded: a slow or hanging push service
+# makes every send outlive its request, so a burst of notifications — or one
+# account with many devices — piles up threads that each hold a DB session and a
+# stack until the process hits its memory ceiling. A fixed pool caps that, and a
+# bounded queue means the backlog is dropped rather than buffered without limit.
+PUSH_WORKERS = 4
+PUSH_QUEUE_MAX = 64
+
+
+class _PushDispatcher:
+    """A bounded worker pool that delivers pushes off the request path.
+
+    ``schedule_notify`` must return immediately: it is called from ``async``
+    handlers and ``pywebpush`` is synchronous, so an inline send would stall the
+    event loop. That requirement is met by handing the work to one of a small,
+    fixed set of daemon threads started on first use.
+
+    Backpressure is deliberate. When the queue is full the newest event is
+    dropped and counted, because push is a best-effort side channel: the
+    notification itself is already committed and visible in the app, so losing
+    an alert is strictly better than growing memory without bound.
+    """
+
+    def __init__(self, workers: int = PUSH_WORKERS, maxsize: int = PUSH_QUEUE_MAX) -> None:
+        self._workers = workers
+        self._maxsize = maxsize
+        self._queue: deque[tuple[int, dict[str, Any]]] = deque()
+        self._available = threading.Condition()
+        self._started = False
+        self._dropped = 0
+
+    def submit(self, user_id: int, payload: dict[str, Any]) -> bool:
+        """Queue one delivery. Returns False if the backlog is full."""
+        with self._available:
+            self._ensure_started()
+            if len(self._queue) >= self._maxsize:
+                self._dropped += 1
+                if self._dropped % 100 == 1:
+                    logger.warning(
+                        "push backlog full (%d queued); dropped %d alert(s) so far",
+                        self._maxsize,
+                        self._dropped,
+                    )
+                return False
+            self._queue.append((user_id, payload))
+            self._available.notify()
+            return True
+
+    @property
+    def dropped(self) -> int:
+        return self._dropped
+
+    def reset(self) -> None:
+        """Forget the backlog and the drop count. Used by tests.
+
+        The worker threads are left running and blocked on the condition; they
+        are daemons and the next ``submit`` reuses them.
+        """
+        with self._available:
+            self._queue.clear()
+            self._dropped = 0
+
+    def _ensure_started(self) -> None:
+        """Start the pool once. Caller must hold ``_available``."""
+        if self._started:
+            return
+        self._started = True
+        for index in range(self._workers):
+            threading.Thread(
+                target=self._run,
+                name=f"pulse-push-{index}",
+                daemon=True,
+            ).start()
+
+    def _run(self) -> None:
+        while True:
+            with self._available:
+                while not self._queue:
+                    self._available.wait()
+                user_id, payload = self._queue.popleft()
+            # Outside the lock: a send is a network round trip and must not
+            # block other workers from taking the next item off the queue.
+            _deliver(user_id, payload)
+
+
+_dispatcher = _PushDispatcher()
+
+
+def schedule_notify(user_id: int, payload: dict[str, Any]) -> None:
+    """Deliver ``payload`` to ``user_id`` without blocking the event loop.
+
+    ``pywebpush`` uses synchronous ``requests``, so a send costs a few hundred
+    milliseconds. Running it inline inside an ``async`` handler would stall the
+    event loop and every other request with it, so the send is handed to the
+    dispatcher's worker pool. The request returns immediately; the push is
+    best-effort.
+    """
+    if not settings.push_configured:
+        return
+    _dispatcher.submit(user_id, payload)
 
 
 def generate_keys() -> tuple[str, str]:
@@ -136,8 +239,8 @@ def notify_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:
     return delivered
 
 
-def _notify_in_thread(user_id: int, payload: dict[str, Any]) -> None:
-    """Run one push batch on a worker thread with its own session.
+def _deliver(user_id: int, payload: dict[str, Any]) -> None:
+    """Run one push batch on a pool worker with its own session.
 
     A fresh session is required because the caller's is request-scoped and will
     be closed as soon as the response is returned.
@@ -151,24 +254,6 @@ def _notify_in_thread(user_id: int, payload: dict[str, Any]) -> None:
         logger.warning("push to user %s errored: %s", user_id, exc)
     finally:
         db.close()
-
-
-def schedule_notify(user_id: int, payload: dict[str, Any]) -> None:
-    """Deliver ``payload`` to ``user_id`` without blocking the event loop.
-
-    ``pywebpush`` uses synchronous ``requests``, so a send costs a few hundred
-    milliseconds. Running it inline inside an ``async`` handler would stall the
-    event loop and every other request with it, so the send is handed to a
-    worker thread. The request returns immediately; the push is best-effort.
-    """
-    if not settings.push_configured:
-        return
-    threading.Thread(
-        target=_notify_in_thread,
-        args=(user_id, payload),
-        name=f"pulse-push-{user_id}",
-        daemon=True,
-    ).start()
 
 
 def message_payload(db: Session, message, conversation_id: int) -> dict[str, Any]:
