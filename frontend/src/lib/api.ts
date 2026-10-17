@@ -278,11 +278,23 @@ export const api = {
       `/api/conversations/${conversationId}/messages${query({ limit, before_id: beforeId })}`,
     ),
 
-  sendMessage: (conversationId: number, body: string, mediaIds: number[] = []) =>
+  sendMessage: (conversationId: number, body: string, mediaIds: number[] = [], replyToId?: number | null) =>
     request<Message>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ body, media_ids: mediaIds }),
+      body: JSON.stringify({ body, media_ids: mediaIds, reply_to_id: replyToId ?? null }),
     }),
+
+  likeMessage: (conversationId: number, messageId: number) =>
+    request<{ liked_by_me: boolean; like_count: number }>(
+      `/api/conversations/${conversationId}/messages/${messageId}/like`,
+      { method: 'POST' },
+    ),
+
+  unlikeMessage: (conversationId: number, messageId: number) =>
+    request<{ liked_by_me: boolean; like_count: number }>(
+      `/api/conversations/${conversationId}/messages/${messageId}/like`,
+      { method: 'DELETE' },
+    ),
 
   markConversationRead: (conversationId: number) =>
     request<{ unread_count: number }>(`/api/conversations/${conversationId}/read`, {

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
-import { MediaGallery } from '../components/MediaGallery'
 import { MediaPicker } from '../components/MediaPicker'
+import { MessageBubble } from '../components/MessageBubble'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime, Spinner } from '../components/UI'
-import { ChevronLeftIcon, MailIcon, PaperclipIcon, SendIcon } from '../components/Icons'
+import { ChevronLeftIcon, CloseIcon, MailIcon, PaperclipIcon, ReplyIcon, SendIcon } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import { api, ApiError } from '../lib/api'
+import { formatPresence } from '../lib/format'
+import { useNow } from '../lib/useNow'
 import type { Conversation, Media, Message } from '../lib/types'
 
 /** Inbox: every conversation, newest activity first. */
@@ -85,10 +87,22 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
   const [attachments, setAttachments] = useState<Media[]>([])
   const [sending, setSending] = useState(false)
   const [partnerTyping, setPartnerTyping] = useState(false)
+  const [replyTo, setReplyTo] = useState<Message | null>(null)
+  // Live presence for the partner, seeded from the conversation payload and
+  // then updated by `presence` frames without refetching the inbox.
+  const [partner, setPartner] = useState(conversation.partner)
+
+  useEffect(() => {
+    setPartner(conversation.partner)
+  }, [conversation.partner])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const typingTimer = useRef<number | null>(null)
   const lastTypingSent = useRef(0)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  // Presence is shown to the minute, so the header only needs to re-render
+  // about that often rather than on every tick.
+  const now = useNow(30_000)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -107,7 +121,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     onSent()
   }, [conversation.id, load, onSent])
 
-  // Live messages and typing indicators for this thread only.
+  // Live messages, likes and typing indicators for this thread only.
   useEffect(
     () =>
       subscribe((event) => {
@@ -118,6 +132,22 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
               : [...current, event.message!],
           )
           void api.markConversationRead(conversation.id).catch(() => undefined)
+        }
+        if (event.type === 'message_like' && event.conversation_id === conversation.id) {
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === event.message_id
+                ? { ...item, like_count: event.like_count ?? item.like_count }
+                : item,
+            ),
+          )
+        }
+        if (event.type === 'presence' && event.user_id === conversation.partner.id) {
+          setPartner((current) => ({
+            ...current,
+            is_online: event.is_online ?? false,
+            last_seen_at: event.last_seen_at ?? current.last_seen_at,
+          }))
         }
         if (event.type === 'typing' && event.conversation_id === conversation.id) {
           setPartnerTyping(true)
@@ -131,7 +161,43 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
   useEffect(() => {
     const node = scrollRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [messages, partnerTyping])
+  }, [messages, partnerTyping, replyTo])
+
+  function startReply(message: Message) {
+    setReplyTo(message)
+    // Focus the composer so the swipe lands the user where they expect.
+    inputRef.current?.focus()
+  }
+
+  /**
+   * Flip the like on a message, optimistically.
+   *
+   * The server is the authority on the total, so its answer is applied on
+   * success; a failure rolls the bubble back to what it showed before.
+   */
+  async function toggleLike(message: Message) {
+    const next = !message.liked_by_me
+    const optimistic = {
+      ...message,
+      liked_by_me: next,
+      like_count: Math.max(0, message.like_count + (next ? 1 : -1)),
+    }
+    setMessages((current) => current.map((item) => (item.id === message.id ? optimistic : item)))
+    try {
+      const result = next
+        ? await api.likeMessage(conversation.id, message.id)
+        : await api.unlikeMessage(conversation.id, message.id)
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === message.id
+            ? { ...item, liked_by_me: result.liked_by_me, like_count: result.like_count }
+            : item,
+        ),
+      )
+    } catch {
+      setMessages((current) => current.map((item) => (item.id === message.id ? message : item)))
+    }
+  }
 
   function onDraftChange(value: string) {
     setDraft(value)
@@ -155,12 +221,14 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
         conversation.id,
         body,
         attachments.map((item) => item.id),
+        replyTo?.id ?? null,
       )
       setMessages((current) =>
         current.some((item) => item.id === sent.id) ? current : [...current, sent],
       )
       setDraft('')
       setAttachments([])
+      setReplyTo(null)
       onSent()
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Message not sent')
@@ -174,18 +242,23 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
   return (
     <div className="thread">
       <header className="thread-head">
-        <Link to={`/u/${conversation.partner.username}`} className="thread-partner">
-          <Avatar
-            name={conversation.partner.display_name}
-            color={conversation.partner.avatar_color}
-            url={conversation.partner.avatar_url}
-            size="md"
-          />
+        <Link to={`/u/${partner.username}`} className="thread-partner">
+          <span className="thread-avatar">
+            <Avatar
+              name={partner.display_name}
+              color={partner.avatar_color}
+              url={partner.avatar_url}
+              size="md"
+            />
+            {partner.is_online && <span className="presence-dot" aria-hidden="true" />}
+          </span>
           <div>
             <div className="thread-name">
-              <DisplayName user={conversation.partner} />
+              <DisplayName user={partner} />
             </div>
-            <div className="thread-handle">@{conversation.partner.username}</div>
+            <div className={`thread-handle${partner.is_online ? ' online' : ''}`}>
+              {formatPresence(partner.last_seen_at, partner.is_online, now)}
+            </div>
           </div>
         </Link>
       </header>
@@ -202,21 +275,12 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
         )}
 
         {messages.map((message) => (
-          <div key={message.id} className={`bubble-row${message.mine ? ' mine' : ''}`}>
-            {!message.mine && (
-              <Avatar
-                name={message.sender.display_name}
-                color={message.sender.avatar_color}
-                url={message.sender.avatar_url}
-                size="sm"
-              />
-            )}
-            <div className={`bubble${message.mine ? ' mine' : ''}`}>
-              {message.body && <p>{message.body}</p>}
-              <MediaGallery items={message.media} />
-              <RelativeTime iso={message.created_at} className="bubble-time" />
-            </div>
-          </div>
+          <MessageBubble
+            key={message.id}
+            message={message}
+            onReply={startReply}
+            onToggleLike={toggleLike}
+          />
         ))}
 
         {partnerTyping && (
@@ -232,9 +296,30 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
 
       {error && messages.length > 0 && <p className="thread-error">{error}</p>}
 
+      {replyTo && (
+        <div className="reply-preview">
+          <ReplyIcon size={15} />
+          <div className="reply-preview-body">
+            <span className="reply-preview-name">{replyTo.sender.display_name}</span>
+            <span className="reply-preview-text">
+              {replyTo.body || (replyTo.media.length > 0 ? 'Attachment' : '')}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Cancel reply"
+            onClick={() => setReplyTo(null)}
+          >
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      )}
+
       <form className="composer-inline thread-composer" onSubmit={submit}>
         <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} />
         <textarea
+          ref={inputRef}
           className="input thread-input"
           placeholder={`Message @${conversation.partner.username}`}
           value={draft}

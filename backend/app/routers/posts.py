@@ -91,20 +91,11 @@ async def _notify(db: DbSession, notification: Notification, recipient_id: int) 
     """Persist a notification and push it to the recipient if they are online."""
     db.add(notification)
     db.flush()
-    await manager.publish(
-        recipient_id,
-        {
-            "type": "notification",
-            "notification": {
-                "id": notification.id,
-                "kind": notification.kind,
-                "read": False,
-                "created_at": notification.created_at or utcnow(),
-                "post_id": notification.post_id,
-                "actor_id": notification.actor_id,
-            },
-        },
-    )
+    # Local import: `notifications` imports from `deps`, which would otherwise
+    # make this a cycle at module import time.
+    from .notifications import notification_event
+
+    await manager.publish(recipient_id, notification_event(db, notification))
 
 
 def _paginate(db: DbSession, query, page: int, page_size: int, viewer: User | None) -> Page:

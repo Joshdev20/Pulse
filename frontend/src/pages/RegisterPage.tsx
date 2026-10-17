@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { SparkIcon } from '../components/Icons'
+import { SparkIcon, EyeIcon, EyeOffIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 
 export function RegisterPage() {
@@ -10,6 +10,7 @@ export function RegisterPage() {
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [reveal, setReveal] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -134,15 +135,27 @@ export function RegisterPage() {
 
             <div className="field">
               <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                value={password}
-                required
-                autoComplete="new-password"
-                onChange={(event) => setPassword(event.target.value)}
-              />
+              <div className="input-affix">
+                <input
+                  id="password"
+                  className="input"
+                  type={reveal ? 'text' : 'password'}
+                  value={password}
+                  required
+                  autoComplete="new-password"
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="input-affix-btn"
+                  onClick={() => setReveal((value) => !value)}
+                  aria-label={reveal ? 'Hide password' : 'Show password'}
+                  aria-pressed={reveal}
+                  title={reveal ? 'Hide password' : 'Show password'}
+                >
+                  {reveal ? <EyeOffIcon size={17} /> : <EyeIcon size={17} />}
+                </button>
+              </div>
               <span className="field-hint">At least 8 characters.</span>
             </div>
 

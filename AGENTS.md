@@ -34,7 +34,7 @@ The venv has **no pip**; use `uv`:
 uv pip install -r requirements.txt        # or: uv pip install redis
 .venv/bin/python -m app.seed --reset      # rebuild pulse.db with demo data
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-.venv/bin/python -m pytest -q             # 181 tests
+.venv/bin/python -m pytest -q             # 234 tests
 ```
 
 ### Frontend (run from `frontend/`)
@@ -76,6 +76,10 @@ the public URL returns 502 until the dev server is bound to 12000.
   Both ignore stale responses, so prefer them over hand-rolled `useEffect` fetches.
 - Optimistic updates are the norm for likes and follows: update local state first, then
   reconcile with the server response and roll back on error.
+- The theme lives in a module-level store in `lib/useTheme.ts` read through
+  `useSyncExternalStore`, not in component state. The switch is rendered in more than one
+  place (sidebar and Settings), and a `useState` per component let the two drift: flipping
+  one left the other showing the old icon. Keep writes going through `setTheme`.
 - Every list view needs a loading state (`FeedSkeleton`), an empty state (`EmptyState`),
   and an error state (`ErrorState`) from `components/UI.tsx`.
 - Style with existing classes in `styles.css` and the CSS custom properties at the top of
@@ -107,6 +111,23 @@ the public URL returns 502 until the dev server is bound to 12000.
   default pool (5 + 10 overflow) and every HTTP request then blocks on `pool_timeout` (~30s).
   That is what made the whole app hang on its loading spinner, so the page title stayed at
   the base `Pulse`. `tests/test_realtime_pool.py` guards this with a deliberately tiny pool.
+- Presence is a *transition*, not a per-socket fact. `routers/realtime.py` announces it only
+  when the first socket for a user connects and the last one disconnects, so a second tab
+  does not flicker the status. It fans out to conversation partners only (`_announce_presence`
+  resolves the peer ids), because presence is rendered in a thread header and broadcasting it
+  to every socket would leak who is online to strangers.
+- A socket's `onclose` must ignore a socket that is no longer the current one
+  (`if (socketRef.current !== socket) return`). React StrictMode mounts the effect twice in
+  development, so the first socket is orphaned; letting its late close clear the ref and
+  schedule a reconnect leaves two live authenticated sockets, and every event arrives twice.
+- Presence on a *user* payload is opt-in (`with_presence=True` on `serialize_user` /
+  `serialize_users`), and only the conversation partner payload passes it. Leaving it on by
+  default would publish `is_online`/`last_seen_at` through search, follower lists and post
+  authors, which is a different disclosure from the thread header that needs it.
+- The notification frame carries a small `actor` summary (`notification_event` in
+  `routers/notifications.py`) so a backgrounded tab can name who acted without a fetch. Both
+  `posts._notify` and `users.follow_user` publish through it — keep the two in step rather
+  than re-inlining the payload.
 
 ## Gotchas
 

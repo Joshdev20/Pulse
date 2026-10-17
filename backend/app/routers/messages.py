@@ -1,23 +1,115 @@
 """Direct messages: conversations, message history and read state."""
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from ..deps import CurrentUser, DbSession, serialize_media, serialize_user, serialize_users
-from ..models import Conversation, ConversationParticipant, Media, Message, User, utcnow
+from ..deps import (
+    CurrentUser,
+    DbSession,
+    serialize_media,
+    serialize_user,
+    serialize_users,
+)
+from ..models import (
+    Conversation,
+    ConversationParticipant,
+    Media,
+    Message,
+    MessageLike,
+    User,
+    utcnow,
+)
 from ..realtime import manager
-from ..schemas import ConversationOut, ConversationStart, MessageCreate, MessageOut
+from ..schemas import (
+    ConversationOut,
+    ConversationStart,
+    MessageCreate,
+    MessageOut,
+    MessageQuote,
+)
 
 router = APIRouter(prefix="/api/conversations", tags=["messages"])
 
 MAX_PAGE_SIZE = 100
 
 
+def _quotes_for(db: Session, messages: list[Message]) -> dict[int, MessageQuote]:
+    """Resolve the messages that these messages reply to, in two queries.
+
+    Returned as a map from the *quoting* message id to its quote, so the caller
+    does not have to walk the relationship (which would be one query per reply).
+    A reply whose target no longer exists is simply absent from the map and
+    serializes without a quote rather than failing.
+    """
+    target_ids = {m.reply_to_id for m in messages if m.reply_to_id is not None}
+    if not target_ids:
+        return {}
+
+    targets = list(db.scalars(select(Message).where(Message.id.in_(target_ids))).all())
+    if not targets:
+        return {}
+
+    senders = {
+        user.id: user
+        for user in db.scalars(
+            select(User).where(User.id.in_({t.sender_id for t in targets}))
+        ).all()
+    }
+
+    by_id = {t.id: t for t in targets}
+    quotes: dict[int, MessageQuote] = {}
+    for message in messages:
+        if message.reply_to_id is None:
+            continue
+        target = by_id.get(message.reply_to_id)
+        if target is None:
+            continue
+        sender = senders.get(target.sender_id)
+        quotes[message.id] = MessageQuote(
+            id=target.id,
+            body=target.body,
+            sender_username=sender.username if sender else "",
+            sender_display_name=sender.display_name if sender else "",
+            has_media=bool(target.media),
+        )
+    return quotes
+
+
+def _like_state(
+    db: Session, messages: list[Message], viewer: User | None
+) -> tuple[dict[int, int], set[int]]:
+    """Batch the like totals and the viewer's own likes for a set of messages."""
+    if not messages:
+        return {}, set()
+    ids = [m.id for m in messages]
+    counts = dict(
+        db.execute(
+            select(MessageLike.message_id, func.count(MessageLike.id))
+            .where(MessageLike.message_id.in_(ids))
+            .group_by(MessageLike.message_id)
+        ).all()
+    )
+    mine: set[int] = set()
+    if viewer is not None:
+        mine = {
+            row[0]
+            for row in db.execute(
+                select(MessageLike.message_id).where(
+                    MessageLike.user_id == viewer.id, MessageLike.message_id.in_(ids)
+                )
+            ).all()
+        }
+    return counts, mine
+
+
 def serialize_messages(db: Session, messages: list[Message], viewer: User | None) -> list[MessageOut]:
     if not messages:
         return []
     authors = serialize_users(db, [m.sender for m in messages], viewer)
+    quotes = _quotes_for(db, messages)
+    like_counts, liked_ids = _like_state(db, messages, viewer)
     return [
         MessageOut(
             id=m.id,
@@ -27,6 +119,9 @@ def serialize_messages(db: Session, messages: list[Message], viewer: User | None
             sender=authors[m.sender_id],
             media=serialize_media(m.media),
             mine=viewer is not None and m.sender_id == viewer.id,
+            reply_to=quotes.get(m.id),
+            like_count=like_counts.get(m.id, 0),
+            liked_by_me=m.id in liked_ids,
         )
         for m in messages
     ]
@@ -82,7 +177,9 @@ def _summarize(db: Session, user: User) -> list[ConversationOut]:
 
     # The partner profiles carry follower and post counts, so serialize them in
     # one batch rather than relying on the per-user counts on UserPublic.
-    serialized_partners = serialize_users(db, [row[1] for row in rows], user)
+    serialized_partners = serialize_users(
+        db, [row[1] for row in rows], user, with_presence=True
+    )
     senders = serialize_users(db, [row[2].sender for row in rows if row[2] is not None], user)
 
     out: list[ConversationOut] = []
@@ -206,7 +303,7 @@ def start_conversation(
         id=existing.id,
         created_at=existing.created_at,
         last_message_at=existing.last_message_at,
-        partner=serialize_user(db, partner, user),
+        partner=serialize_user(db, partner, user, with_presence=True),
         last_message=None,
         unread_count=0,
     )
@@ -248,7 +345,14 @@ async def send_message(
     if not body and not attachments:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Message cannot be empty")
 
-    message = Message(conversation_id=conversation_id, sender_id=user.id, body=body)
+    reply_to_id = _validate_reply_target(db, conversation_id, payload.reply_to_id)
+
+    message = Message(
+        conversation_id=conversation_id,
+        sender_id=user.id,
+        body=body,
+        reply_to_id=reply_to_id,
+    )
     db.add(message)
     db.flush()
     for item in attachments:
@@ -286,6 +390,23 @@ async def send_message(
     return serialized
 
 
+def _validate_reply_target(
+    db: Session, conversation_id: int, reply_to_id: int | None
+) -> int | None:
+    """Check a swipe-to-reply target, returning the id to store or None.
+
+    The target must be a message in *this* conversation. Without that check a
+    client could quote a message from a thread it is not in and have the quote
+    echoed back to participants here, which would leak another conversation.
+    """
+    if reply_to_id is None:
+        return None
+    target = db.get(Message, reply_to_id)
+    if target is None or target.conversation_id != conversation_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot reply to that message")
+    return reply_to_id
+
+
 def _claim_media(db: Session, media_ids: list[int], user: User) -> list[Media]:
     """Attach the caller's own unlinked uploads, refusing anything else."""
     if not media_ids:
@@ -320,3 +441,85 @@ async def typing(conversation_id: int, db: DbSession, user: CurrentUser) -> dict
         {"type": "typing", "conversation_id": conversation_id, "user_id": user.id},
     )
     return {"ok": True}
+
+
+def _require_message(db: Session, conversation_id: int, message_id: int, user: User) -> Message:
+    """Fetch a message in a thread the caller belongs to, or raise 404."""
+    _require_participant(db, conversation_id, user)
+    message = db.get(Message, message_id)
+    if message is None or message.conversation_id != conversation_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+    return message
+
+
+@router.post("/{conversation_id}/messages/{message_id}/like")
+async def like_message(
+    conversation_id: int, message_id: int, db: DbSession, user: CurrentUser
+) -> dict[str, int | bool]:
+    """Double-tap a message: like it, or leave the existing like alone.
+
+    Idempotent. A double-tap that races itself would otherwise hit the unique
+    constraint on the second insert; the caller's intent is already satisfied,
+    so that is treated as success rather than a 500.
+    """
+    message = _require_message(db, conversation_id, message_id, user)
+    already = db.scalar(
+        select(MessageLike.id).where(
+            MessageLike.user_id == user.id, MessageLike.message_id == message_id
+        )
+    )
+    if already is None:
+        db.add(MessageLike(user_id=user.id, message_id=message_id))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+    count = db.scalar(
+        select(func.count(MessageLike.id)).where(MessageLike.message_id == message_id)
+    )
+    await _broadcast_message_like(db, message, count or 0)
+    return {"liked_by_me": True, "like_count": count or 0}
+
+
+@router.delete("/{conversation_id}/messages/{message_id}/like")
+async def unlike_message(
+    conversation_id: int, message_id: int, db: DbSession, user: CurrentUser
+) -> dict[str, int | bool]:
+    """Undo a like. Idempotent: removing a like that is not there is fine."""
+    message = _require_message(db, conversation_id, message_id, user)
+    db.execute(
+        delete(MessageLike).where(
+            MessageLike.user_id == user.id, MessageLike.message_id == message_id
+        )
+    )
+    db.commit()
+    count = db.scalar(
+        select(func.count(MessageLike.id)).where(MessageLike.message_id == message_id)
+    )
+    await _broadcast_message_like(db, message, count or 0)
+    return {"liked_by_me": False, "like_count": count or 0}
+
+
+async def _broadcast_message_like(db: Session, message: Message, count: int) -> None:
+    """Tell both participants the new like total for a message.
+
+    Sent as its own frame rather than a whole message: the recipient may not
+    have the message loaded, and re-sending it would fight with the client's
+    list. ``liked_by_me`` is per-recipient, so it is derived on the client from
+    its own optimistic state.
+    """
+    participant_ids = set(
+        db.scalars(
+            select(ConversationParticipant.user_id).where(
+                ConversationParticipant.conversation_id == message.conversation_id
+            )
+        ).all()
+    )
+    payload = {
+        "type": "message_like",
+        "conversation_id": message.conversation_id,
+        "message_id": message.id,
+        "like_count": count,
+    }
+    for participant_id in participant_ids:
+        await manager.publish(participant_id, payload)

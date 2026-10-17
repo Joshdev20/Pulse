@@ -73,6 +73,7 @@ def test_ensure_schema_adds_the_admin_columns(legacy_engine):
         "verified_at",
         "avatar_media_id",
         "cover_media_id",
+        "last_seen_at",
     }
     assert not expected & before
 
@@ -163,6 +164,39 @@ def test_ensure_schema_adds_blob_to_an_existing_media_table(legacy_engine):
     with _session_for(legacy_engine)() as session:
         blob = session.execute(text("SELECT blob FROM media WHERE id = 1")).scalar()
     assert blob is None
+
+
+def test_ensure_schema_adds_reply_to_id_to_an_existing_messages_table(legacy_engine):
+    """An older database gains `messages.reply_to_id`, so replies work.
+
+    Nullable: every message written before the upgrade stays a plain message
+    rather than being read as a reply to message 0.
+    """
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE messages ("
+                "id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, "
+                "sender_id INTEGER NOT NULL, body TEXT NOT NULL DEFAULT '', "
+                "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO messages (id, conversation_id, sender_id, body) "
+                "VALUES (1, 1, 1, 'an original')"
+            )
+        )
+    assert "reply_to_id" not in {
+        column["name"] for column in inspect(legacy_engine).get_columns("messages")
+    }
+
+    applied = ensure_schema(legacy_engine)
+    assert "messages.reply_to_id" in applied
+
+    with _session_for(legacy_engine)() as session:
+        row = session.execute(text("SELECT reply_to_id FROM messages WHERE id = 1")).one()
+    assert row[0] is None
 
 
 def test_ensure_schema_is_idempotent(legacy_engine):

@@ -352,20 +352,10 @@ async def follow_user(username: str, db: DbSession, user: CurrentUser) -> UserPu
         except IntegrityError:
             db.rollback()
         else:
-            await manager.publish(
-                target.id,
-                {
-                    "type": "notification",
-                    "notification": {
-                        "id": notification.id,
-                        "kind": "follow",
-                        "read": False,
-                        "created_at": notification.created_at,
-                        "post_id": None,
-                        "actor_id": user.id,
-                    },
-                },
-            )
+            # Local import avoids a cycle: `notifications` imports from `deps`.
+            from .notifications import notification_event
+
+            await manager.publish(target.id, notification_event(db, notification))
             db.commit()
             db.refresh(target)
             invalidate_user_reads()

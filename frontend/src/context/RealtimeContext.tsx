@@ -3,12 +3,29 @@ import type { ReactNode } from 'react'
 import { api, getToken } from '../lib/api'
 import type { Conversation, Message, RealtimeNotification } from '../lib/types'
 
+/** The actor behind a notification, enough to render a popup without a fetch. */
+export interface NotificationActor {
+  id: number
+  username: string
+  display_name: string
+  avatar_color: string
+  avatar_url: string | null
+}
+
 export interface RealtimeEvent {
-  type: 'notification' | 'message' | 'typing' | 'ready' | 'pong'
+  type: 'notification' | 'message' | 'message_like' | 'typing' | 'presence' | 'ready' | 'pong'
   notification?: RealtimeNotification
+  /** Present on `notification` frames so a popup can name who acted. */
+  actor?: NotificationActor | null
   message?: Message
   conversation_id?: number
   user_id?: number
+  /** Present on `message_like` frames. */
+  message_id?: number
+  like_count?: number
+  /** Present on `presence` frames: a partner came online or went offline. */
+  is_online?: boolean
+  last_seen_at?: string | null
 }
 
 type Listener = (event: RealtimeEvent) => void
@@ -110,6 +127,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }
 
       socket.onclose = () => {
+        // A socket that is no longer the current one is a leftover from a
+        // remount (React StrictMode mounts effects twice in development). Its
+        // close must not clear the live socket's ref, report a disconnect or
+        // schedule a reconnect, or the app ends up with two authenticated
+        // sockets and every event arrives twice.
+        if (socketRef.current !== socket) return
         setConnected(false)
         socketRef.current = null
         if (!closedByUs.current) scheduleReconnect()

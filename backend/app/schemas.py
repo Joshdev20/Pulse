@@ -73,6 +73,14 @@ class UserPublic(BaseModel):
     # Lets the client show the moderation entry point only to moderators.
     is_admin: bool = False
     is_verified: bool = False
+    # For the "last seen" line in a direct-message thread. Null when the account
+    # has never been active since tracking was added. Always emitted for the
+    # partner; the thread header decides whether to show it.
+    last_seen_at: UTCDatetime | None = None
+    # Whether the account holds an open realtime socket right now. Computed per
+    # response from the connection manager, so it is "online now", not "online
+    # at the last request".
+    is_online: bool = False
 
 
 class Token(BaseModel):
@@ -186,6 +194,23 @@ PostOut.model_rebuild()
 class MessageCreate(BaseModel):
     body: str = Field(default="", max_length=4000)
     media_ids: list[int] = Field(default_factory=list, max_length=4)
+    # Set by a swipe-to-reply. Must reference another message in the same
+    # conversation; the route rejects anything else rather than trusting it.
+    reply_to_id: int | None = None
+
+
+class MessageQuote(BaseModel):
+    """A compact view of the message a reply points at.
+
+    Deliberately not a full ``MessageOut``: this is rendered as one line above
+    the reply, so it carries only what that line shows and cannot recurse.
+    """
+
+    id: int
+    body: str
+    sender_username: str
+    sender_display_name: str
+    has_media: bool = False
 
 
 class MessageOut(BaseModel):
@@ -198,6 +223,10 @@ class MessageOut(BaseModel):
     sender: UserPublic
     media: list[MediaOut] = []
     mine: bool = False
+    # The quoted message, when this is a reply and the target still exists.
+    reply_to: MessageQuote | None = None
+    like_count: int = 0
+    liked_by_me: bool = False
 
 
 class ConversationOut(BaseModel):

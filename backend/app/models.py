@@ -61,6 +61,11 @@ class User(Base):
     # A staff-granted badge that distinguishes official accounts in the UI.
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last time this account was seen, used for the "last seen" line in a
+    # direct-message thread. Touched on authenticated requests (throttled) and
+    # stamped exactly when a realtime socket closes. Nullable: an account that
+    # has never been active has no answer, which is not the same as "long ago".
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     posts: Mapped[list["Post"]] = relationship(
@@ -300,16 +305,51 @@ class Message(Base):
     )
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     body: Mapped[str] = mapped_column(Text, default="")
+    # Set when this message answers another one in the same thread (swipe-to-
+    # reply). SET NULL rather than CASCADE: deleting the quoted message should
+    # leave the reply standing with its quote cleared, not delete a branch of
+    # the thread. (A legacy database gains the column without the constraint via
+    # ALTER TABLE, and the serializer tolerates a target that is gone.)
+    reply_to_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     sender: Mapped[User] = relationship()
+    # The message this one quotes. `remote_side` marks the many-to-one direction
+    # so SQLAlchemy does not read it as a self-referential one-to-many.
+    reply_to: Mapped["Message | None"] = relationship(
+        remote_side=[id], foreign_keys=[reply_to_id]
+    )
     media: Mapped[list[Media]] = relationship(
         primaryjoin="Media.message_id == Message.id",
         foreign_keys="Media.message_id",
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+
+
+class MessageLike(Base):
+    """A double-tap like on a direct message.
+
+    Mirrors ``Like`` on posts, including the unique constraint: the pair is the
+    identity, so a repeated tap cannot create a second row and the endpoints can
+    treat a lost race as success rather than a 500.
+    """
+
+    __tablename__ = "message_likes"
+    __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_message_like_pair"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship()
+    message: Mapped["Message"] = relationship()
 
 
 class PasswordReset(Base):
