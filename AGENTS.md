@@ -485,3 +485,5 @@ the public URL returns 502 until the dev server is bound to 12000.
   disk and answer 404 forever; on this deployment that is a normal response, not a
   bug. The gallery says "Image unavailable"/"Video unavailable" for a failed download
   rather than leaving an empty frame.
+- The account switcher's "switch back" path is covered by `.agent_tmp/switch_back.js`; the earlier harness only ever switched once.
+- The Render free tier intermittently answers 502 during a deploy window (health check times out, alert email follows) and recovers on its own. `render.yaml` sets `healthCheckPath: /api/health`. Verify a suspected app failure with a timed request before blaming the code: a real CPU stall shows up as a slow request, an infra flap does not.
