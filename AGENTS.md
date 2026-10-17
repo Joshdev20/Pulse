@@ -366,6 +366,22 @@ the public URL returns 502 until the dev server is bound to 12000.
   an existing media row loads with a null `blob` until the startup backfill or a re-upload
   fills it. `media.blob` is declared `BYTEA NULL`, which SQLite accepts as a column type
   name even though it stores it as ordinary BLOB affinity.
+- A VAPID public key must be the 65-byte uncompressed EC point (`0x04 || x || y`), not the
+  64-byte `x || y` form. `PushManager.subscribe` rejects the short form with
+  `InvalidAccessError`, which reaches the user as a toggle that flips on and silently fails.
+  `config.valid_vapid_public_key` checks the shape and `push_configured` reports push as
+  unavailable when it is wrong, so a bad key is a configuration error rather than a runtime
+  one. A key pair also cannot be rotated without invalidating every stored subscription,
+  since each browser subscribed against the old public key.
+- Web Push must not be sent inline in an `async` handler. `pywebpush` is synchronous
+  `requests`, so a send blocks for a full push-service round trip and stalls the event loop
+  for every other request (measured at 279 ms on a like). `push.schedule_notify` hands the
+  send to a worker thread that opens its own `SessionLocal`; the request's session is closed
+  as soon as the response returns. Push is best-effort and must never fail the request that
+  triggered it.
+- `frontend/public/` is served verbatim and is not bundled, so `sw.js` is plain JavaScript
+  and cannot import from `src/`. Check the file mode when adding to it: it was committed
+  `600` once, which would not be served.
 
 ## Feed ordering and rate-limit budgets
 
