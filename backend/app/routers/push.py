@@ -127,21 +127,3 @@ def unsubscribe(payload: PushUnsubscribe, db: DbSession, user: CurrentUser) -> d
         db.scalars(select(PushSubscription.id).where(PushSubscription.user_id == user.id)).all()
     )
     return {"devices": devices}
-
-
-def _main() -> None:  # pragma: no cover - developer utility
-    """Print a fresh VAPID key pair for the environment.
-
-    Run with ``python -m app.push``. The private key is a deployment secret:
-    changing it invalidates every subscription already stored, because the
-    browser subscribed against the old public key.
-    """
-    from ..push import generate_keys
-
-    private, public = generate_keys()
-    print(f"VAPID_PRIVATE_KEY={private}")
-    print(f"VAPID_PUBLIC_KEY={public}")
-
-
-if __name__ == "__main__":  # pragma: no cover - developer utility
-    _main()

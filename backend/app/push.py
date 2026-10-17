@@ -214,3 +214,19 @@ def notification_payload(event: dict[str, Any], text: str, url: str) -> dict[str
         "url": url,
         "notification_id": notification.get("id"),
     }
+
+
+def _main() -> None:  # pragma: no cover - developer utility
+    """Print a fresh VAPID key pair for the environment.
+
+    Run with ``python -m app.push``. The private key is a deployment secret:
+    changing it invalidates every subscription already stored, because the
+    browser subscribed against the old public key.
+    """
+    private, public = generate_keys()
+    print(f"VAPID_PRIVATE_KEY={private}")
+    print(f"VAPID_PUBLIC_KEY={public}")
+
+
+if __name__ == "__main__":  # pragma: no cover - developer utility
+    _main()
