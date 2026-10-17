@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { CloseIcon, UploadIcon } from './Icons'
+import { CloseIcon, MicIcon, UploadIcon } from './Icons'
 import { Spinner } from './UI'
 import { api, ApiError } from '../lib/api'
 import { useMediaUrl } from '../lib/useMediaUrl'
@@ -14,6 +14,10 @@ function Thumb({ item, onRemove }: { item: Media; onRemove: () => void }) {
     <div className="media-thumb">
       {item.kind === 'image' ? (
         <img src={asset?.url} alt={item.alt_text} />
+      ) : item.kind === 'audio' ? (
+        <span className="media-thumb-file">
+          <MicIcon size={14} />
+        </span>
       ) : (
         <span className="media-thumb-file">{item.content_type.split('/')[1]}</span>
       )}
@@ -84,7 +88,7 @@ export function MediaPicker({
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf"
+        accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/ogg,audio/wav,audio/mpeg,audio/mp4,audio/webm,application/pdf"
         multiple
         hidden
         onChange={(event) => void handleFiles(event.target.files)}

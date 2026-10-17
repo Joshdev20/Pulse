@@ -32,7 +32,11 @@ export interface Tag {
 
 export interface Media {
   id: number
-  kind: 'image' | 'video' | 'application'
+  /**
+   * `audio` is a voice note. It is stored in the same table as images and video
+   * and is told apart by content sniffing, not by the upload's declared type.
+   */
+  kind: 'image' | 'video' | 'audio' | 'application'
   content_type: string
   size_bytes: number
   width: number | null

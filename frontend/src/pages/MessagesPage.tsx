@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
 import { MediaPicker } from '../components/MediaPicker'
+import { VoiceRecorderButton, voiceNoteFilename } from '../components/VoiceRecorderButton'
 import { MessageBubble } from '../components/MessageBubble'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime, Spinner } from '../components/UI'
 import { ChevronLeftIcon, CloseIcon, MailIcon, PaperclipIcon, ReplyIcon, SendIcon } from '../components/Icons'
@@ -9,6 +10,7 @@ import { useRealtime } from '../context/RealtimeContext'
 import { api, ApiError } from '../lib/api'
 import { formatPresence } from '../lib/format'
 import { useNow } from '../lib/useNow'
+import type { VoiceNote } from '../lib/useVoiceRecorder'
 import type { Conversation, Media, Message } from '../lib/types'
 
 /** Inbox: every conversation, newest activity first. */
@@ -239,6 +241,41 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
 
   const canSend = (draft.trim().length > 0 || attachments.length > 0) && !sending
 
+  /**
+   * Upload a finished recording and send it as the next message.
+   *
+   * The clip is uploaded first and then referenced by id, which is the same
+   * path an attached file takes, so a voice note needs no separate storage or
+   * delivery route.
+   */
+  async function sendVoiceNote(note: VoiceNote) {
+    if (sending) return
+    setSending(true)
+    setError(null)
+    try {
+      // A `File` rather than the raw blob: the upload path names the part from
+      // it, and the server sniffs the bytes, so the name only has to carry the
+      // right container.
+      const file = new File([note.blob], voiceNoteFilename(note), { type: note.mimeType })
+      const media = await api.upload(file, 'Voice note')
+      const sent = await api.sendMessage(
+        conversation.id,
+        '',
+        [media.id],
+        replyTo?.id ?? null,
+      )
+      setMessages((current) =>
+        current.some((item) => item.id === sent.id) ? current : [...current, sent],
+      )
+      setReplyTo(null)
+      onSent()
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Voice note not sent')
+    } finally {
+      setSending(false)
+    }
+  }
+
   return (
     <div className="thread">
       <header className="thread-head">
@@ -318,6 +355,11 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
 
       <form className="composer-inline thread-composer" onSubmit={submit}>
         <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} />
+        <VoiceRecorderButton
+          disabled={sending}
+          onRecorded={sendVoiceNote}
+          onError={setError}
+        />
         <textarea
           ref={inputRef}
           className="input thread-input"

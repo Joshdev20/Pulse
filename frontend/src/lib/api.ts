@@ -88,7 +88,9 @@ function htmlFallbackMessage(subject: string): string {
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   const token = getToken()
-  if (token) headers.set('Authorization', `Bearer ${token}`)
+  // An explicit Authorization header wins: it is how a caller checks a token
+  // that is not the one currently in the shared slot.
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
   if (options.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
@@ -145,6 +147,15 @@ export const api = {
     }),
 
   me: () => request<User>('/api/auth/me'),
+
+  /**
+   * Identify the owner of `token` without touching the shared token slot.
+   *
+   * Used by the account switcher to verify a saved session before adopting it,
+   * so a rejected token cannot disturb the account currently in use.
+   */
+  meWithToken: (token: string) =>
+    request<User>('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } }),
 
   forgotPassword: (email: string) =>
     request<{ detail: string; reset_token: string | null; reset_url: string | null }>(

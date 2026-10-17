@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { DownloadIcon, FileIcon, PlayIcon } from './Icons'
+import { VoiceNotePlayer } from './VoiceNotePlayer'
 import { useMediaStatus, useMediaUrl } from '../lib/useMediaUrl'
 import { primeMedia } from '../lib/mediaCache'
 import { useMediaReady } from '../lib/useMediaReady'
@@ -201,11 +202,20 @@ export function MediaGallery({ items }: { items: Media[] }) {
 
   if (!items || items.length === 0) return null
 
-  const visuals = items.filter((item) => item.kind !== 'application')
+  const voices = items.filter((item) => item.kind === 'audio')
+  const visuals = items.filter((item) => item.kind !== 'application' && item.kind !== 'audio')
   const files = items.filter((item) => item.kind === 'application')
 
   return (
     <>
+      {voices.length > 0 && (
+        <div className="voice-notes">
+          {voices.map((item) => (
+            <VoiceNotePlayer key={item.id} item={item} />
+          ))}
+        </div>
+      )}
+
       {visuals.length > 0 && (
         <div className={`media-grid media-count-${Math.min(visuals.length, 4)}`}>
           {visuals.map((item) => (

@@ -36,11 +36,11 @@ async def upload(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file")
 
     try:
-        sniffed = storage.sniff(data[:64])
+        sniffed = storage.sniff(data[: storage.SNIFF_BYTES])
     except storage.UnsupportedMedia:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            "Unsupported file type. Allowed: JPEG, PNG, GIF, WebP, MP4, WebM, PDF",
+            f"Unsupported file type. Allowed: {storage.allowed_types_label()}",
         ) from None
 
     if len(data) > storage.max_bytes_for(sniffed.kind):
