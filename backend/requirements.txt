@@ -9,3 +9,7 @@ email-validator==2.2.0
 httpx==0.28.1
 pytest==8.3.4
 redis==8.1.0
+
+# Web Push. Only needed to exercise the push send path; the server imports it
+# lazily, so tests that do not touch push run without it.
+pywebpush==2.0.3

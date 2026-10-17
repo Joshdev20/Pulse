@@ -115,6 +115,25 @@ export interface RealtimeNotification {
   created_at: string
   post_id: number | null
   actor_id: number | null
+  /**
+   * The finished sentence, e.g. "Ada liked your post". Computed by the server
+   * so the realtime frame and the Web Push payload read identically and the
+   * client does not carry a second copy of the mapping.
+   */
+  text?: string | null
+}
+
+/** Whether the server can Web Push, its public key, and this user's devices. */
+export interface PushStatus {
+  enabled: boolean
+  public_key: string | null
+  devices: number
+}
+
+/** A browser push endpoint and its keys, as produced by `subscription.toJSON()`. */
+export interface PushSubscriptionBody {
+  endpoint: string
+  keys: { p256dh: string; auth: string }
 }
 
 export interface Notification {

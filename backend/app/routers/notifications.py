@@ -4,11 +4,54 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from .. import push
 from ..deps import CurrentUser, DbSession, avatar_url_for, serialize_users
 from ..models import Notification, User, utcnow
 from ..schemas import NotificationOut
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
+
+
+def push_notification(recipient_id: int, event: dict) -> None:
+    """Send a Web Push for a notification event, if the recipient has devices.
+
+    Shared by every path that creates a notification, so a new kind of
+    notification cannot reach the socket and forget the push. Best-effort by
+    design: the notification is already committed, and a push service that is
+    slow or unreachable must not fail the request that created it.
+
+    The send happens on a worker thread (``push.schedule_notify``) because the
+    calling handlers are ``async`` and ``pywebpush`` is synchronous.
+    """
+    text = notification_text(event)
+    if text is None:
+        return
+    url = notification_url(event["notification"])
+    push.schedule_notify(recipient_id, push.notification_payload(event, text, url))
+
+
+def notification_text(event: dict) -> str | None:
+    """The human sentence for a notification frame, or None if it is not shown.
+
+    Computed on the server because a service worker has no session and cannot
+    look the actor up: the push payload must carry finished text. The realtime
+    frame reuses this same string so the two transports cannot drift apart.
+    """
+    kind = (event.get("notification") or {}).get("kind")
+    actor = event.get("actor") or {}
+    name = actor.get("display_name") or "Someone"
+    return {
+        "like": f"{name} liked your post",
+        "comment": f"{name} replied to your post",
+        "follow": f"{name} started following you",
+        "repost": f"{name} reposted your post",
+    }.get(kind)
+
+
+def notification_url(notification: dict) -> str:
+    """Where clicking an alert for this notification should go."""
+    post_id = notification.get("post_id")
+    return f"/p/{post_id}" if post_id else "/notifications"
 
 
 def notification_event(db: Session, notification: Notification) -> dict:
@@ -22,7 +65,7 @@ def notification_event(db: Session, notification: Notification) -> dict:
     that ``serialize_user`` would run for a value that is only read for display.
     """
     actor = db.get(User, notification.actor_id) if notification.actor_id else None
-    return {
+    event = {
         "type": "notification",
         "notification": {
             "id": notification.id,
@@ -44,6 +87,11 @@ def notification_event(db: Session, notification: Notification) -> dict:
             else None
         ),
     }
+    # The finished sentence travels with the frame so the client does not have
+    # to duplicate this mapping, and so a push payload built from the same event
+    # reads identically.
+    event["notification"]["text"] = notification_text(event)
+    return event
 
 
 def _serialize(db: DbSession, notifications: list[Notification]) -> list[NotificationOut]:

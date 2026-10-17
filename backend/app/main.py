@@ -10,7 +10,18 @@ from .config import settings
 from .database import Base, engine
 from .middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from .realtime import manager
-from .routers import admin, auth, media, messages, notifications, posts, realtime, search, users
+from .routers import (
+    admin,
+    auth,
+    media,
+    messages,
+    notifications,
+    posts,
+    push,
+    realtime,
+    search,
+    users,
+)
 from .schema import ensure_schema
 
 
@@ -94,6 +105,7 @@ app.include_router(search.router)
 app.include_router(media.router)
 app.include_router(messages.router)
 app.include_router(realtime.router)
+app.include_router(push.router)
 app.include_router(admin.router)
 
 

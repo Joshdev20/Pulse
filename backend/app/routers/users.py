@@ -353,9 +353,12 @@ async def follow_user(username: str, db: DbSession, user: CurrentUser) -> UserPu
             db.rollback()
         else:
             # Local import avoids a cycle: `notifications` imports from `deps`.
-            from .notifications import notification_event
+            from .notifications import notification_event, push_notification
 
-            await manager.publish(target.id, notification_event(db, notification))
+            event = notification_event(db, notification)
+            await manager.publish(target.id, event)
+            # The socket covers an open tab; Web Push reaches a closed browser.
+            push_notification(target.id, event)
             db.commit()
             db.refresh(target)
             invalidate_user_reads()

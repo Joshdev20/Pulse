@@ -88,14 +88,17 @@ def _claim_media(db: DbSession, media_ids: list[int], user: User) -> list[Media]
 
 
 async def _notify(db: DbSession, notification: Notification, recipient_id: int) -> None:
-    """Persist a notification and push it to the recipient if they are online."""
+    """Persist a notification, push it to the recipient's sockets and browsers."""
     db.add(notification)
     db.flush()
     # Local import: `notifications` imports from `deps`, which would otherwise
     # make this a cycle at module import time.
-    from .notifications import notification_event
+    from .notifications import notification_event, push_notification
 
-    await manager.publish(recipient_id, notification_event(db, notification))
+    event = notification_event(db, notification)
+    await manager.publish(recipient_id, event)
+    # The socket reaches an open tab; Web Push is what reaches a closed one.
+    push_notification(recipient_id, event)
 
 
 def _paginate(db: DbSession, query, page: int, page_size: int, viewer: User | None) -> Page:
