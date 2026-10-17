@@ -577,3 +577,63 @@ def test_generated_keys_are_usable_by_a_browser():
         patch.setattr(settings, "vapid_private_key", private)
         assert settings.push_configured is True
         assert settings.valid_vapid_public_key == public
+
+
+def test_the_public_key_is_the_one_that_matches_the_private_key():
+    """A browser subscribes against the public key; sends are signed with the
+    private one. If the two are not a pair the push service rejects every send
+    with 403, so the pair has to be checked as a pair, not just for shape.
+    """
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    private, public = push_module.generate_keys()
+    private_raw = base64.urlsafe_b64decode(private + "=" * (-len(private) % 4))
+    public_raw = base64.urlsafe_b64decode(public + "=" * (-len(public) % 4))
+
+    derived = (
+        ec.derive_private_key(int.from_bytes(private_raw, "big"), ec.SECP256R1())
+        .public_key()
+        .public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+    )
+    assert derived == public_raw
+
+
+def test_generate_keys_does_not_reuse_a_pair():
+    """Every call must mint a new key, or a redeploy would silently keep the
+    old pair and every stored subscription would be invalidated for nothing."""
+    first = push_module.generate_keys()
+    second = push_module.generate_keys()
+    assert first != second
+
+
+def test_the_documented_command_prints_a_key_pair():
+    """`python -m app.push` is what `render.yaml` and the README tell an operator
+    to run. It printed nothing from the wrong module once, which fails silently:
+    the command exits 0 and the operator pastes an empty value into Render.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "app.push"],
+        capture_output=True,
+        text=True,
+        cwd="/workspace/project/backend",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "VAPID_PRIVATE_KEY=" in result.stdout
+    assert "VAPID_PUBLIC_KEY=" in result.stdout
+
+    private = next(
+        line.split("=", 1)[1] for line in result.stdout.splitlines()
+        if line.startswith("VAPID_PRIVATE_KEY=")
+    )
+    public = next(
+        line.split("=", 1)[1] for line in result.stdout.splitlines()
+        if line.startswith("VAPID_PUBLIC_KEY=")
+    )
+    # Both halves must be non-empty and the public key must be browser-shaped.
+    assert private
+    public_raw = base64.urlsafe_b64decode(public + "=" * (-len(public) % 4))
+    assert len(public_raw) == 65 and public_raw[0] == 0x04
