@@ -18,6 +18,8 @@ import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
 import { useTheme } from '../lib/useTheme'
 import { isSoundEnabled, playNotificationSound, setSoundEnabled } from '../lib/sound'
+import { disablePush, enablePush, pushState, pushSupported } from '../lib/push'
+import type { PushState } from '../lib/push'
 
 const COLORS = [
   '#6366f1', '#ec4899', '#f59e0b', '#10b981',
@@ -28,12 +30,63 @@ const MAX_AVATAR_MB = 5
 /** Covers are wide banners, so they are allowed a larger file than a picture. */
 const MAX_COVER_MB = 8
 
+/** The explanatory line under the push toggle, per state. */
+function pushSubtitle(state: PushState): string {
+  switch (state) {
+    case 'unsupported':
+      return 'This browser does not support push notifications.'
+    case 'unconfigured':
+      return 'Push notifications are not configured on the server.'
+    case 'denied':
+      return 'Blocked in your browser settings. Allow notifications for Pulse to turn this on.'
+    case 'subscribed':
+      return 'Alerts arrive even when Pulse is closed.'
+    case 'granted':
+      // Permission is already allowed, so turning this on will not prompt.
+      return 'Permission is allowed. Turn this on to get alerts when Pulse is closed.'
+    default:
+      return 'Get alerts on this device even when Pulse is closed.'
+  }
+}
+
 export function SettingsPage() {
   const { user, setUser, logout } = useAuth()
   const { notify } = useToast()
   const navigate = useNavigate()
   const { theme, setTheme } = useTheme()
   const [sound, setSound] = useState(() => isSoundEnabled())
+  const [push, setPush] = useState<PushState>(() => (pushSupported() ? 'default' : 'unsupported'))
+  const [pushBusy, setPushBusy] = useState(false)
+
+  // Read the real push state on mount. It depends on the browser permission and
+  // the server's VAPID configuration, neither of which is known synchronously.
+  useEffect(() => {
+    let cancelled = false
+    void pushState().then((state) => {
+      if (!cancelled) setPush(state)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const pushOn = push === 'subscribed'
+
+  const togglePush = async (next: boolean) => {
+    setPushBusy(true)
+    try {
+      const state = next ? await enablePush() : await disablePush()
+      setPush(state)
+      if (next && state === 'subscribed') notify('Push notifications enabled')
+      else if (next && state === 'denied') notify('Notifications are blocked in your browser', 'error')
+      else if (next && state === 'unconfigured') notify('Push notifications are not configured', 'error')
+      else if (!next) notify('Push notifications disabled')
+    } catch {
+      notify('Could not change push notifications', 'error')
+    } finally {
+      setPushBusy(false)
+    }
+  }
 
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
   const [bio, setBio] = useState(user?.bio ?? '')
@@ -445,6 +498,27 @@ export function SettingsPage() {
                 // audible at the moment it is made.
                 if (next) playNotificationSound()
               }}
+            />
+            <span className="switch" aria-hidden="true">
+              <BellIcon size={14} />
+            </span>
+          </label>
+
+          <label className="switch-row">
+            <span className="switch-row-text">
+              <span className="card-title" style={{ fontSize: 14 }}>
+                Push notifications
+              </span>
+              <span className="card-sub">
+                {pushSubtitle(push)}
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              className="switch-input"
+              checked={pushOn}
+              disabled={pushBusy || push === 'unsupported' || push === 'unconfigured'}
+              onChange={(event) => void togglePush(event.target.checked)}
             />
             <span className="switch" aria-hidden="true">
               <BellIcon size={14} />

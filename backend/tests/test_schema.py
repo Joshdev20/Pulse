@@ -256,3 +256,43 @@ def test_ensure_admin_on_an_empty_database_does_nothing(legacy_engine, monkeypat
     monkeypatch.setattr("app.seed.SessionLocal", Session)
 
     assert ensure_admin() is None
+
+
+def test_ensure_schema_creates_the_push_subscriptions_table(legacy_engine):
+    """A database from before Web Push gains the table, so subscribing works.
+
+    The table is new rather than a new column, so it is `create_all` that builds
+    it. This asserts the model and the migration agree on the columns, which is
+    what would silently break if the model were changed without the table being
+    recreated on a fresh deploy.
+    """
+    from app.database import Base
+    from app.models import PushSubscription
+
+    Base.metadata.create_all(bind=legacy_engine)
+    columns = {column["name"] for column in inspect(legacy_engine).get_columns("push_subscriptions")}
+
+    assert columns == {c.name for c in PushSubscription.__table__.columns}
+
+
+def test_ensure_schema_adds_push_columns_to_an_existing_table(legacy_engine):
+    """A push table created before user_agent/last_used_at is upgraded in place.
+
+    Without this the insert on every subscribe would fail on a legacy database.
+    """
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE push_subscriptions ("
+                "id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
+                "endpoint TEXT NOT NULL, p256dh VARCHAR(255) NOT NULL, "
+                "auth VARCHAR(255) NOT NULL, created_at DATETIME NOT NULL)"
+            )
+        )
+
+    applied = ensure_schema(legacy_engine)
+
+    assert "push_subscriptions.user_agent" in applied
+    assert "push_subscriptions.last_used_at" in applied
+    columns = {column["name"] for column in inspect(legacy_engine).get_columns("push_subscriptions")}
+    assert {"user_agent", "last_used_at"} <= columns

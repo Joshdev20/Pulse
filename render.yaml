@@ -33,6 +33,16 @@ services:
         sync: false
       - key: AUTO_SEED
         value: "true"
+      # Web Push. Without both keys the API reports push as unavailable and the
+      # settings toggle stays off, so the app still runs. Generate a pair with
+      # `python -m app.push` in backend/ and paste them here. Changing either key
+      # invalidates every browser subscription already stored.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        value: "mailto:no-reply@pulse.local"
     # Requires a paid instance type. Uncomment this AND change `plan` above,
     # then add UPLOAD_DIR=/data/uploads to envVars.
     # disk:

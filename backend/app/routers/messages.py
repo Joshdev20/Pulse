@@ -21,6 +21,7 @@ from ..models import (
     User,
     utcnow,
 )
+from .. import push
 from ..realtime import manager
 from ..schemas import (
     ConversationOut,
@@ -387,6 +388,11 @@ async def send_message(
             "message": serialize_messages(db, [message], viewer)[0].model_dump(mode="json"),
         }
         await manager.publish(participant_id, payload)
+        # Web Push is the only channel that reaches a closed browser; the
+        # socket above covers an open tab. The sender is skipped: they already
+        # know what they wrote.
+        if participant_id != user.id:
+            push.schedule_notify(participant_id, push.message_payload(db, message, conversation_id))
     return serialized
 
 

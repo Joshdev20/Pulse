@@ -11,6 +11,8 @@ import type {
   Notification,
   Page,
   Post,
+  PushStatus,
+  PushSubscriptionBody,
   Stats,
   SuggestedUser,
   TrendingTag,
@@ -246,6 +248,21 @@ export const api = {
   notifications: () => request<Notification[]>('/api/notifications'),
 
   unreadCount: () => request<{ count: number }>('/api/notifications/unread-count'),
+
+  /** Web Push: whether the server can push, its public key, and device count. */
+  pushStatus: () => request<PushStatus>('/api/push/status'),
+
+  pushSubscribe: (body: PushSubscriptionBody) =>
+    request<{ devices: number }>('/api/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  pushUnsubscribe: (endpoint: string) =>
+    request<{ devices: number }>('/api/push/unsubscribe', {
+      method: 'POST',
+      body: JSON.stringify({ endpoint }),
+    }),
 
   markRead: (id: number) => request<Notification>(`/api/notifications/${id}/read`, { method: 'POST' }),
 

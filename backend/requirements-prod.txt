@@ -18,3 +18,8 @@ redis==8.1.0
 # Postgres driver for a hosted database. SQLite needs nothing extra, so this is
 # unused in local development but required when DATABASE_URL points at Postgres.
 psycopg[binary]==3.2.3
+
+# Web Push: signs and delivers push messages to browser push services (FCM,
+# Mozilla autopush, WNS). Imported lazily by app.push, so a deployment that does
+# not set VAPID keys still boots without it.
+pywebpush==2.0.3

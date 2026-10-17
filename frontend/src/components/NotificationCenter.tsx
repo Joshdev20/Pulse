@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Avatar } from './Avatar'
-import { CloseIcon } from './Icons'
+import { CloseIcon, ReplyIcon } from './Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import type { RealtimeEvent } from '../context/RealtimeContext'
 import { playNotificationSound } from '../lib/sound'
 import { isPageHidden, requestDesktopPermission, showDesktopNotification } from '../lib/desktopNotify'
+import { syncPushSubscription } from '../lib/push'
 import { useAuth } from '../context/AuthContext'
 import type { RealtimeNotification } from '../lib/types'
 
@@ -15,13 +16,21 @@ interface Popup {
   actorColor: string
   actorUrl: string | null
   text: string
+  /** A small line above the text, the way a messaging app labels the source. */
+  title: string
   /** Where clicking the popup should take the reader. */
   to: string
+  /** Whether this is a direct message, so the card can offer a reply action. */
+  isMessage: boolean
 }
 
 const POPUP_MS = 6000
 
 function notificationText(event: RealtimeEvent): string | null {
+  // Prefer the sentence the server built into the frame: the same string is
+  // used for the Web Push payload, so the two channels cannot drift apart.
+  const fromServer = event.notification?.text
+  if (fromServer) return fromServer
   const kind = event.notification?.kind
   const name = event.actor?.display_name || 'Someone'
   switch (kind) {
@@ -94,7 +103,9 @@ export function NotificationCenter() {
               actorColor: message.sender.avatar_color,
               actorUrl: message.sender.avatar_url,
               text: body,
+              title: 'New message',
               to: `/messages/${message.conversation_id}`,
+              isMessage: true,
             })
           }
           return
@@ -128,7 +139,9 @@ export function NotificationCenter() {
             actorColor: event.actor?.avatar_color ?? '#6366f1',
             actorUrl: event.actor?.avatar_url ?? null,
             text,
+            title: 'Pulse',
             to: notificationLink(notification),
+            isMessage: false,
           })
         }
       }),
@@ -139,6 +152,15 @@ export function NotificationCenter() {
   useEffect(() => {
     permissionAsked.current = false
     setPopups([])
+  }, [user?.id])
+
+  // Keep the server's copy of this browser's push endpoint current. Browsers
+  // rotate endpoints on their own, and a rotated endpoint means every future
+  // push is discarded; re-sending it on each authenticated load is cheap and
+  // self-healing. Only runs when permission is already granted, so it never
+  // triggers a prompt.
+  useEffect(() => {
+    if (user?.id) void syncPushSubscription()
   }, [user?.id])
 
   if (popups.length === 0) return null
@@ -156,8 +178,28 @@ export function NotificationCenter() {
             }}
           >
             <Avatar name={popup.actorName} color={popup.actorColor} url={popup.actorUrl} size="sm" />
-            <span className="popup-text">{popup.text}</span>
+            <span className="popup-body">
+              <span className="popup-head">
+                <span className="popup-title">{popup.title}</span>
+                <span className="popup-name">{popup.actorName}</span>
+              </span>
+              <span className="popup-text">{popup.text}</span>
+            </span>
           </button>
+          {popup.isMessage && (
+            <button
+              type="button"
+              className="popup-action"
+              aria-label={`Reply to ${popup.actorName}`}
+              title="Reply"
+              onClick={() => {
+                navigate(popup.to)
+                dismiss(popup.key)
+              }}
+            >
+              <ReplyIcon size={14} />
+            </button>
+          )}
           <button
             type="button"
             className="popup-close"

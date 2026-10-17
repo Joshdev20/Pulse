@@ -44,6 +44,9 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # stays a plain message. No FK is added by ALTER TABLE; the serializer
     # tolerates a quote whose target is gone.
     ("messages", "reply_to_id", "INTEGER NULL"),
+    # Web Push endpoint for a browser, so alerts reach a closed tab.
+    ("push_subscriptions", "user_agent", "VARCHAR(200) NOT NULL DEFAULT ''"),
+    ("push_subscriptions", "last_used_at", "TIMESTAMP NULL"),
 ]
 
 

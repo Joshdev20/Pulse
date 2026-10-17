@@ -226,6 +226,37 @@ class Notification(Base):
     actor: Mapped[User | None] = relationship(foreign_keys=[actor_id])
 
 
+class PushSubscription(Base):
+    """One browser's Web Push endpoint, for alerts while the tab is closed.
+
+    A row is per browser, not per user: the same account on a laptop and a phone
+    has two endpoints, and both must be pushed. ``endpoint`` is the identity the
+    push service issued and is unique across all users, so re-subscribing the
+    same browser (after a key rotation, say) updates the existing row rather
+    than accumulating duplicates.
+    """
+
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # A push service URL. Long by nature; text rather than a bounded varchar
+    # because Firefox and Chrome both issue endpoints well past 200 characters.
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    # The client's public key (p256dh) and auth secret, as sent by the browser.
+    p256dh: Mapped[str] = mapped_column(String(255))
+    auth: Mapped[str] = mapped_column(String(255))
+    # A short label ("Chrome on Linux") so a future settings screen can list and
+    # revoke individual devices.
+    user_agent: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
 class Media(Base):
     """An uploaded file. ``stored_name`` is server-generated, never client input."""
 

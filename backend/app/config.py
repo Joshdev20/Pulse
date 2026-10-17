@@ -1,5 +1,7 @@
 """Application configuration loaded from the environment."""
 
+import base64
+import binascii
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +62,45 @@ class Settings(BaseSettings):
     # Request-body ceilings, in bytes. Uploads are allowed the full
     # `max_upload_mb`, while ordinary JSON payloads stay small.
     max_body_bytes: int = 1 * 1024 * 1024
+
+    # Web Push (VAPID). The public key is served to the browser so it can
+    # subscribe; the private key signs the pushes. Generate a pair once with
+    # `python -m app.push keys` and set both in the environment — a pair that
+    # changes invalidates every subscription already stored, so treat them as
+    # deployment secrets rather than per-boot values.
+    vapid_public_key: str | None = None
+    vapid_private_key: str | None = None
+    # The `sub` claim. Push services require a mailto: or https: contact so they
+    # can reach an operator about a misbehaving sender.
+    vapid_subject: str = "mailto:no-reply@pulse.local"
+    # How long a push service should retain an undelivered alert, in seconds.
+    push_ttl_seconds: int = 12 * 60 * 60
+
+    @property
+    def push_configured(self) -> bool:
+        """Whether a usable VAPID key pair is present, so push can be offered.
+
+        A public key that is not the 65-byte uncompressed point is treated as
+        absent rather than served: a browser rejects it with an
+        ``InvalidAccessError``, which surfaces to the user as a toggle that
+        flips on and immediately fails. Reporting push as unavailable instead
+        keeps the failure at configuration time, where it can be seen.
+        """
+        return bool(self.vapid_private_key) and self.valid_vapid_public_key is not None
+
+    @property
+    def valid_vapid_public_key(self) -> str | None:
+        """The configured public key if a browser could subscribe with it."""
+        if not self.vapid_public_key:
+            return None
+        try:
+            raw = base64.urlsafe_b64decode(
+                self.vapid_public_key + "=" * (-len(self.vapid_public_key) % 4)
+            )
+        except (binascii.Error, ValueError):
+            return None
+        # Uncompressed EC point on P-256: one 0x04 prefix byte plus 64 bytes.
+        return self.vapid_public_key if len(raw) == 65 and raw[0] == 0x04 else None
 
     @property
     def max_upload_bytes(self) -> int:
