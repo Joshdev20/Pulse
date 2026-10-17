@@ -382,6 +382,19 @@ the public URL returns 502 until the dev server is bound to 12000.
 - `frontend/public/` is served verbatim and is not bundled, so `sw.js` is plain JavaScript
   and cannot import from `src/`. Check the file mode when adding to it: it was committed
   `600` once, which would not be served.
+- When driving the Settings page in a browser, do not select `input.switch-input` by class
+  alone: the notification-sound row and the push row both use it, and `querySelector` returns
+  the sound toggle first. Select the `.switch-row` whose `.card-title` contains "Push". A
+  harness that grabs the first match flips the chime and reports a false failure.
+- Verifying push against production: the deployed bundle is only byte-identical to a local
+  build when `VITE_API_BASE` matches exactly, trailing slash included (Vercel sets it to
+  `https://pulse-api-y16m.onrender.com/`). Hash mismatch alone does not mean the commit did
+  not deploy — compare with the same base before concluding anything.
+- The production database is not the local seed: only `ada` exists with the demo password
+  and `josh` is the admin, so a harness that assumes `grace`/`linus`/etc. gets a 401. Also
+  clean up after any prod probe. Removing a subscription in the browser alone leaves the
+  server row behind; POST `/api/push/unsubscribe` with the endpoint first, or the row is
+  orphaned until some future send to it returns 410 and prunes it.
 
 ## Feed ordering and rate-limit budgets
 
