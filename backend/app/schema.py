@@ -25,6 +25,9 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     ("users", "verified_at", "TIMESTAMP NULL"),
     ("users", "avatar_media_id", "INTEGER NULL"),
     ("users", "cover_media_id", "INTEGER NULL"),
+    # Last-seen tracking for the message thread header. Nullable: an account
+    # that has not been active since the upgrade has no answer yet.
+    ("users", "last_seen_at", "TIMESTAMP NULL"),
     # Nullable: only reposts carry it. No FK constraint is declared here because
     # ALTER TABLE cannot add one to an existing table on every backend, and the
     # repost endpoints delete their rows explicitly rather than leaning on a
@@ -37,6 +40,10 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # filesystem is ephemeral. Nullable: rows written before this column keep
     # working through the on-disk fallback until they are backfilled.
     ("media", "blob", "BYTEA NULL"),
+    # Swipe-to-reply. Nullable, so every message written before this column
+    # stays a plain message. No FK is added by ALTER TABLE; the serializer
+    # tolerates a quote whose target is gone.
+    ("messages", "reply_to_id", "INTEGER NULL"),
 ]
 
 

@@ -16,6 +16,13 @@ export interface User {
   is_following: boolean
   is_admin: boolean
   is_verified: boolean
+  /**
+   * Presence, present only on a conversation partner payload. The API omits
+   * both fields elsewhere (search, profiles, followers) so a user cannot be
+   * tracked as online outside a thread they share.
+   */
+  last_seen_at?: string | null
+  is_online?: boolean
 }
 
 export interface Tag {
@@ -74,6 +81,19 @@ export interface Message {
   sender: User
   media: Media[]
   mine: boolean
+  /** Set when this message was a swipe-to-reply to another one. */
+  reply_to: MessageQuote | null
+  like_count: number
+  liked_by_me: boolean
+}
+
+/** The one-line quote shown above a reply. */
+export interface MessageQuote {
+  id: number
+  body: string
+  sender_username: string
+  sender_display_name: string
+  has_media: boolean
 }
 
 export interface Conversation {

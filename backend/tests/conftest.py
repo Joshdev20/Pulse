@@ -31,11 +31,19 @@ def isolated_cache(monkeypatch):
     The cache backend is process-global, so without this a response cached by
     one test would be served to the next. The Redis URL is cleared so a server
     running on the developer's machine cannot leak state between tests.
+
+    The last-seen throttle is reset for the same reason: it is keyed by user id
+    and lives for the life of the process, so a user stamped by an earlier test
+    would suppress the write in a later one and leave `last_seen_at` null.
     """
+    from app import deps
+
     monkeypatch.setattr(settings, "redis_url", None)
     reset_store()
+    deps.reset_last_seen_tracking()
     yield
     reset_store()
+    deps.reset_last_seen_tracking()
 
 
 @pytest.fixture

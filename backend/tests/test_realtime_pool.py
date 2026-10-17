@@ -68,6 +68,15 @@ def _register(client, username):
     return response.json()["access_token"]
 
 
+def _recv_frame(socket, kind: str) -> dict:
+    """Read frames until one of ``kind`` arrives, skipping presence noise."""
+    for _ in range(10):
+        frame = socket.receive_json()
+        if frame["type"] == kind:
+            return frame
+    raise AssertionError(f"no {kind!r} frame arrived")
+
+
 def test_idle_sockets_do_not_hold_pooled_connections(small_pool_client):
     client = small_pool_client
     token = _register(client, "pooler")
@@ -121,8 +130,7 @@ def test_typing_still_relayed_with_small_pool(small_pool_client):
             assert ada_socket.receive_json()["type"] == "ready"
 
             ada_socket.send_json({"type": "typing", "conversation_id": conversation_id})
-            event = grace_socket.receive_json()
-            assert event["type"] == "typing"
+            event = _recv_frame(grace_socket, "typing")
             assert event["conversation_id"] == conversation_id
 
             assert client.engine.pool.checkedout() == 0, (

@@ -1,12 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Avatar } from '../components/Avatar'
-import { ArrowLeftIcon, CheckIcon, LogoutIcon, TrashIcon, UploadIcon } from '../components/Icons'
+import {
+  ArrowLeftIcon,
+  BellIcon,
+  CheckIcon,
+  LogoutIcon,
+  MoonIcon,
+  SunIcon,
+  TrashIcon,
+  UploadIcon,
+} from '../components/Icons'
 import { Spinner } from '../components/UI'
 import { ProfileBanner } from '../components/ProfileBanner'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
+import { useTheme } from '../lib/useTheme'
+import { isSoundEnabled, playNotificationSound, setSoundEnabled } from '../lib/sound'
 
 const COLORS = [
   '#6366f1', '#ec4899', '#f59e0b', '#10b981',
@@ -21,6 +32,8 @@ export function SettingsPage() {
   const { user, setUser, logout } = useAuth()
   const { notify } = useToast()
   const navigate = useNavigate()
+  const { theme, setTheme } = useTheme()
+  const [sound, setSound] = useState(() => isSoundEnabled())
 
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
   const [bio, setBio] = useState(user?.bio ?? '')
@@ -383,6 +396,61 @@ export function SettingsPage() {
           />
         </section>
 
+
+        <section className="card card-pad">
+          <div className="card-title">Appearance</div>
+          <div className="card-sub" style={{ marginBottom: 14 }}>
+            Choose a light or dark theme, and whether messages play a sound.
+          </div>
+
+          <div className="theme-choice" role="radiogroup" aria-label="Theme">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={theme === 'light'}
+              className={`theme-option${theme === 'light' ? ' active' : ''}`}
+              onClick={() => setTheme('light')}
+            >
+              <SunIcon size={18} />
+              <span>Light</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={theme === 'dark'}
+              className={`theme-option${theme === 'dark' ? ' active' : ''}`}
+              onClick={() => setTheme('dark')}
+            >
+              <MoonIcon size={18} />
+              <span>Dark</span>
+            </button>
+          </div>
+
+          <label className="switch-row">
+            <span className="switch-row-text">
+              <span className="card-title" style={{ fontSize: 14 }}>
+                Notification sound
+              </span>
+              <span className="card-sub">Play a chime when a message or alert arrives.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="switch-input"
+              checked={sound}
+              onChange={(event) => {
+                const next = event.target.checked
+                setSound(next)
+                setSoundEnabled(next)
+                // Preview the chime when turning it on, so the choice is
+                // audible at the moment it is made.
+                if (next) playNotificationSound()
+              }}
+            />
+            <span className="switch" aria-hidden="true">
+              <BellIcon size={14} />
+            </span>
+          </label>
+        </section>
 
         <section className="card card-pad">
           <div className="card-title">Account</div>

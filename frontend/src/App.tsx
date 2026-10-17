@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell } from './components/Layout'
 import { Composer } from './components/Composer'
+import { NotificationCenter } from './components/NotificationCenter'
 import { Modal, Spinner } from './components/UI'
 import { useAuth } from './context/AuthContext'
 import { RealtimeProvider } from './context/RealtimeContext'
@@ -72,6 +73,9 @@ function Layout() {
       <AppShell withRail={RAIL_ROUTES.includes(pathname)} onCompose={openComposer}>
         <Outlet />
       </AppShell>
+      {/* Rendered inside the authenticated shell so popups and the chime only
+          run while a session is active, even when the tab is in the background. */}
+      <NotificationCenter />
       {composeOpen && (
         <Modal title="New post" onClose={() => setComposeOpen(false)}>
           <Composer autoFocus onPosted={() => setComposeOpen(false)} />

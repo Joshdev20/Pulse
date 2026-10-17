@@ -54,6 +54,34 @@ export function pluralize(count: number, singular: string, plural = `${singular}
   return `${count} ${count === 1 ? singular : plural}`
 }
 
+/**
+ * Presence line for a direct-message thread header.
+ *
+ * A live socket wins over the timestamp, because "online" is the more useful
+ * answer and the timestamp can be up to a minute stale. "Last seen just now"
+ * is deliberately not used for a very recent stamp: it reads as a contradiction
+ * when the partner is demonstrably not in the thread.
+ */
+export function formatPresence(
+  iso: string | null | undefined,
+  isOnline: boolean | undefined,
+  now: number = Date.now(),
+): string {
+  if (isOnline) return 'Online'
+  if (!iso) return 'Offline'
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return 'Offline'
+  const seconds = Math.max(0, Math.floor((now - then) / 1000))
+  if (seconds < 60) return 'Last seen just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `Last seen ${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `Last seen ${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `Last seen ${days}d ago`
+  return `Last seen ${new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+}
+
 /** Split a post body into plain text and hashtag/mention segments for rendering. */
 export type Segment =
   | { type: 'text'; value: string }

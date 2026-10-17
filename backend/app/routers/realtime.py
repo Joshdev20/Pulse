@@ -6,8 +6,8 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
-from ..deps import DbSession
-from ..models import ConversationParticipant
+from ..deps import DbSession, forget_last_seen, touch_last_seen
+from ..models import ConversationParticipant, User
 from ..realtime import MAX_FRAME_BYTES, authenticate, manager
 
 logger = logging.getLogger("pulse.realtime")
@@ -38,7 +38,13 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
     if user_id is None:
         return
 
+    # Presence is a transition, not a per-socket fact: a second tab opening or
+    # closing must not flicker the status, so only the first socket in and the
+    # last socket out are announced.
+    was_online = manager.is_online(user_id)
     await manager.connect(user_id, socket)
+    if not was_online:
+        await _announce_presence(db, user_id, online=True)
     try:
         await socket.send_text(json.dumps({"type": "ready", "user_id": user_id}))
         while True:
@@ -66,6 +72,77 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
         logger.exception("Realtime socket failed for user %s", user_id)
     finally:
         await manager.disconnect(user_id, socket)
+        _stamp_last_seen(db, user_id)
+        if not manager.is_online(user_id):
+            await _announce_presence(db, user_id, online=False)
+
+
+async def _announce_presence(db: DbSession, user_id: int, *, online: bool) -> None:
+    """Tell the people who can see this user that their status changed.
+
+    Only conversation partners are notified rather than every connected socket:
+    presence is only rendered in a thread header, so broadcasting to the whole
+    user base would be wasted fan-out. The frame carries the freshly stamped
+    ``last_seen_at`` so a client can render the "last seen" line without a
+    follow-up request.
+
+    Runs in its own session-scoped read and swallows every failure: a presence
+    frame is a nicety, and a socket that is closing must not fail because of it.
+    """
+    try:
+        stamp = db.get(User, user_id)
+        last_seen_at = stamp.last_seen_at if stamp is not None else None
+        peer_ids = set(
+            db.scalars(
+                select(ConversationParticipant.user_id)
+                .where(
+                    ConversationParticipant.user_id != user_id,
+                    ConversationParticipant.conversation_id.in_(
+                        select(ConversationParticipant.conversation_id).where(
+                            ConversationParticipant.user_id == user_id
+                        )
+                    ),
+                )
+                .distinct()
+            ).all()
+        )
+    except Exception:  # noqa: BLE001 - presence is best-effort
+        logger.debug("could not resolve presence peers for user %s", user_id, exc_info=True)
+        return
+    finally:
+        _release(db)
+
+    payload = {
+        "type": "presence",
+        "user_id": user_id,
+        "is_online": online,
+        "last_seen_at": last_seen_at,
+    }
+    for peer_id in peer_ids:
+        try:
+            await manager.publish(peer_id, payload)
+        except Exception:  # noqa: BLE001 - one bad peer must not stop the rest
+            logger.debug("presence publish failed for user %s", peer_id, exc_info=True)
+
+
+def _stamp_last_seen(db: DbSession, user_id: int) -> None:
+    """Record the moment a socket closed, and release the session again.
+
+    This is the accurate end of a presence window: while the socket is open the
+    user is online, and the instant it closes is the last moment they were
+    definitely present. Throttling does not apply here — the close happens once
+    per connection, so it is a single write rather than a per-request one.
+    """
+    try:
+        user = db.get(User, user_id)
+        if user is not None:
+            # Bypass the throttle: this is the precise stamp the header shows.
+            forget_last_seen(user_id)
+            touch_last_seen(db, user)
+    except Exception:  # noqa: BLE001 - a failed stamp must not surface to the client
+        logger.debug("could not stamp last_seen for user %s", user_id, exc_info=True)
+    finally:
+        _release(db)
 
 
 def _release(db: DbSession) -> None:
