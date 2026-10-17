@@ -33,3 +33,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Agent scratch space (harnesses, probes, temporary fixtures)
+.agent_tmp/

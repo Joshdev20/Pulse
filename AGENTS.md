@@ -34,7 +34,7 @@ The venv has **no pip**; use `uv`:
 uv pip install -r requirements.txt        # or: uv pip install redis
 .venv/bin/python -m app.seed --reset      # rebuild pulse.db with demo data
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-.venv/bin/python -m pytest -q             # 234 tests
+.venv/bin/python -m pytest -q             # 279 tests
 ```
 
 ### Frontend (run from `frontend/`)
@@ -128,6 +128,42 @@ the public URL returns 502 until the dev server is bound to 12000.
   `routers/notifications.py`) so a backgrounded tab can name who acted without a fetch. Both
   `posts._notify` and `users.follow_user` publish through it â€” keep the two in step rather
   than re-inlining the payload.
+
+### Media and voice notes
+
+- `app/storage.py` holds the single source of truth for accepted uploads: `ALLOWED_TYPES`
+  maps each content type to its on-disk extension, and `sniff` builds its result *through*
+  it (`_sniffed`), so a magic-byte signature cannot be added for a type the upload routes
+  would then reject. `allowed_types_label()` renders the 415 message from the same table.
+  Its friendly names are an override table with a subtype fallback, so a new entry cannot
+  raise a `KeyError` from inside the error handler.
+- Audio has its own size ceiling (`max_bytes_for("audio")`, well below video) because a
+  voice note's bytes live in a database row, not only on disk.
+- A voice note is a `Media` with `kind == "audio"`. `MediaGallery` routes those to
+  `VoiceNotePlayer` (a hand-built play/seek control over a real `<audio>` element), so
+  `MessageBubble` and `PostCard` need no audio-specific code.
+- When testing the recorder in a browser harness, pass Chromium
+  `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream` so `getUserMedia`
+  resolves without a permission prompt. A voice note that finishes playing shows its full
+  duration and `paused: true` again, so sample playback shortly after pressing play rather
+  than waiting — the fixture clips are about a second long.
+
+### Multiple signed-in accounts
+
+- `frontend/src/lib/accounts.ts` keeps every signed-in account in `pulse.accounts`, each
+  with its own token, and mirrors the active one into the single `pulse.token` slot that
+  `lib/api.ts` reads. Switching is a token swap, not a fresh sign-in. These tokens are in
+  `localStorage`, so adding accounts multiplies what a successful XSS exposes; that is
+  accepted here (an httpOnly cookie needs a server-side change) but should not be widened
+  further.
+- `switchAccount` verifies the saved token with `api.meWithToken(token)` *before* adopting
+  it, and never sets the global `loading` flag. Both matter: `RequireAuth` replaces the
+  whole app with a spinner while `loading` is true, which unmounts the switcher and
+  destroys the error it is about to show, and adopting a dead token first would sign the
+  user out of the account they are already using. `request()` lets an explicit
+  `Authorization` header win over the shared slot for exactly this pre-check.
+- The switcher menu must close only *after* a successful switch (`choose(id, close)` in
+  `Layout.tsx`); closing on click hides the failure message that is rendered inside it.
 
 ## Gotchas
 

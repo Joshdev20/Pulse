@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api, getToken } from '../lib/api'
+import { useAuth } from './AuthContext'
 import type { Conversation, Message, RealtimeNotification } from '../lib/types'
 
 /** The actor behind a notification, enough to render a popup without a fetch. */
@@ -67,6 +68,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const attemptsRef = useRef(0)
   const reconnectTimer = useRef<number | null>(null)
   const closedByUs = useRef(false)
+  // The socket authenticates with whatever token was in the slot when it
+  // opened, so a switch to another account has to tear it down and reconnect;
+  // otherwise the previous user's messages keep arriving on this page.
+  const { sessionEpoch } = useAuth()
 
   const emit = useCallback((event: RealtimeEvent) => {
     for (const listener of listenersRef.current) listener(event)
@@ -173,7 +178,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       socketRef.current = null
       setConnected(false)
     }
-  }, [emit])
+  }, [emit, sessionEpoch])
 
   const value = useMemo<RealtimeValue>(
     () => ({ connected, subscribe, sendTyping }),

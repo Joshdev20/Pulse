@@ -119,7 +119,7 @@ async def _set_profile_image(
         )
 
     try:
-        sniffed = storage.sniff(data[:64])
+        sniffed = storage.sniff(data[: storage.SNIFF_BYTES])
     except storage.UnsupportedMedia:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,

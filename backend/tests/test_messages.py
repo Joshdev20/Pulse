@@ -181,6 +181,57 @@ def test_message_can_carry_media(client, make_user, tmp_path, monkeypatch):
     assert client.get(f"/api/media/{media['id']}", headers=grace).status_code == 200
 
 
+def test_voice_note_can_be_sent_as_a_message(client, make_user, tmp_path, monkeypatch):
+    """The whole voice-note path: record -> upload -> send -> play back.
+
+    A recording is uploaded as audio, referenced by a message with an empty
+    body, and fetched by the recipient. This is the flow the recorder UI drives,
+    so it is the one that has to work end to end.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    import io
+    import struct
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(8000)
+        handle.writeframes(struct.pack("<h", 0) * 1600)
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+
+    media = client.post(
+        "/api/media",
+        headers=ada,
+        files={"file": ("voice-note.wav", io.BytesIO(buffer.getvalue()), "audio/wav")},
+        data={"alt_text": "Voice note"},
+    )
+    assert media.status_code == 201, media.text
+    assert media.json()["kind"] == "audio"
+
+    cid = start(client, ada, "grace").json()["id"]
+    sent = client.post(
+        f"/api/conversations/{cid}/messages",
+        headers=ada,
+        json={"body": "", "media_ids": [media.json()["id"]]},
+    )
+    assert sent.status_code == 201, sent.text
+    payload = sent.json()
+    # A voice note has no text; the clip is the whole message.
+    assert payload["body"] == ""
+    assert [item["kind"] for item in payload["media"]] == ["audio"]
+
+    # The recipient can play it back, and it is served as audio.
+    fetched = client.get(f"/api/media/{media.json()['id']}", headers=grace)
+    assert fetched.status_code == 200
+    assert fetched.headers["content-type"].startswith("audio/")
+
+
 def test_websocket_requires_authentication(client):
     """A socket that never authenticates must be closed, not left open."""
     with client.websocket_connect("/api/ws") as socket:

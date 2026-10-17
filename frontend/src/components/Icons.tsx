@@ -284,6 +284,35 @@ export const WifiOffIcon = (p: IconProps) => (
   </Base>
 )
 
+export const MicIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="9" y="3" width="6" height="10.5" rx="3" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" />
+    <path d="M12 18v3" />
+  </Base>
+)
+
+export const SwitchIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 8.5h12" />
+    <path d="m13 5.5 3 3-3 3" />
+    <path d="M20 15.5H8" />
+    <path d="m11 12.5-3 3 3 3" />
+  </Base>
+)
+
+export const StopIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
+  </Base>
+)
+
+export const PauseIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M10 8.5v7M14 8.5v7" />
+  </Base>
+)
+
 export const SunIcon = (p: IconProps) => (
   <Base {...p}>
     <circle cx="12" cy="12" r="4.2" />

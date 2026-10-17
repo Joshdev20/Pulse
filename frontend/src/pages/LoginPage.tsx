@@ -13,11 +13,16 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    document.title = 'Sign in · Pulse'
-  }, [])
+  // Set by the account switcher when the user asked to add another account.
+  const adding = new URLSearchParams(location.search).get('add') === '1'
 
-  if (user) {
+  useEffect(() => {
+    document.title = adding ? 'Add account · Pulse' : 'Sign in · Pulse'
+  }, [adding])
+
+  // Adding an account keeps the existing session until the new credentials are
+  // accepted, so the redirect only applies to an ordinary visit.
+  if (user && !adding) {
     const from = (location.state as { from?: string } | null)?.from ?? '/'
     return <Navigate to={from} replace />
   }
@@ -84,8 +89,12 @@ export function LoginPage() {
 
       <main className="auth-panel">
         <div className="auth-card">
-          <h2>Welcome back</h2>
-          <p className="sub">Sign in to continue to your timeline.</p>
+          <h2>{adding ? 'Add an account' : 'Welcome back'}</h2>
+          <p className="sub">
+            {adding
+              ? 'Sign in to another account. Your current session stays saved so you can switch back.'
+              : 'Sign in to continue to your timeline.'}
+          </p>
 
           <form className="auth-form" onSubmit={submit}>
             {error && <div className="form-error">{error}</div>}
@@ -134,8 +143,13 @@ export function LoginPage() {
             <Link to="/forgot-password">Forgot your password?</Link>
           </p>
           <p className="auth-switch" style={{ marginTop: 8 }}>
-            New here? <Link to="/register">Create an account</Link>
+            New here? <Link to={adding ? '/register?add=1' : '/register'}>Create an account</Link>
           </p>
+          {adding && (
+            <p className="auth-switch" style={{ marginTop: 8 }}>
+              <Link to="/">Cancel and go back</Link>
+            </p>
+          )}
         </div>
       </main>
     </div>

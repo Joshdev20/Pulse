@@ -2,6 +2,8 @@
 
 import io
 import os
+import struct
+import wave
 
 import pytest
 
@@ -153,6 +155,148 @@ def test_sniff_identifies_common_types():
     assert storage.sniff(b"%PDF-1.7").content_type == "application/pdf"
     with pytest.raises(storage.UnsupportedMedia):
         storage.sniff(b"not a real file")
+
+
+def wav_bytes(seconds: float = 0.2, rate: int = 8000) -> bytes:
+    """A real WAV, written by the stdlib encoder rather than hand-built."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(struct.pack("<h", 0) * int(rate * seconds))
+    return buffer.getvalue()
+
+
+def webm_header(track_codec: bytes) -> bytes:
+    """A WebM header whose `Tracks` element names one track's codec.
+
+    Chrome writes `A_OPUS` for a voice note and `V_VP8` for a screen recording,
+    and both files begin with the same EBML magic, so the codec id is the only
+    thing in the header that separates them.
+    """
+    return (
+        b"\x1a\x45\xdf\xa3"
+        + b"\x00" * 12
+        + b"\x16\x54\xae\x6b"
+        + b"\x00" * 8
+        + track_codec
+        + b"\x00" * 32
+    )
+
+
+def iso_bmff(brand: bytes) -> bytes:
+    return b"\x00\x00\x00\x18" + b"ftyp" + brand + b"\x00" * 32
+
+
+def test_sniff_identifies_audio_types():
+    """Voice notes are recognised, including the containers they share with video."""
+    assert storage.sniff(wav_bytes()).kind == "audio"
+    assert storage.sniff(wav_bytes()).content_type == "audio/wav"
+    # 'OggS' capture pattern with an Opus identification header.
+    assert storage.sniff(b"OggS\x00\x02" + b"\x00" * 20).content_type == "audio/ogg"
+    assert storage.sniff(b"ID3\x03\x00\x00\x00" + b"\x00" * 8).content_type == "audio/mpeg"
+
+
+def test_sniff_splits_webm_audio_from_webm_video():
+    """The same EBML magic must resolve differently by the tracks it declares."""
+    audio = storage.sniff(webm_header(b"A_OPUS"))
+    video = storage.sniff(webm_header(b"V_VP8"))
+    assert (audio.kind, audio.content_type) == ("audio", "audio/webm")
+    assert (video.kind, video.content_type) == ("video", "video/webm")
+
+
+def test_sniff_splits_mp4_audio_from_mp4_video():
+    """Only audio-specific brands are audio; generic ones stay video.
+
+    `mp42` and `isom` are ordinary MP4 video brands, so treating them as audio
+    would misclassify every uploaded video as a voice note.
+    """
+    assert storage.sniff(iso_bmff(b"M4A ")).content_type == "audio/mp4"
+    assert storage.sniff(iso_bmff(b"mp42")).content_type == "video/mp4"
+    assert storage.sniff(iso_bmff(b"isom")).content_type == "video/mp4"
+
+
+def test_audio_upload_is_accepted(client, make_user):
+    headers, _ = make_user("ada")
+    response = client.post(
+        "/api/media",
+        headers=headers,
+        files={"file": ("note.wav", io.BytesIO(wav_bytes()), "audio/wav")},
+        data={"alt_text": "voice note"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["kind"] == "audio"
+    assert body["content_type"] == "audio/wav"
+    assert body["url"] == f"/api/media/{body['id']}"
+
+
+def test_audio_upload_rejects_html_disguised_as_audio(client, make_user):
+    """The sniff decides, not the declared content type or the file name."""
+    headers, _ = make_user("ada")
+    response = client.post(
+        "/api/media",
+        headers=headers,
+        files={"file": ("note.webm", io.BytesIO(b"<html><script>alert(1)</script>"), "audio/webm")},
+    )
+    assert response.status_code == 415
+
+
+def test_audio_has_its_own_size_ceiling():
+    """A voice note is bounded well below video, since it lands in a DB row."""
+    assert storage.max_bytes_for("audio") < storage.max_bytes_for("video")
+    assert storage.max_bytes_for("audio") > 0
+
+
+def test_allowed_types_label_covers_every_accepted_type():
+    """The 415 message names every type the upload routes will take.
+
+    The label table is an override, not a mirror, so a type added to the
+    allow-list without a friendly name must still appear rather than raising a
+    KeyError from inside the error handler.
+    """
+    parts = storage.allowed_types_label().split(", ")
+    assert len(parts) == len(storage.ALLOWED_TYPES)
+    assert all(part.strip() for part in parts)
+
+    # A type with no override still renders, using its subtype.
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setitem(storage.ALLOWED_TYPES, "audio/flac", "flac")
+    try:
+        assert "FLAC" in storage.allowed_types_label().split(", ")
+    finally:
+        monkeypatch.undo()
+
+
+def test_every_sniffable_type_is_declared_allowed():
+    """`sniff` cannot return a type the upload routes would then reject.
+
+    Results are built from `ALLOWED_TYPES`, so this guards the one way that
+    could drift: a signature added for a type nobody declared acceptable.
+    """
+    samples = [
+        PNG[:64],
+        b"\xff\xd8\xff\xe0" + b"\x00" * 8,
+        b"GIF89a" + b"\x00" * 8,
+        b"RIFF\x00\x00\x00\x00WEBP",
+        b"\x00\x00\x00\x18ftypmp42",
+        b"\x00\x00\x00\x18ftypM4A ",
+        b"\x1a\x45\xdf\xa3" + b"\x00" * 12 + b"A_OPUS" + b"\x00" * 32,
+        b"\x1a\x45\xdf\xa3" + b"\x00" * 12 + b"V_VP8" + b"\x00" * 32,
+        wav_bytes(),
+        b"OggS\x00\x02" + b"\x00" * 20,
+        b"ID3\x03\x00\x00\x00" + b"\x00" * 8,
+        b"%PDF-1.7",
+        b"PK\x03\x04" + b"\x00" * 8,
+    ]
+    for sample in samples:
+        result = storage.sniff(sample[: storage.SNIFF_BYTES])
+        assert result.content_type in storage.ALLOWED_TYPES, result.content_type
+        # The extension on disk comes from the same table, so the stored file
+        # and the served content type can never disagree.
+        assert result.extension == storage.ALLOWED_TYPES[result.content_type]
+        assert result.kind == result.content_type.split("/", 1)[0]
 
 
 def test_resolve_refuses_traversal(tmp_path, monkeypatch):

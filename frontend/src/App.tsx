@@ -55,8 +55,13 @@ function RequireAuth() {
 /** Signed-in users have no reason to see the login or register screens. */
 function RedirectIfAuthed({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
+  const location = useLocation()
+  // `?add=1` is the account switcher asking to sign in as somebody else. The
+  // current session must stay put while that happens, so the redirect that
+  // would normally bounce a signed-in visitor away is skipped here.
+  const adding = new URLSearchParams(location.search).get('add') === '1'
   if (loading) return <FullPageSpinner />
-  if (user) return <Navigate to="/" replace />
+  if (user && !adding) return <Navigate to="/" replace />
   return <>{children}</>
 }
 

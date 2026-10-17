@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { SparkIcon, EyeIcon, EyeOffIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 
 export function RegisterPage() {
   const { user, register } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [displayName, setDisplayName] = useState('')
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
@@ -14,11 +15,16 @@ export function RegisterPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    document.title = 'Create account · Pulse'
-  }, [])
+  // Set when the account switcher sent the user here to add another account.
+  const adding = new URLSearchParams(location.search).get('add') === '1'
 
-  if (user) return <Navigate to="/" replace />
+  useEffect(() => {
+    document.title = adding ? 'Add account · Pulse' : 'Create account · Pulse'
+  }, [adding])
+
+  // Creating an account while already signed in is the add-account flow, so the
+  // redirect that would normally bounce a signed-in visitor away is skipped.
+  if (user && !adding) return <Navigate to="/" replace />
 
   const usernameValid = /^[A-Za-z0-9_]{3,32}$/.test(username)
   const passwordValid = password.length >= 8
@@ -84,8 +90,12 @@ export function RegisterPage() {
 
       <main className="auth-panel">
         <div className="auth-card">
-          <h2>Create your account</h2>
-          <p className="sub">Pick a username — you can change the rest later.</p>
+          <h2>{adding ? 'Add an account' : 'Create your account'}</h2>
+          <p className="sub">
+            {adding
+              ? 'Set up a new profile. Your current session stays signed in.'
+              : 'Pick a username — you can change the rest later.'}
+          </p>
 
           <form className="auth-form" onSubmit={submit}>
             {error && <div className="form-error">{error}</div>}
@@ -165,8 +175,14 @@ export function RegisterPage() {
           </form>
 
           <p className="auth-switch">
-            Already have an account? <Link to="/login">Sign in</Link>
+            Already have an account?{' '}
+            <Link to={adding ? '/login?add=1' : '/login'}>Sign in</Link>
           </p>
+          {adding && (
+            <p className="auth-switch" style={{ marginTop: 8 }}>
+              <Link to="/">Cancel and go back</Link>
+            </p>
+          )}
         </div>
       </main>
     </div>
