@@ -379,6 +379,15 @@ the public URL returns 502 until the dev server is bound to 12000.
   send to a worker thread that opens its own `SessionLocal`; the request's session is closed
   as soon as the response returns. Push is best-effort and must never fail the request that
   triggered it.
+- Delivery runs on a *fixed* pool (`PUSH_WORKERS`), fed by a bounded queue, not one thread
+  per notification. A thread per event is unbounded: a slow or hanging push service makes
+  every send outlive its request, so a burst piles up threads — each holding a DB session
+  and a stack — until the process hits its ceiling. This is what caused a Render OOM restart:
+  400 notifications against a slow endpoint produced 402 live threads and pushed RSS from
+  68 MB to 101 MB, and RSS never returned to its baseline. When the queue is full the newest
+  event is dropped and counted, because the notification is already committed and visible in
+  the app, so losing an alert beats growing memory without bound. `tests/test_push.py` pins
+  both the thread cap and the drop behaviour.
 - `frontend/public/` is served verbatim and is not bundled, so `sw.js` is plain JavaScript
   and cannot import from `src/`. Check the file mode when adding to it: it was committed
   `600` once, which would not be served.
