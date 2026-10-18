@@ -204,6 +204,11 @@ the public URL returns 502 until the dev server is bound to 12000.
   script's directory rather than the cwd. Headless chromium also refuses
   `navigator.clipboard.writeText` on an untrusted (programmatic) click even with
   `overridePermissions`; click through a real element handle when testing copy buttons.
+  Reading the clipboard back (`navigator.clipboard.readText()`) hangs until the puppeteer
+  `protocolTimeout` and aborts the run, so verify a copy by wrapping
+  `navigator.clipboard.writeText` in the page and recording what the component passes it.
+  The dev server answers `/favicon.ico` with a 404 that surfaces as a console error; prod
+  serves it, so a clean-console assertion should ignore that one request.
 - `UserPublic` deliberately omits `email`, and every user-facing endpoint (including
   `/auth/me`) returns `UserPublic`. The email is only ever accepted on register/login, so
   no component may reference `user.email`.
