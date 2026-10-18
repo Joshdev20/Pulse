@@ -219,6 +219,14 @@ which is comfortably inside the idle window. It is scheduled from GitHub rather
 than from Render because a Render-side cron job would have to live on the same
 sleeping service. The repository is public, so Actions minutes are not billed.
 
+> **Verify the schedule before relying on it.** The workflow is registered and
+> active, and a manual `workflow_dispatch` run succeeds, but the `schedule`
+> trigger was **not** observed firing within ~48 minutes of being added. GitHub
+> documents that scheduled runs can be delayed and are sometimes skipped under
+> load, and newly added schedules can take a while to begin. Check the Actions
+> tab for runs with the `schedule` event before trusting this as your only
+> keep-alive. A purpose-built external monitor is the more dependable option.
+
 The script touches only `/api/health`: unauthenticated, no database work, no
 writes. It needs nothing but the standard library. Point it elsewhere with a
 repository variable:
@@ -234,9 +242,10 @@ connected.
 
 Two honest limits:
 
-- **GitHub may delay scheduled runs** under load. If that happens often enough
-  for the instance to sleep between pings, use an external monitor (UptimeRobot,
-  cron-job.org) which offers tighter intervals on its free tier.
+- **GitHub may delay scheduled runs** under load, and the first runs after
+  adding a schedule can lag. If the Actions tab shows no `schedule` runs, use an
+  external monitor instead — UptimeRobot or cron-job.org both offer a 5-minute
+  interval on their free tier and are built for exactly this.
 - **This only helps while it runs.** A scheduled workflow is disabled
   automatically after 60 days without repository activity, so a dormant repo
   loses its keep-alive. Check the Actions tab if a cold start returns.
