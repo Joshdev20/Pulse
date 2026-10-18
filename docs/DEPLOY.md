@@ -51,7 +51,9 @@ The repo contains `render.yaml`, so this is a blueprint deploy.
 >   redeploy even without a disk. A mounted volume is still worth setting for
 >   large files.
 > - **It sleeps after ~15 minutes idle** and takes ~30–60s to wake, so the first
->   request after a pause is slow.
+>   request after a pause is slow. The workflow in
+>   `.github/workflows/keep-alive.yml` pings `/api/health` every 5 minutes to
+>   keep it warm — see [Keeping the backend warm](#keeping-the-backend-warm).
 > - **Render's own free Postgres expires 30 days after creation.** Use a Neon or
 >   Supabase URL for anything you want to keep.
 >
@@ -200,9 +202,47 @@ console: the WebSocket should connect to `wss://<backend>/api/ws`, and the
 | Login returns 401 on a fresh deploy | `AUTO_SEED` was not `true`, so there are no users — seed manually with `python -m app.seed` |
 | Media vanish after a redeploy | Should not happen now: bytes are stored in `media.blob` and served from the database. If it does, the row predates that column *and* the file is gone — re-upload the file. |
 | WebSocket fails to connect | Backend host is unreachable, or a proxy in front of it does not forward `Upgrade` |
-| First request after idle takes ~60s | Render free tier cold start |
+| First request after idle takes ~60s | Render free tier cold start — the keep-alive workflow should prevent it; check its recent runs if it does not |
 | `FUNCTION_PAYLOAD_TOO_LARGE` | A Vercel Function received >4.5 MB — the backend is on the wrong host |
 | `ModuleNotFoundError: psycopg` in the backend logs | `psycopg[binary]` is in `requirements-prod.txt` but the service is installing `requirements.txt`, or is building from a stale commit |
+
+### Keeping the backend warm
+
+A Render free instance sleeps after ~15 minutes idle and takes 30–60s to wake.
+Every request made during that wake-up stalls, and a media download that stalls
+surfaces in the UI as a **broken image** or a video that never plays — so the
+symptom looks like lost media rather than a sleeping host. Pinging the health
+endpoint on a schedule keeps the instance awake and removes that failure mode.
+
+`.github/workflows/keep-alive.yml` runs `scripts/keep_alive.py` every 5 minutes,
+which is comfortably inside the idle window. It is scheduled from GitHub rather
+than from Render because a Render-side cron job would have to live on the same
+sleeping service. The repository is public, so Actions minutes are not billed.
+
+The script touches only `/api/health`: unauthenticated, no database work, no
+writes. It needs nothing but the standard library. Point it elsewhere with a
+repository variable:
+
+```bash
+# Local run against any deploy
+PULSE_API_URL=https://pulse-api-y16m.onrender.com python scripts/keep_alive.py
+```
+
+Its output includes the cache backend (`ok (cache=memory)`), which is the
+quickest way to confirm from outside whether a `REDIS_URL` deploy actually
+connected.
+
+Two honest limits:
+
+- **GitHub may delay scheduled runs** under load. If that happens often enough
+  for the instance to sleep between pings, use an external monitor (UptimeRobot,
+  cron-job.org) which offers tighter intervals on its free tier.
+- **This only helps while it runs.** A scheduled workflow is disabled
+  automatically after 60 days without repository activity, so a dormant repo
+  loses its keep-alive. Check the Actions tab if a cold start returns.
+
+Warming the host does not make the *first* request fast if the instance already
+slept. The durable fix is a paid instance type, which never sleeps.
 
 ### Diagnosing "the site loads but nothing works"
 
