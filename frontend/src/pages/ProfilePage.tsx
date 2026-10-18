@@ -14,6 +14,7 @@ import {
   LinkIcon,
   LocationIcon,
   MailIcon,
+  ShareIcon,
   SparkIcon,
   UsersIcon,
 } from '../components/Icons'
@@ -49,6 +50,31 @@ function MessageButton({ username }: { username: string }) {
   return (
     <button type="button" className="btn btn-outline" disabled={busy} onClick={open}>
       {busy ? <Spinner size={16} /> : <MailIcon size={16} />} Message
+    </button>
+  )
+}
+
+/** Copies this profile's public URL, for pasting into another app. */
+function ShareProfileButton({ username }: { username: string }) {
+  const { notify } = useToast()
+
+  async function copy() {
+    // Built from the current origin rather than a configured base so the copied
+    // link points at whichever deployment the sharer is actually using.
+    const url = `${window.location.origin}/u/${username}`
+    try {
+      await navigator.clipboard.writeText(url)
+      notify('Profile link copied')
+    } catch {
+      // Clipboard access needs a secure context and permission; the prompt is
+      // the fallback so the link is still reachable when it is unavailable.
+      window.prompt('Copy this link:', url)
+    }
+  }
+
+  return (
+    <button type="button" className="btn btn-outline" onClick={copy}>
+      <ShareIcon size={16} /> Share
     </button>
   )
 }
@@ -132,7 +158,7 @@ export function ProfilePage() {
             </div>
             <div className="profile-handle">@{person.username}</div>
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {isMe ? (
               <Link to="/settings" className="btn btn-outline">
                 Edit profile
@@ -143,6 +169,9 @@ export function ProfilePage() {
                 <MessageButton username={person.username} />
               </>
             )}
+            {/* Shown on every profile: the point is to hand the link to someone
+                on another platform, which is as true of your own as of anyone's. */}
+            <ShareProfileButton username={person.username} />
           </div>
         </div>
 
