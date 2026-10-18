@@ -33,6 +33,6 @@ jobs:
       PULSE_API_URL: ${{ vars.PULSE_API_URL || 'https://pulse-api-y16m.onrender.com' }}
     steps:
       # The script is standard-library only, so the runner's python3 is enough.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Ping the health endpoint
         run: python3 scripts/keep_alive.py
