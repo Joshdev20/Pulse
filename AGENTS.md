@@ -195,6 +195,15 @@ the public URL returns 502 until the dev server is bound to 12000.
 - `allowedHosts: true` is set in `vite.config.ts` so the dev server accepts the generated
   sandbox hostnames. Removing it makes the app return "Blocked request" when accessed
   through a proxy hostname.
+- Driving the frontend from a headless browser (`.agent_tmp/*.js`, `puppeteer-core` +
+  `/usr/bin/chromium`) needs two things the setup above does not give you. Point the dev
+  server at the API with `VITE_API_BASE=http://127.0.0.1:8010`, and start the backend with
+  `CORS_ORIGINS` naming the dev origin — the default is Vercel-only, so every request fails
+  CORS preflight and the page silently falls back to the login screen. Run the harness from
+  `frontend/` with `NODE_PATH=frontend/node_modules`, since Node resolves modules from the
+  script's directory rather than the cwd. Headless chromium also refuses
+  `navigator.clipboard.writeText` on an untrusted (programmatic) click even with
+  `overridePermissions`; click through a real element handle when testing copy buttons.
 - `UserPublic` deliberately omits `email`, and every user-facing endpoint (including
   `/auth/me`) returns `UserPublic`. The email is only ever accepted on register/login, so
   no component may reference `user.email`.
