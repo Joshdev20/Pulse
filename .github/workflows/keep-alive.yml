@@ -1,0 +1,38 @@
+# Keep the Render free-tier backend warm.
+#
+# The free instance sleeps after ~15 minutes idle, and the 30-60s wake-up makes
+# media downloads time out — which shows up as broken images and videos that
+# never play. Pinging well inside that window keeps the instance awake.
+#
+# This runs from GitHub rather than Render because a Render-side cron job would
+# have to live on the same sleeping service, and an external scheduler is the
+# point. This repository is public, so Actions minutes are not billed.
+name: Keep API warm
+
+on:
+  schedule:
+    # Every 5 minutes, comfortably inside the ~15 minute idle timeout. GitHub
+    # may delay a scheduled run under load, which is why this is not set to 10.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+# A run that overruns must not stack up behind the next one.
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Override with a repository variable to point at a different deploy;
+      # the fallback is the production API.
+      PULSE_API_URL: ${{ vars.PULSE_API_URL || 'https://pulse-api-y16m.onrender.com' }}
+    steps:
+      # The script is standard-library only, so the runner's python3 is enough.
+      - uses: actions/checkout@v4
+      - name: Ping the health endpoint
+        run: python3 scripts/keep_alive.py
