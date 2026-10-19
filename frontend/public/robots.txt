@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+
+# Authenticated-only screens. These render nothing useful to a crawler, so
+# keeping them out avoids indexing empty app shells.
+Disallow: /settings
+Disallow: /admin
+Disallow: /messages
+Disallow: /notifications
+Disallow: /compose
+Disallow: /reset-password
+Disallow: /forgot-password
