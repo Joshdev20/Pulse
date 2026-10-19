@@ -140,6 +140,12 @@ export interface PushStatus {
   enabled: boolean
   public_key: string | null
   devices: number
+  /**
+   * Whether the caller's own endpoint is still on file, when it asked about one.
+   * `null`/absent when no endpoint was given; `false` means the row was pruned
+   * and this browser must subscribe again to become deliverable.
+   */
+  endpoint_registered?: boolean | null
 }
 
 /** A browser push endpoint and its keys, as produced by `subscription.toJSON()`. */

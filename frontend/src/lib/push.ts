@@ -18,6 +18,7 @@
  */
 
 import { api } from './api'
+import type { PushSubscriptionBody } from './types'
 
 export type PushState =
   | 'unsupported'
@@ -60,16 +61,77 @@ async function registration(): Promise<ServiceWorkerRegistration> {
   return navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
 }
 
+/** The API body for a browser subscription, or null if it is unusable. */
+function subscriptionBody(
+  subscription: PushSubscription,
+): { endpoint: string; keys: { p256dh: string; auth: string } } | null {
+  const json = subscription.toJSON() as {
+    endpoint?: string
+    keys?: { p256dh?: string; auth?: string }
+  }
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) return null
+  return { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } }
+}
+
+/** The browser's current subscription and the body the API stores for it. */
+async function currentSubscription(): Promise<{
+  subscription: PushSubscription
+  body: { endpoint: string; keys: { p256dh: string; auth: string } }
+} | null> {
+  const reg = await navigator.serviceWorker.getRegistration('/')
+  const subscription = await reg?.pushManager.getSubscription()
+  if (!subscription) return null
+  const body = subscriptionBody(subscription)
+  return body ? { subscription, body } : null
+}
+
+/** Subscribe this browser against the server's current VAPID public key. */
+async function subscribeWithKey(
+  reg: ServiceWorkerRegistration,
+  publicKey: string,
+): Promise<PushSubscription> {
+  return reg.pushManager.subscribe({
+    // Required by Chrome: a push without a visible notification is an error.
+    userVisibleOnly: true,
+    applicationServerKey: decodeKey(publicKey),
+  })
+}
+
+/**
+ * Drop the browser's current subscription and create one against `publicKey`.
+ *
+ * A subscription created against an older VAPID key is dead on arrival: the
+ * push service refuses every send with 403, and re-registering the same
+ * subscription cannot fix it because the browser keeps handing it back. Only a
+ * brand-new subscription picks up the current key. Returns the stored body, or
+ * null if the browser refused to subscribe.
+ */
+async function replaceSubscription(publicKey: string): Promise<PushSubscriptionBody | null> {
+  const existing = await currentSubscription()
+  await existing?.subscription.unsubscribe().catch(() => undefined)
+  const reg = await registration()
+  await navigator.serviceWorker.ready
+  const fresh = await subscribeWithKey(reg, publicKey)
+  const body = subscriptionBody(fresh)
+  if (!body) return null
+  await api.pushSubscribe(body)
+  return body
+}
+
 /** The current state, without prompting for anything. */
 export async function pushState(): Promise<PushState> {
   if (!pushSupported()) return 'unsupported'
-  const status = await api.pushStatus().catch(() => null)
+  const current = await currentSubscription()
+  const status = await api.pushStatus(current?.body.endpoint).catch(() => null)
   if (!status?.enabled || !status.public_key) return 'unconfigured'
   if (Notification.permission === 'denied') return 'denied'
   if (Notification.permission === 'default') return 'default'
-  const reg = await navigator.serviceWorker.getRegistration('/')
-  const subscription = await reg?.pushManager.getSubscription()
-  return subscription ? 'subscribed' : 'granted'
+  if (!current) return 'granted'
+  // The browser holds a subscription, but the server no longer has the row
+  // (pruned after a key rotation, or the endpoint moved to another account on
+  // this shared browser). Report it as needing attention rather than claiming
+  // the device is subscribed and deliverable.
+  return status.endpoint_registered === false ? 'granted' : 'subscribed'
 }
 
 /**
@@ -87,28 +149,27 @@ export async function enablePush(): Promise<PushState> {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'default'
 
+  const existing = await currentSubscription()
+  if (existing) {
+    // A subscription the server still has is re-sent as-is. One it does not have
+    // is stale (a pruned row after a key rotation), and turning the toggle back
+    // on must replace it rather than register the same dead subscription again.
+    const known = await api
+      .pushStatus(existing.body.endpoint)
+      .then((s) => s.endpoint_registered !== false)
+      .catch(() => false)
+    if (!known) {
+      return (await replaceSubscription(status.public_key)) ? 'subscribed' : 'default'
+    }
+    await api.pushSubscribe(existing.body)
+    return 'subscribed'
+  }
+
   const reg = await registration()
   await navigator.serviceWorker.ready
-
-  const existing = await reg.pushManager.getSubscription()
-  const subscription =
-    existing ??
-    (await reg.pushManager.subscribe({
-      // Required by Chrome: a push without a visible notification is an error.
-      userVisibleOnly: true,
-      applicationServerKey: decodeKey(status.public_key),
-    }))
-
-  const json = subscription.toJSON() as {
-    endpoint?: string
-    keys?: { p256dh?: string; auth?: string }
-  }
-  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) return 'default'
-
-  await api.pushSubscribe({
-    endpoint: json.endpoint,
-    keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-  })
+  const body = subscriptionBody(await subscribeWithKey(reg, status.public_key))
+  if (!body) return 'default'
+  await api.pushSubscribe(body)
   return 'subscribed'
 }
 
@@ -127,28 +188,53 @@ export async function disablePush(): Promise<PushState> {
 }
 
 /**
- * Re-register on load if this browser is already subscribed.
+ * Re-register on load if this browser is already subscribed, healing two ways a
+ * stored subscription goes stale.
  *
- * Browsers can rotate a subscription's endpoint on their own; when that
- * happens the stored row points at a dead endpoint and every push to it is
- * discarded. Re-sending the current subscription on each authenticated load
- * keeps the server's copy current, and is cheap: it is one request.
+ * The common case is cheap: browsers can rotate an endpoint on their own, and a
+ * rotated endpoint means every push to the old one is discarded, so the current
+ * subscription is re-sent on each authenticated load.
+ *
+ * The other case is a VAPID key rotation. It invalidates every subscription
+ * created before it, and the browser keeps returning that dead subscription, so
+ * re-sending it is useless: the push service answers 403 and the server prunes
+ * the row. The server then reports the endpoint as unregistered, and the only
+ * recovery is to drop the browser's subscription and create a new one against
+ * the current key. Without this, a rotation silently stops delivery on every
+ * existing device while the settings toggle still reads "subscribed".
+ *
+ * Concurrent callers share one run. Two effects firing together (StrictMode in
+ * development, or two tabs open at once) would otherwise both see the endpoint
+ * as unregistered and each subscribe, leaving a duplicate row pointing at a
+ * subscription nobody uses.
  */
-export async function syncPushSubscription(): Promise<void> {
+let syncInFlight: Promise<void> | null = null
+
+export function syncPushSubscription(): Promise<void> {
+  if (!syncInFlight) {
+    syncInFlight = runSync().finally(() => {
+      syncInFlight = null
+    })
+  }
+  return syncInFlight
+}
+
+async function runSync(): Promise<void> {
   if (!pushSupported() || Notification.permission !== 'granted') return
   try {
-    const reg = await navigator.serviceWorker.getRegistration('/')
-    const subscription = await reg?.pushManager.getSubscription()
-    if (!subscription) return
-    const json = subscription.toJSON() as {
-      endpoint?: string
-      keys?: { p256dh?: string; auth?: string }
+    const current = await currentSubscription()
+    const status = await api.pushStatus(current?.body.endpoint).catch(() => null)
+    if (!status?.enabled || !status.public_key) return
+    if (!current) return
+
+    if (status.endpoint_registered === false) {
+      // The server does not have this endpoint, so it can never be delivered
+      // to. Replace it with one bound to the current key.
+      await replaceSubscription(status.public_key)
+      return
     }
-    if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) return
-    await api.pushSubscribe({
-      endpoint: json.endpoint,
-      keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-    })
+
+    await api.pushSubscribe(current.body)
   } catch {
     // A failed re-sync is not worth surfacing; the next load tries again.
   }

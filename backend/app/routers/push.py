@@ -9,7 +9,7 @@ bundle is built once and the key belongs to the deployment, not the build.
 import base64
 import binascii
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -41,6 +41,13 @@ class PushStatus(BaseModel):
     enabled: bool
     public_key: str | None
     devices: int
+    # Whether the caller's own browser endpoint is still on file. `None` when the
+    # client did not say which endpoint it holds. `False` means the row is gone
+    # (it was pruned after a VAPID key rotation, or it belongs to another account
+    # on this shared browser), so the device is not deliverable and the client
+    # must register again. Without this the settings toggle reads "subscribed"
+    # from the browser's own subscription while the server has nothing to send to.
+    endpoint_registered: bool | None = None
 
 
 class PushUnsubscribe(BaseModel):
@@ -65,15 +72,37 @@ def _valid_key(value: str) -> bool:
 
 
 @router.get("/status", response_model=PushStatus)
-def push_status(db: DbSession, user: CurrentUser) -> PushStatus:
-    """Whether push is available, its public key, and this user's device count."""
+def push_status(
+    db: DbSession,
+    user: CurrentUser,
+    endpoint: str | None = Query(default=None, max_length=MAX_ENDPOINT),
+) -> PushStatus:
+    """Whether push is available, its public key, and this user's device count.
+
+    ``endpoint`` is optional and, when given, also reports whether that specific
+    endpoint is still registered to this user. The caller is a browser that holds
+    the endpoint, so it is the only party that can tell a pruned row from a live
+    one and re-subscribe.
+    """
     devices = len(
         db.scalars(select(PushSubscription.id).where(PushSubscription.user_id == user.id)).all()
     )
+    registered: bool | None = None
+    if endpoint:
+        registered = (
+            db.scalar(
+                select(PushSubscription.id).where(
+                    PushSubscription.endpoint == endpoint,
+                    PushSubscription.user_id == user.id,
+                )
+            )
+            is not None
+        )
     return PushStatus(
         enabled=settings.push_configured,
         public_key=settings.valid_vapid_public_key,
         devices=devices,
+        endpoint_registered=registered,
     )
 
 

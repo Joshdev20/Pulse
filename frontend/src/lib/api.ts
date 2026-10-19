@@ -261,7 +261,10 @@ export const api = {
   unreadCount: () => request<{ count: number }>('/api/notifications/unread-count'),
 
   /** Web Push: whether the server can push, its public key, and device count. */
-  pushStatus: () => request<PushStatus>('/api/push/status'),
+  pushStatus: (endpoint?: string) =>
+    request<PushStatus>(
+      `/api/push/status${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ''}`,
+    ),
 
   pushSubscribe: (body: PushSubscriptionBody) =>
     request<{ devices: number }>('/api/push/subscribe', {

@@ -626,3 +626,25 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   rather than leaving an empty frame.
 - The account switcher's "switch back" path is covered by `.agent_tmp/switch_back.js`; the earlier harness only ever switched once.
 - The Render free tier intermittently answers 502 during a deploy window (health check times out, alert email follows) and recovers on its own. `render.yaml` sets `healthCheckPath: /api/health`. Verify a suspected app failure with a timed request before blaming the code: a real CPU stall shows up as a slow request, an infra flap does not.
+- Web Push: a subscription is bound to the VAPID key that created it. Rotate
+  `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` and every stored subscription becomes
+  undeliverable — FCM answers 403 "the VAPID credentials ... do not correspond to
+  the credentials used to create the subscriptions". That 403 is permanent, not
+  transient, so `push.py` treats it as gone and prunes the row; otherwise the row
+  survives, the toggle still reads "subscribed", and every alert is silently
+  dropped forever. `GET /api/push/status?endpoint=...` reports
+  `endpoint_registered`, and the client replaces a subscription the server no
+  longer has (it must create a NEW subscription — re-sending the old one is
+  useless, the browser keeps handing back the dead one).
+- A browser can only be subscribed once, and `PushSubscription.endpoint` is
+  globally unique, so the row is per-browser, not per-user: subscribing the same
+  browser as a second account moves the endpoint to that account. `syncPushSubscription`
+  re-registers on every authenticated load, so this self-corrects; but it is why
+  `endpoint_registered` can be `false` on a shared browser. Two concurrent syncs
+  are deduped (`syncInFlight`) so a StrictMode double-effect or two tabs cannot
+  leave a duplicate row.
+- Web Push cannot be tested in an incognito/headless Playwright context: Chrome
+  disables the Push API there ("Chrome currently does not support the Push API in
+  incognito mode"), and `subscribe()` fails with `AbortError: permission denied`
+  even when `Notification.permission` is `granted`. Use `launchPersistentContext`
+  (a real profile) to subscribe.
