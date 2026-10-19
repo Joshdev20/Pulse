@@ -35,6 +35,19 @@ logger = logging.getLogger("pulse.push")
 # Any other failure is treated as transient and the row is kept.
 GONE_STATUSES = {404, 410}
 
+# A push service also refuses permanently, with 403, when the VAPID key that
+# signs a request is not the one the subscription was created against -- FCM
+# says the credentials "do not correspond to the credentials used to create the
+# subscriptions". That happens after the key pair is rotated: every subscription
+# stored before the rotation can never be delivered to again, and the browser
+# cannot be told to replace it. Treating it as transient is the trap: the row
+# survives, the settings toggle still reads "subscribed", and every alert is
+# silently refused forever. Detected by the response body rather than the status
+# alone, because a 403 also covers other authorization problems that are worth
+# retrying.
+VAPID_MISMATCH_STATUS = 403
+VAPID_MISMATCH_MARKER = "do not correspond to the credentials used to create the subscriptions"
+
 # How long one delivery may take before it is abandoned, in seconds. This is
 # the ceiling on how long a single push service can hold one of the pool's
 # workers: while a worker is stuck on a slow endpoint, every other alert queued
@@ -199,9 +212,11 @@ def send_to_subscription(subscription: PushSubscription, payload: dict[str, Any]
         )
         return True
     except WebPushException as exc:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        if status in GONE_STATUSES:
-            # Permanently gone: the caller deletes the row.
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if status in GONE_STATUSES or _is_vapid_mismatch(response):
+            # Permanently gone, or bound to a key pair that is no longer in use:
+            # either way this row can never deliver, so the caller deletes it.
             logger.info("push subscription %s is gone (%s)", subscription.id, status)
             raise
         logger.warning("push to subscription %s failed: %s", subscription.id, exc)
@@ -209,6 +224,24 @@ def send_to_subscription(subscription: PushSubscription, payload: dict[str, Any]
     except Exception as exc:  # noqa: BLE001 - a push must never break the request
         logger.warning("push to subscription %s errored: %s", subscription.id, exc)
         return False
+
+
+def _is_vapid_mismatch(response: Any) -> bool:
+    """Whether a push service refused a request because the VAPID key changed.
+
+    Rotating the key pair invalidates every subscription created before the
+    rotation, and the refusal is permanent: the browser holds the old key and
+    cannot be told otherwise, so the row can only be pruned. The body carries a
+    phrase that is stable across FCM and Mozilla, so it is the signal; the status
+    alone would also match transient authorization failures worth retrying.
+    """
+    if getattr(response, "status_code", None) != VAPID_MISMATCH_STATUS:
+        return False
+    body = getattr(response, "text", None)
+    if body is None:
+        body = getattr(response, "content", b"")
+        body = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
+    return VAPID_MISMATCH_MARKER in str(body)
 
 
 def notify_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:

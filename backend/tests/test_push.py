@@ -77,7 +77,49 @@ def test_status_reports_disabled_without_keys(client, make_user, monkeypatch):
     headers, _ = make_user("ada")
 
     body = client.get("/api/push/status", headers=headers).json()
-    assert body == {"enabled": False, "public_key": None, "devices": 0}
+    assert body == {
+        "enabled": False,
+        "public_key": None,
+        "devices": 0,
+        "endpoint_registered": None,
+    }
+
+
+def test_status_reports_whether_the_callers_endpoint_is_registered(client, make_user, vapid):
+    """The caller's own endpoint is the one thing only the caller can check.
+
+    A device whose row was pruned still holds its browser subscription, so the
+    client has to be told the server no longer has it before it can re-subscribe.
+    """
+    headers, _ = make_user("ada")
+    subscribe(client, headers, "a")
+
+    # No endpoint given: nothing to report about.
+    assert client.get("/api/push/status", headers=headers).json()["endpoint_registered"] is None
+
+    # The endpoint this user registered is on file.
+    registered = client.get(
+        "/api/push/status", headers=headers, params={"endpoint": endpoint("a")}
+    ).json()
+    assert registered["endpoint_registered"] is True
+
+    # One this user never registered is not.
+    missing = client.get(
+        "/api/push/status", headers=headers, params={"endpoint": endpoint("z")}
+    ).json()
+    assert missing["endpoint_registered"] is False
+
+
+def test_status_does_not_report_another_users_endpoint_as_the_callers(client, make_user, vapid):
+    """The lookup is scoped to the caller, so a shared browser cannot mislead."""
+    ada_headers, _ = make_user("ada")
+    grace_headers, _ = make_user("grace")
+    subscribe(client, ada_headers, "a")
+
+    body = client.get(
+        "/api/push/status", headers=grace_headers, params={"endpoint": endpoint("a")}
+    ).json()
+    assert body["endpoint_registered"] is False
 
 
 def test_status_reports_disabled_for_a_wrongly_shaped_public_key(client, make_user, monkeypatch):
@@ -558,6 +600,89 @@ def test_a_failing_push_does_not_break_the_request(client, make_user, vapid, mon
         session.close()
 
 
+def _webpush_error(status: int, body: str):
+    """A `WebPushException` shaped like the one `pywebpush` raises."""
+    from pywebpush import WebPushException
+
+    response = type("Response", (), {"status_code": status, "text": body, "content": body.encode()})()
+    return WebPushException("boom", response=response)
+
+
+def test_a_vapid_key_mismatch_is_recognised_as_permanent():
+    """The phrase FCM returns after a key rotation is the signal, not the 403."""
+    mismatch = (
+        "the VAPID credentials in the authorization header do not correspond to "
+        "the credentials used to create the subscriptions."
+    )
+    assert push_module._is_vapid_mismatch(
+        type("R", (), {"status_code": 403, "text": mismatch, "content": mismatch.encode()})()
+    )
+    # A 403 for some other reason must stay retryable.
+    assert not push_module._is_vapid_mismatch(
+        type("R", (), {"status_code": 403, "text": "forbidden", "content": b"forbidden"})()
+    )
+    assert not push_module._is_vapid_mismatch(None)
+
+
+def test_notify_user_prunes_a_subscription_the_service_rejects_for_a_key_change(
+    client, make_user, vapid, monkeypatch
+):
+    """After a VAPID rotation the row can never deliver, so it must be removed.
+
+    FCM refuses with 403 rather than 404/410, so without this the row survives
+    and every future alert is silently discarded while the toggle still reads
+    "subscribed".
+    """
+    headers, user = make_user("ada")
+    subscribe(client, headers)
+
+    mismatch = (
+        "the VAPID credentials in the authorization header do not correspond to "
+        "the credentials used to create the subscriptions."
+    )
+
+    def rejected(**kwargs):
+        raise _webpush_error(403, mismatch)
+
+    # Patch the transport, not `send_to_subscription`: the decision to treat a
+    # 403 as permanent is made inside `send_to_subscription`, so replacing it
+    # would test the stub instead of the rule.
+    import pywebpush
+
+    monkeypatch.setattr(pywebpush, "webpush", rejected)
+
+    from app.database import get_db
+
+    session = next(client.app.dependency_overrides[get_db]())
+    try:
+        assert push_module.notify_user(session, user["id"], {"title": "x"}) == 0
+        assert session.scalars(select(PushSubscription)).all() == []
+    finally:
+        session.close()
+
+
+def test_a_transient_403_keeps_the_subscription(client, make_user, vapid, monkeypatch):
+    """A 403 that is not a key mismatch may be temporary, so the row is kept."""
+    headers, user = make_user("ada")
+    subscribe(client, headers)
+
+    def rejected(**kwargs):
+        raise _webpush_error(403, "forbidden")
+
+    import pywebpush
+
+    monkeypatch.setattr(pywebpush, "webpush", rejected)
+
+    from app.database import get_db
+
+    session = next(client.app.dependency_overrides[get_db]())
+    try:
+        assert push_module.notify_user(session, user["id"], {"title": "x"}) == 0
+        assert len(session.scalars(select(PushSubscription)).all()) == 1
+    finally:
+        session.close()
+
+
 def test_send_to_subscription_builds_a_signed_request(client, make_user, vapid, monkeypatch):
     """The payload is JSON and the VAPID claims carry the configured subject."""
     calls: list[dict] = []
@@ -682,12 +807,14 @@ def test_the_documented_command_prints_a_key_pair():
     """
     import subprocess
     import sys
+    from pathlib import Path
 
     result = subprocess.run(
         [sys.executable, "-m", "app.push"],
         capture_output=True,
         text=True,
-        cwd="/workspace/project/backend",
+        # The module lives at the backend root, one level above this test file.
+        cwd=Path(__file__).resolve().parents[1],
     )
     assert result.returncode == 0, result.stderr
     assert "VAPID_PRIVATE_KEY=" in result.stdout
