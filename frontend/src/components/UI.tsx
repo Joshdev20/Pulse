@@ -152,13 +152,20 @@ export function Dropdown({
   trigger,
   children,
   align = 'right',
+  onOpenChange,
 }: {
   trigger: (open: boolean) => ReactNode
   children: (close: () => void) => ReactNode
   align?: 'left' | 'right'
+  /** Notified as the menu opens and closes, for content that is expensive to compute. */
+  onOpenChange?: (open: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    onOpenChange?.(open)
+  }, [open, onOpenChange])
 
   useEffect(() => {
     if (!open) return

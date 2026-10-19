@@ -4382,3 +4382,65 @@ h4 {
   color: var(--text-muted);
 }
 
+/* ============================================================
+   Profile menu (the hamburger on your own profile)
+   ============================================================ */
+.profile-menu-trigger {
+  display: grid;
+  place-items: center;
+}
+
+.profile-menu {
+  min-width: 262px;
+  padding: 6px;
+}
+
+/* Section label between the menu's groups. Mirrors `.account-menu-head`. */
+.profile-menu-head {
+  padding: 10px 10px 6px;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.profile-menu-theme {
+  display: flex;
+  gap: 8px;
+  padding: 0 6px 4px;
+}
+
+/* The shared `.theme-option` is sized for a full-width settings card; in a menu
+   it needs to sit two-up without the tall padding. */
+.profile-menu-theme .theme-option {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.profile-menu-row {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.profile-menu-row:hover {
+  background: var(--surface-3);
+}
+
+.profile-menu-label {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.profile-menu-sub {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.profile-menu-signout {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 calc(var(--radius) - 4px) calc(var(--radius) - 4px);
+}

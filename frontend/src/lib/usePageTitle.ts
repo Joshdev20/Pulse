@@ -9,7 +9,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/search': 'Search',
   '/notifications': 'Notifications',
   '/messages': 'Messages',
-  '/settings': 'Settings',
+  '/settings': 'Edit profile',
   '/compose': 'New post',
   '/admin': 'Admin',
 }

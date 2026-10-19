@@ -6,6 +6,7 @@ import { PostCard } from '../components/PostCard'
 import { ProfileBanner } from '../components/ProfileBanner'
 import { UserRow } from '../components/UserRow'
 import { EditPostModal } from '../components/EditPostModal'
+import { ProfileMenu } from '../components/ProfileMenu'
 import { EmptyState, ErrorState, FeedSkeleton, Modal, Spinner } from '../components/UI'
 import { InfiniteFeed } from '../components/InfiniteFeed'
 import {
@@ -141,6 +142,9 @@ export function ProfilePage() {
             </h1>
             <div className="sub">{pluralize(person.post_count, 'post')}</div>
           </div>
+          {/* Your own profile only: appearance, notification preferences, the
+              account switcher and signing out all live in here. */}
+          {isMe && <ProfileMenu />}
         </div>
       </header>
 
