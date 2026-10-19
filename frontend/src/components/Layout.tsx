@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { AccountList } from './AccountList'
 import { Avatar, DisplayName } from './Avatar'
 import { ThemeToggle } from './ThemeToggle'
 import {
   BellIcon,
-  CheckIcon,
-  CloseIcon,
   CompassIcon,
   ComposeIcon,
   HomeIcon,
@@ -19,7 +18,7 @@ import {
   UserIcon,
   WifiOffIcon,
 } from './Icons'
-import { Dropdown, Spinner } from './UI'
+import { Dropdown } from './UI'
 import { useAuth } from '../context/AuthContext'
 import { useRealtime, useUnreadMessages, useUnreadNotifications } from '../context/RealtimeContext'
 import { api } from '../lib/api'
@@ -54,34 +53,9 @@ function Badge({ value, className }: { value: number; className: string }) {
  * The active account is marked and cannot be selected again.
  */
 function AccountSwitcher() {
-  const { user, accounts, activeAccountId, switchAccount, forgetAccount } = useAuth()
-  const navigate = useNavigate()
-  const [busyId, setBusyId] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { user, accounts } = useAuth()
 
   if (!user || accounts.length === 0) return null
-
-  const others = accounts.filter((account) => account.id !== activeAccountId)
-
-  /**
-   * Swap to `id`, keeping the menu open until the switch settles.
-   *
-   * The menu must stay open on failure: `error` is rendered inside it, so
-   * closing first would hide the only explanation the user gets. It closes only
-   * once the new session is live.
-   */
-  async function choose(id: number, close: () => void) {
-    setError(null)
-    setBusyId(id)
-    try {
-      await switchAccount(id)
-      close()
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not switch account')
-    } finally {
-      setBusyId(null)
-    }
-  }
 
   return (
     <div className="account-switcher">
@@ -95,77 +69,7 @@ function AccountSwitcher() {
         {(close) => (
           <div className="account-menu">
             <div className="account-menu-head">Accounts</div>
-            {accounts.map((account) => {
-              const active = account.id === activeAccountId
-              // The active row is rendered from the live session rather than the
-              // stored snapshot, so a name or avatar changed in settings shows
-              // here immediately instead of after the next sign-in.
-              const shown =
-                active && user
-                  ? {
-                      ...account,
-                      display_name: user.display_name,
-                      username: user.username,
-                      avatar_color: user.avatar_color,
-                      avatar_url: user.avatar_url,
-                    }
-                  : account
-              return (
-                <div key={account.id} className={`account-row${active ? ' active' : ''}`}>
-                  <button
-                    type="button"
-                    className="account-row-main"
-                    disabled={active || busyId !== null}
-                    onClick={() => void choose(account.id, close)}
-                  >
-                    <Avatar
-                      name={shown.display_name}
-                      color={shown.avatar_color}
-                      url={shown.avatar_url}
-                      size="sm"
-                    />
-                    <span className="account-row-info">
-                      <span className="account-row-name">{shown.display_name}</span>
-                      <span className="account-row-handle">@{shown.username}</span>
-                    </span>
-                    {active && <CheckIcon size={15} />}
-                    {busyId === account.id && <Spinner size={14} />}
-                  </button>
-                  {!active && (
-                    <button
-                      type="button"
-                      className="account-row-forget"
-                      onClick={() => forgetAccount(account.id)}
-                      aria-label={`Forget @${account.username}`}
-                      title="Remove from this device"
-                    >
-                      <CloseIcon size={13} />
-                    </button>
-                  )}
-                </div>
-              )
-            })}
-
-            {error && <p className="field-error account-error">{error}</p>}
-
-            <button
-              type="button"
-              className="account-add"
-              onClick={() => {
-                close()
-                // `add=1` puts the sign-in screen in add-account mode, so the
-                // current session is kept and the new account is added to it
-                // rather than replacing it.
-                navigate('/login?add=1')
-              }}
-            >
-              <UserIcon size={16} /> Add another account
-            </button>
-            {others.length > 0 && (
-              <p className="account-hint">
-                {others.length} other {others.length === 1 ? 'account' : 'accounts'} on this device
-              </p>
-            )}
+            <AccountList onClose={close} />
           </div>
         )}
       </Dropdown>

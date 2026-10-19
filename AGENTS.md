@@ -194,8 +194,23 @@ the public URL returns 502 until the dev server is bound to 12000.
   destroys the error it is about to show, and adopting a dead token first would sign the
   user out of the account they are already using. `request()` lets an explicit
   `Authorization` header win over the shared slot for exactly this pre-check.
-- The switcher menu must close only *after* a successful switch (`choose(id, close)` in
-  `Layout.tsx`); closing on click hides the failure message that is rendered inside it.
+- The switcher menu must close only *after* a successful switch; closing on click hides
+  the failure message that is rendered inside it. `AccountList.tsx` owns that logic, and
+  both surfaces that show it (`AccountSwitcher` in `Layout.tsx` for the sidebar, and
+  `ProfileMenu.tsx` for the profile hamburger) pass in their own `close`.
+
+### Where account and appearance controls live
+
+- `/settings` is only the profile *editor* (picture, colour, name, bio, location, website,
+  cover). Everything that is not a profile field — theme, notification sound, push,
+  the account switcher and sign out — lives in the hamburger on your own profile
+  (`ProfileMenu.tsx`, rendered by `ProfilePage.tsx` when `isMe`). Keep it that way: a
+  settings screen that mixes the two is what this split fixed.
+- That hamburger is the *only* way to reach those controls on a phone, because the sidebar
+  (and so its switcher) is `display: none` below 780px. Do not move the menu behind a
+  breakpoint.
+- The push state is read when the menu first opens, not on mount. It costs a request, and
+  the profile page should not pay for it before the user shows interest.
 
 ## Gotchas
 

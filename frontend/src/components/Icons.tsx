@@ -80,11 +80,35 @@ export const ShareIcon = (p: IconProps) => (
   </Base>
 )
 
+/**
+ * A plain plus. Used to add another account, where a `UserIcon` would read as
+ * "the account" rather than "one more".
+ */
+export const PlusIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 5v14" />
+    <path d="M5 12h14" />
+  </Base>
+)
+
 export const MoreIcon = (p: IconProps) => (
   <Base {...p} strokeWidth={2.4}>
     <circle cx="5" cy="12" r="1.1" fill="currentColor" />
     <circle cx="12" cy="12" r="1.1" fill="currentColor" />
     <circle cx="19" cy="12" r="1.1" fill="currentColor" />
+  </Base>
+)
+
+/**
+ * The stacked-bars "menu" glyph. Three lines rather than `MoreIcon`'s dots
+ * because this one opens a menu of settings and session controls, and the dots
+ * already mean "actions for this item" elsewhere in the app.
+ */
+export const MenuIcon = (p: IconProps) => (
+  <Base {...p} strokeWidth={2.1}>
+    <path d="M4 7h16" />
+    <path d="M4 12h16" />
+    <path d="M4 17h16" />
   </Base>
 )
 
