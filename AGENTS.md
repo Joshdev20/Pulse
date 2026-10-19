@@ -8,6 +8,22 @@ A full-stack social platform. `backend/` is a FastAPI + SQLAlchemy 2 API backed 
 `frontend/` is a React 18 + TypeScript single-page app built with Vite. There is no
 component library — all styling is hand-written CSS in `frontend/src/styles.css`.
 
+## Production environments
+
+The live instances, and the value the frontend must be built with.
+
+- **Backend API** — Render, `https://pulse-api-y16m.onrender.com`. This is the owner's
+  API, and the origin every deployed frontend build must point at.
+- **Frontend** — Vercel, `https://pulse-hazel-nine.vercel.app`.
+
+`VITE_API_BASE` is the backend API origin: `https://pulse-api-y16m.onrender.com`. Set it to
+exactly that in the Vercel project for **both** the Production and Preview environments.
+Vite inlines it at build time and `vite.config.ts` fails a `VERCEL=1` build when it is
+empty, so a missing value surfaces as a failed deploy rather than a site that silently
+calls its own origin. Preview is the one that gets forgotten: production was configured
+first, so a branch preview fails to build while `main` deploys fine. A trailing slash is
+harmless to the app but breaks byte-for-byte bundle comparison, so leave it off.
+
 ## Commands
 
 ### First-time setup in a fresh sandbox
