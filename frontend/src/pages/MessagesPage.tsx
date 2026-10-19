@@ -176,25 +176,46 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
   // who has scrolled up is not yanked back down by the next attachment.
   const pinned = useRef(true)
   const contentHeight = useRef(0)
+  const pinTimer = useRef<number | null>(null)
+  // Set when the reader scrolls the thread themselves. Unlike the pin window
+  // expiring, this is not revivable by later content: someone who has scrolled
+  // up is reading history and must not be pulled back down.
+  const userDisarmed = useRef(false)
+
+  /**
+   * Keep the newest message in view, and restart the window that decides how
+   * long to keep doing so.
+   *
+   * The window has to be measured from the last time the content actually
+   * changed, not from the last render. An attachment is fetched over the
+   * network after the bubble is painted, so a slow image can grow the thread
+   * several seconds after the messages arrived. With the window started at
+   * render time it had already expired by then, the growth was ignored, and the
+   * thread settled hundreds of pixels above the newest message — which is the
+   * "still opens at the top" report. Re-arming on every growth is what makes a
+   * late image land at the bottom too.
+   */
+  const armPin = useCallback(() => {
+    pinned.current = true
+    if (pinTimer.current !== null) window.clearTimeout(pinTimer.current)
+    pinTimer.current = window.setTimeout(() => {
+      pinTimer.current = null
+      pinned.current = false
+    }, PIN_WINDOW_MS)
+  }, [])
 
   // Only opening a thread re-arms the pin; scrolling up disarms it for good, so
   // arriving messages never fight a reader who is reading history.
   useEffect(() => {
-    pinned.current = true
-  }, [conversation.id])
-
-  // The window restarts on every content change, so it is measured from when
-  // the thread last settled rather than from the click. A thread that opens on
-  // a cold start, or one still receiving messages, therefore stays pinned; a
-  // quiet thread stops after this long so late-decoding old images cannot keep
-  // moving the view.
-  useEffect(() => {
-    if (!pinned.current) return
-    const timer = window.setTimeout(() => {
-      pinned.current = false
-    }, PIN_WINDOW_MS)
-    return () => window.clearTimeout(timer)
-  }, [conversation.id, messages, partnerTyping, replyTo])
+    userDisarmed.current = false
+    armPin()
+    return () => {
+      if (pinTimer.current !== null) {
+        window.clearTimeout(pinTimer.current)
+        pinTimer.current = null
+      }
+    }
+  }, [conversation.id, armPin])
 
   /**
    * Keep the newest message in view while the thread's content is still settling.
@@ -204,6 +225,10 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
    * by hundreds of pixels afterwards, leaving the view stuck that far above the
    * bottom, which reads as the thread having opened at the top. Re-pinning on
    * growth is what closes that gap.
+   *
+   * Growth is honoured even after the pin window has lapsed, because that is
+   * exactly when a slow attachment lands. Only an explicit scroll by the reader
+   * suppresses it.
    *
    * Re-subscribing on `messages` is what makes the children observable at all:
    * they render only once the history has loaded, which is after this effect
@@ -215,6 +240,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     contentHeight.current = node.scrollHeight
 
     const stop = () => {
+      userDisarmed.current = true
       pinned.current = false
     }
     node.addEventListener('wheel', stop, { passive: true })
@@ -222,10 +248,12 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     node.addEventListener('keydown', stop)
 
     const observer = new ResizeObserver(() => {
-      if (!pinned.current) return
       const height = node.scrollHeight
-      if (height - contentHeight.current > GROWTH_TOLERANCE_PX) node.scrollTop = height
+      const grew = height - contentHeight.current > GROWTH_TOLERANCE_PX
       contentHeight.current = height
+      if (userDisarmed.current || !grew) return
+      node.scrollTop = height
+      armPin()
     })
     // The observer has to follow the content, not the scroll box: the box is a
     // fixed-height flex child, so its own border box never resizes.
@@ -237,7 +265,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
       node.removeEventListener('touchstart', stop)
       node.removeEventListener('keydown', stop)
     }
-  }, [conversation.id, messages, partnerTyping, replyTo])
+  }, [conversation.id, messages, partnerTyping, replyTo, armPin])
 
   function startReply(message: Message) {
     setReplyTo(message)

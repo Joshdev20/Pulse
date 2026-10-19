@@ -23,3 +23,8 @@ psycopg[binary]==3.2.3
 # Mozilla autopush, WNS). Imported lazily by app.push, so a deployment that does
 # not set VAPID keys still boots without it.
 pywebpush==2.0.3
+
+# Composes the Open Graph preview card served to link-preview crawlers
+# (/api/preview/card/{username}). Imported lazily by app.routers.preview, so the
+# app still boots without it and only the card endpoint degrades.
+pillow==13.0.0

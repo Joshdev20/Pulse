@@ -148,6 +148,24 @@ the public URL returns 502 until the dev server is bound to 12000.
   duration and `paused: true` again, so sample playback shortly after pressing play rather
   than waiting — the fixture clips are about a second long.
 
+### Profile link previews
+
+- `app/routers/preview.py` is the only router with **no** authentication, and that is
+  deliberate: a link-preview crawler has no account. It answers `GET /api/preview/u/{username}`
+  with an HTML page carrying Open Graph tags, and `GET /api/preview/card/{username}` with a
+  generated 1200x630 JPEG. Both are `include_in_schema=False` so they stay out of the docs.
+- Keep the exposed surface to display name, username, bio and follower count. Email,
+  ids and media tokens must never reach this page — `tests/test_preview.py` asserts that.
+  The page is HTML, so every interpolated value goes through `html.escape`.
+- The card composes the avatar server-side because `/api/media/{id}` needs a bearer token.
+  It is JPEG rather than PNG because WhatsApp silently drops an `og:image` over roughly
+  300KB, and a photo barely compresses — a test asserts the worst case stays under it.
+- Text is laid out with `_fit_font` / `_wrap`, which shrink and hard-break a long word.
+  Display names reach 64 characters and bios 280; at the design size a long name is over
+  three times the column width and would otherwise be drawn off the card.
+- The public origin comes from `X-Forwarded-Host` via `_public_base()`, so the tags point
+  at the site, not at the API host the proxy dialled.
+
 ### Multiple signed-in accounts
 
 - `frontend/src/lib/accounts.ts` keeps every signed-in account in `pulse.accounts`, each
