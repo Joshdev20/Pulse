@@ -159,6 +159,51 @@ With `VITE_API_BASE` unset, the frontend stays same-origin and relies on the Vit
 dev proxy — which is exactly what local development and the single-container
 deploy want.
 
+### Link previews for shared profile links
+
+A crawler does not run JavaScript, so a shared `/u/<username>` link would unfurl
+as the generic SPA shell — no title, no picture. `frontend/vercel.json` closes
+that with two rewrites:
+
+| Request | Condition | Goes to |
+|---|---|---|
+| `/api/preview/*` | always | the backend's `/api/preview/*` |
+| `/u/<username>` | `User-Agent` matches a known preview crawler | the backend's `/api/preview/u/<username>` |
+
+A `has` value is matched against the **whole** header, not a substring, so the
+crawler pattern is wrapped in `.*`. Dropping those anchors makes the rule match
+only a user agent that is exactly the word, and every real crawler is missed.
+
+iMessage is not in the list on purpose: its preview fetcher sends the same user
+agent as desktop Safari, so matching it would also serve the card to real Mac
+users. A link shared over iMessage shows the app's own title instead.
+
+Everything else still falls through to `index.html`, so real visitors get the
+app unchanged. The crawler rewrite is deliberately narrow: the backend renders
+the card only for the agents that build a preview, which keeps the app itself
+out of reach of anything that would be served the card instead.
+
+The backend renders both halves — the Open Graph page and a generated
+1200x630 JPEG card. The card is composed server-side rather than serving the raw
+avatar upload, because `/api/media/<id>` requires a bearer token and a crawler
+has none. The image is kept under WhatsApp's undocumented ~300KB ceiling, which
+it enforces silently by dropping the thumbnail.
+
+Two things must line up for this to work in a deploy:
+
+- The rewrite destination host in `frontend/vercel.json` is the production API.
+  Point it at a different host if the backend moves.
+- The card and page URLs are built from the `X-Forwarded-Host` header, which
+  Vercel sets to the site the visitor requested, so the tags advertise the
+  site's origin rather than the API's.
+
+Verify a deploy by pretending to be a crawler:
+
+```bash
+curl -s -A 'WhatsApp/2.23.20.0' https://<your-app>.vercel.app/u/ada | grep og:
+curl -sI https://<your-app>.vercel.app/api/preview/card/ada   # image/jpeg
+```
+
 ### Deployment protection
 
 If preview URLs redirect to a Vercel login, protection is enabled. To let tools

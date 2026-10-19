@@ -13,3 +13,8 @@ redis==8.1.0
 # Web Push. Only needed to exercise the push send path; the server imports it
 # lazily, so tests that do not touch push run without it.
 pywebpush==2.0.3
+
+# Composes the Open Graph preview card for a shared profile link. Imported
+# lazily by app.routers.preview, so the app still boots without it and only the
+# card endpoint degrades.
+pillow==13.0.0

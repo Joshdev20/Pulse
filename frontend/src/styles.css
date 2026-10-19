@@ -2765,6 +2765,13 @@ h4 {
 .messages {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  /* A single row that fills the pane rather than sizing to its content. A grid
+     row defaults to `auto`, which grows to fit the thread, so the row would
+     overflow the pane and `.thread-body` would never scroll — it would simply
+     be as tall as its content and sit at `scrollTop: 0`. The `minmax(0, ...)`
+     floor is what lets the row shrink below its content so the thread, not the
+     page, is what scrolls. */
+  grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   /* The conversation view is an app pane, not a document: it claims the space
      between the sticky header and the bottom padding and scrolls its own inbox
@@ -3445,6 +3452,16 @@ h4 {
   .main:has(> .messages) {
     /* Leave room for the fixed bottom bar, which overlays the page. */
     padding-bottom: 76px;
+    /* Claim a definite height, not just a minimum. With only `min-height` the
+       pane is free to grow, so a long thread makes `.messages` taller than the
+       viewport, `.thread-body` never overflows its own box, and the page
+       scrolls instead of the thread. `.thread-body` then has nothing to scroll
+       and sits at `scrollTop: 0` — the thread appears to open at the top no
+       matter what the pinning logic does. Sizing the pane to the viewport is
+       what gives the thread a height to scroll within. */
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
   }
 
   .messages-inbox {
