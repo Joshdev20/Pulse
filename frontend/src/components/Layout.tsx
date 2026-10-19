@@ -35,8 +35,13 @@ const NAV = [
 
 /** Live counts for the sidebar badges, driven by realtime events. */
 function useBadges(): { notifications: number; messages: number } {
+  const { user } = useAuth()
   const { count: notifications } = useUnreadNotifications()
   const { count: messages } = useUnreadMessages()
+  // The counts are per account, so a visitor with no session has none to show.
+  // The hooks still run (they must, unconditionally) but their requests are
+  // refused, and returning zero keeps the badges off rather than flashing.
+  if (!user) return { notifications: 0, messages: 0 }
   return { notifications, messages }
 }
 
@@ -81,6 +86,8 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
   const { user, logout } = useAuth()
   const badges = useBadges()
   const { connected } = useRealtime()
+  const navigate = useNavigate()
+  const location = useLocation()
 
   return (
     <aside className="sidebar">
@@ -134,14 +141,18 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
         type="button"
         className="btn btn-primary btn-block"
         style={{ marginTop: 14 }}
-        onClick={onCompose}
+        onClick={() => (user ? onCompose() : navigate('/login', { state: { from: location.pathname } }))}
       >
         <ComposeIcon size={17} /> Post
       </button>
 
       <div className="sidebar-spacer" />
 
-      {!connected && (
+      {/* Only a signed-in visitor has a socket to reconnect: with no session
+          the realtime provider never connects, so this would otherwise tell a
+          logged-out reader that live updates are "paused" when none are
+          expected at all. */}
+      {user && !connected && (
         <p className="conn-note" title="Live updates are paused. Pulse will reconnect automatically.">
           <WifiOffIcon size={14} /> Reconnecting
         </p>
@@ -227,6 +238,10 @@ export function Rail() {
   const [stats, setStats] = useState<Stats | null>(null)
 
   useEffect(() => {
+    // Trending tags, people and stats are all behind a session, so a visitor
+    // would collect three 401s for a rail that cannot render. Skipping the
+    // fetch leaves the rail empty, which is the honest state.
+    if (!user) return
     let active = true
     Promise.all([api.trendingTags(6), api.trendingPeople(3), api.stats()])
       .then(([tagData, peopleData, statsData]) => {

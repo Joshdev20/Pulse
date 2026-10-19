@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, DisplayName } from './Avatar'
 import { CommentIcon, HeartIcon, MoreIcon, RepostIcon, ShareIcon, TrashIcon, EditIcon } from './Icons'
 import { MediaGallery } from './MediaGallery'
@@ -39,6 +39,12 @@ interface PostCardProps {
   onDeleted?: (id: number) => void
   onEdit?: (post: Post) => void
   clickable?: boolean
+  /**
+   * Render for a visitor with no session: the content is identical, but the
+   * interactions send them to sign in instead of firing a request that would
+   * come back 401. Used by the public profile page.
+   */
+  readOnly?: boolean
 }
 
 export function PostCard({
@@ -48,8 +54,10 @@ export function PostCard({
   onDeleted,
   onEdit,
   clickable = true,
+  readOnly = false,
 }: PostCardProps) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const [busy, setBusy] = useState(false)
   const [pop, setPop] = useState(false)
 
@@ -61,8 +69,15 @@ export function PostCard({
   const isOwn = currentUserId === content.author.id
   const isOwnPost = currentUserId === post.author.id
 
+  /** Send a signed-out visitor to the login screen, remembering where they were. */
+  function requireSession(event?: React.MouseEvent) {
+    event?.stopPropagation()
+    navigate('/login', { state: { from: pathname } })
+  }
+
   async function toggleLike(event: React.MouseEvent) {
     event.stopPropagation()
+    if (readOnly) return requireSession(event)
     if (busy) return
     setBusy(true)
     // Optimistic update so the tap feels instant.
@@ -88,6 +103,7 @@ export function PostCard({
 
   async function toggleRepost(event?: React.MouseEvent) {
     event?.stopPropagation()
+    if (readOnly) return requireSession(event)
     if (busy) return
     setBusy(true)
     // Optimistic, mirroring the like button.

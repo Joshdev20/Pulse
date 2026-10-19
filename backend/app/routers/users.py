@@ -6,7 +6,14 @@ from sqlalchemy.exc import IntegrityError
 
 from .. import cache, storage
 from ..config import settings
-from ..deps import CurrentUser, DbSession, serialize_posts, serialize_user, serialize_users
+from ..deps import (
+    CurrentUser,
+    DbSession,
+    OptionalUser,
+    serialize_posts,
+    serialize_user,
+    serialize_users,
+)
 from ..models import Comment, Follow, Like, Media, Notification, Post, User
 from ..realtime import manager
 from ..schemas import Page, SuggestedUser, UserPublic, UserUpdate, Stats
@@ -85,11 +92,15 @@ def platform_stats(db: DbSession, viewer: CurrentUser) -> Stats:
 
 
 @router.get("/{username}", response_model=UserPublic)
-def get_user(username: str, db: DbSession, viewer: CurrentUser) -> UserPublic:
+def get_user(username: str, db: DbSession, viewer: OptionalUser) -> UserPublic:
+    # Anonymous readers share one cache entry (key 0); each signed-in viewer
+    # keeps their own, because `is_following` is answered per viewer. Folding
+    # them together would show one account's follow state to another.
+    viewer_id = viewer.id if viewer is not None else 0
     return cache.get_or_set(
         "users",
         settings.cache_profile_ttl_seconds,
-        (viewer.id, username.lower()),
+        (viewer_id, username.lower()),
         lambda: serialize_user(db, _get_user_or_404(db, username), viewer).model_dump(mode="json"),
     )
 
@@ -275,7 +286,7 @@ def _validated_profile_image(db: DbSession, user: User, media_id: int | None, me
 def user_posts(
     username: str,
     db: DbSession,
-    viewer: CurrentUser,
+    viewer: OptionalUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
 ) -> Page:
@@ -296,8 +307,9 @@ def user_posts(
             has_more=page * page_size < total,
         ).model_dump(mode="json")
 
+    viewer_id = viewer.id if viewer is not None else 0
     return cache.get_or_set(
-        "posts", settings.cache_ttl_seconds, (viewer.id, "user", username.lower(), page, page_size), produce
+        "posts", settings.cache_ttl_seconds, (viewer_id, "user", username.lower(), page, page_size), produce
     )
 
 
@@ -309,6 +321,16 @@ def user_likes(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
 ) -> Page:
+    """Still requires a session, deliberately.
+
+    A like points at somebody *else's* post, so publishing this list discloses
+    one account's interests across the whole network — a wider disclosure than
+    "this person's own profile and posts", and one no user can opt out of
+    because there is no privacy setting. The public profile shows the post
+    count and the profile itself; the likes tab stays behind the session, and
+    the frontend hides it from a logged-out visitor so the crawler and the
+    human still see the same page.
+    """
     def produce() -> dict:
         target = _get_user_or_404(db, username)
         query = (

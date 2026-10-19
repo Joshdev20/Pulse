@@ -10,3 +10,14 @@ Disallow: /notifications
 Disallow: /compose
 Disallow: /reset-password
 Disallow: /forgot-password
+
+# The API is not a set of pages. The exception is /api/preview/, which serves
+# the per-profile card referenced by og:image — blocking it would cost the
+# rich preview. robots.txt resolves by longest match, so the narrower Allow
+# wins for those paths.
+Disallow: /api/
+Allow: /api/preview/
+
+# Public profiles are indexable and are how the site is discovered; the sitemap
+# lists them. It is served by the API and proxied through this origin.
+Sitemap: https://pulse-hazel-nine.vercel.app/sitemap.xml

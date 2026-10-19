@@ -226,7 +226,12 @@ def test_profile_post_counts(client, make_user):
 
 
 def test_read_endpoints_require_authentication(client, make_user):
-    """Every read route is closed to anonymous callers, matching the gated UI."""
+    """The reads that are still closed to anonymous callers.
+
+    The profile and its posts moved to the public surface (see
+    ``test_public_profile_reads``); everything here is either the signed-in
+    feed or a cross-account list that stays behind a session.
+    """
     headers, _ = make_user("ada")
     post = client.post("/api/posts", headers=headers, json={"body": "hello #tag"}).json()
 
@@ -242,8 +247,6 @@ def test_read_endpoints_require_authentication(client, make_user):
         "/api/search?q=hello",
         "/api/users/suggested",
         "/api/users/stats",
-        "/api/users/ada",
-        "/api/users/ada/posts",
         "/api/users/ada/likes",
         "/api/users/ada/followers",
         "/api/users/ada/following",
@@ -251,6 +254,54 @@ def test_read_endpoints_require_authentication(client, make_user):
     for path in reads:
         assert client.get(path).status_code == 401, f"anonymous GET {path} was allowed"
         assert client.get(path, headers=headers).status_code == 200, f"authed GET {path} failed"
+
+
+def test_public_profile_reads(client, make_user):
+    """A profile and its posts answer without a session, for crawlers.
+
+    These are what makes the profile indexable: a search engine arrives with no
+    account, so a 401 here would leave it nothing to read. The payload must also
+    stay free of anything private.
+    """
+    headers, _ = make_user("ada", display_name="Ada Lovelace")
+    client.post("/api/posts", headers=headers, json={"body": "first post"})
+
+    profile = client.get("/api/users/ada")
+    assert profile.status_code == 200
+    body = profile.json()
+    assert body["username"] == "ada"
+    assert body["post_count"] == 1
+    # Nothing account-private rides along on the public shape.
+    assert "email" not in body
+    assert "is_admin" in body  # present but only ever true for a moderator
+
+    posts = client.get("/api/users/ada/posts")
+    assert posts.status_code == 200
+    page = posts.json()
+    assert page["total"] == 1
+    assert page["items"][0]["body"] == "first post"
+    assert "email" not in page["items"][0]["author"]
+
+    # An unknown profile is a 404, not a 401: the route is public now.
+    assert client.get("/api/users/nobody").status_code == 404
+
+
+def test_anonymous_profile_read_does_not_leak_follow_state(client, make_user):
+    """The public view never reports a follow state, because it has no viewer."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    client.post("/api/users/ada/follow", headers=grace)
+
+    anon = client.get("/api/users/ada").json()
+    assert anon["is_following"] is False
+
+    as_grace = client.get("/api/users/ada", headers=grace).json()
+    assert as_grace["is_following"] is True
+
+    # The two must not share a cache entry, or the follower's answer would be
+    # served to the anonymous reader (and to everyone else).
+    anon_again = client.get("/api/users/ada").json()
+    assert anon_again["is_following"] is False
 
 
 def test_feed_is_shuffled_per_seed_and_stable_within_one(client, make_user):

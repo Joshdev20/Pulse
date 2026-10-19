@@ -21,7 +21,7 @@ import { SearchPage } from './pages/SearchPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { MessagesPage } from './pages/MessagesPage'
 import { NotFoundPage } from './pages/NotFoundPage'
-import { usePageTitle } from './lib/usePageTitle'
+import { DYNAMIC_TITLE_ROUTES, titleRouteKey, usePageTitle } from './lib/usePageTitle'
 
 /** Routes with room for the right-hand rail on wide screens. */
 const RAIL_ROUTES = ['/', '/explore', '/search', '/notifications']
@@ -72,7 +72,9 @@ function Layout() {
   const [composeOpen, setComposeOpen] = useState(false)
   const { pathname } = useLocation()
 
-  usePageTitle(pathname)
+  // A page that sets its own title (the profile) opts the shell out, so the
+  // shell's generic label cannot land after the child's and overwrite it.
+  usePageTitle(pathname, undefined, !DYNAMIC_TITLE_ROUTES.has(titleRouteKey(pathname)))
 
   const openComposer = useCallback(() => setComposeOpen(true), [])
 
@@ -135,6 +137,21 @@ export function App() {
           and a signed-in visitor may still be following an emailed link. */}
       <Route path="/reset-password" element={<ResetPasswordPage />} />
 
+      {/* Public: a profile and its posts answer without a session, so a shared
+          link works for a visitor and a crawler reads the same page a person
+          sees. Deliberately outside RequireAuth for that reason, and not
+          server-rendered differently for bots — serving a crawler more than a
+          human is cloaking. */}
+      <Route
+        element={
+          <RealtimeProvider>
+            <Layout />
+          </RealtimeProvider>
+        }
+      >
+        <Route path="/u/:username" element={<ProfilePage />} />
+      </Route>
+
       {/* Everything below requires a session. */}
       <Route element={<RequireAuth />}>
         <Route
@@ -148,7 +165,6 @@ export function App() {
           <Route path="/explore" element={<ExplorePage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/p/:postId" element={<PostDetailPage />} />
-          <Route path="/u/:username" element={<ProfilePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/messages" element={<MessagesPage />} />
           <Route path="/messages/:conversationId" element={<MessagesPage />} />

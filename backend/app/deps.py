@@ -3,7 +3,7 @@
 import time
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -156,6 +156,59 @@ def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_optional_user(
+    db: DbSession,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)] = None,
+) -> User | None:
+    """The signed-in user, or None for an anonymous visitor.
+
+    For the public read endpoints, which answer with or without a session. A
+    missing token is not an error here; a *bad* one is still resolved to None
+    rather than raising, because an expired token should degrade a profile page
+    to the anonymous view instead of failing it.
+
+    Deliberately does not touch ``last_seen_at`` or enforce the ban check: those
+    belong to ``get_current_user``, where a token is required to act. A banned
+    account reading public pages anonymously discloses nothing.
+    """
+    if credentials is None or not credentials.credentials:
+        return None
+    user = _user_from_token(credentials.credentials, db)
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
+
+
+def public_base(request: Request) -> str:
+    """The origin the visitor actually used, for absolute URLs in public pages.
+
+    A crawler reaches the site (Vercel), which proxies to this service, so the
+    request's own host is not necessarily the public one. The proxy headers are
+    honoured first, and https is forced for anything that is not local: WhatsApp
+    discards an ``og:image`` served over plain http, and the TLS-terminating
+    proxy in front of the app makes the socket look like http even when the
+    visitor used https.
+
+    Shared by the preview pages and the sitemap so both name the same origin;
+    two copies of this drifted apart the last time the og:image went relative.
+    """
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+    )
+    host = host.split(",")[0].strip()
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    if not proto:
+        proto = request.url.scheme
+    if proto != "https" and not host.startswith(("localhost", "127.0.0.1")):
+        proto = "https"
+    return f"{proto}://{host}"
 
 
 def get_current_admin(user: CurrentUser) -> User:

@@ -6,6 +6,10 @@
   "installCommand": "npm install",
   "rewrites": [
     {
+      "source": "/sitemap.xml",
+      "destination": "https://pulse-api-y16m.onrender.com/sitemap.xml"
+    },
+    {
       "source": "/api/preview/:path*",
       "destination": "https://pulse-api-y16m.onrender.com/api/preview/:path*"
     },
@@ -15,7 +19,7 @@
         {
           "type": "header",
           "key": "user-agent",
-          "value": "(?i).*(whatsapp|facebookexternalhit|facebot|twitterbot|slackbot|linkedinbot|telegrambot|discordbot|applebot|embedly|redditbot|skypeuripreview|pinterest|bitlybot).*"
+          "value": "(?i).*(googlebot|bingbot|duckduckbot|yandex|baiduspider|slurp|whatsapp|facebookexternalhit|facebot|twitterbot|slackbot|linkedinbot|telegrambot|discordbot|applebot|embedly|redditbot|skypeuripreview|pinterest|bitlybot).*"
         }
       ],
       "destination": "https://pulse-api-y16m.onrender.com/api/preview/u/:username"
