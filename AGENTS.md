@@ -165,6 +165,20 @@ the public URL returns 502 until the dev server is bound to 12000.
   three times the column width and would otherwise be drawn off the card.
 - The public origin comes from `X-Forwarded-Host` via `_public_base()`, so the tags point
   at the site, not at the API host the proxy dialled.
+- `frontend/vercel.json` sends `/u/:username` here only for a preview crawler, keyed on
+  `User-Agent`. A `has.value` is matched against the **whole** header, so the pattern must
+  be wrapped in `.*`; without the anchors it matches only a user agent exactly equal to the
+  word and every real crawler is missed. iMessage is deliberately absent: its fetcher sends
+  the same user agent as desktop Safari, so matching it would serve the card to Mac users.
+- Verifying this against production: `curl -s -A 'WhatsApp/2.23.20.0' <site>/u/<username>`
+  must return the OG page, and the same URL with a Chrome user agent must return the SPA
+  shell (no `og:` tags). The `og:image` must resolve on the **site** domain, not the API
+  host, or the proxy is not forwarding `X-Forwarded-Host`.
+- A production `404` for a seed username is not necessarily a broken route. The deployed
+  database is not the local one — it holds only the accounts real users registered. A
+  correct route answers an unknown name with the "Profile not found" HTML page, so check
+  the body before concluding the route is missing. Likewise `/api/media/{id}` returning
+  `404` for every id is data drift on the free instance, not a media bug.
 
 ### Multiple signed-in accounts
 
