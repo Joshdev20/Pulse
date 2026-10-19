@@ -5,7 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Pulse — share short updates, follow people you care about." />
     <meta name="theme-color" content="#08090d" />
+
     <title>Pulse</title>
+
+    <!-- Icons. The SVG is first so browsers that understand it use the crisp
+         vector; the .ico is the fallback for everything else, and the PNGs
+         cover the sizes that want a raster. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Link previews. The static card is the default; /api/preview/... serves a
+         per-profile card for shared profile links. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Pulse" />
+    <meta property="og:title" content="Pulse — short updates, real conversations" />
+    <meta
+      property="og:description"
+      content="Share short updates, follow the people and topics you care about, and jump into real conversations."
+    />
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="The Pulse logo: a gradient tile with a heartbeat waveform." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Pulse — short updates, real conversations" />
+    <meta
+      name="twitter:description"
+      content="Share short updates, follow the people and topics you care about, and jump into real conversations."
+    />
+    <meta name="twitter:image" content="/og-image.png" />
     <script>
       // Set the theme before the first paint so the page never flashes the
       // wrong palette. Kept in sync by src/lib/useTheme.ts.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { EyeIcon, EyeOffIcon, SparkIcon } from '../components/Icons'
+import { PulseMark } from '../components/PulseLogo'
 import { useAuth } from '../context/AuthContext'
 
 export function LoginPage() {
@@ -47,7 +48,7 @@ export function LoginPage() {
       <aside className="auth-aside">
         <Link to="/" className="brand" style={{ padding: 0 }}>
           <span className="brand-mark">
-            <SparkIcon size={19} />
+            <PulseMark />
           </span>
           <span className="brand-name">Pulse</span>
         </Link>
