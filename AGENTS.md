@@ -142,6 +142,20 @@ the public URL returns 502 until the dev server is bound to 12000.
 - A voice note is a `Media` with `kind == "audio"`. `MediaGallery` routes those to
   `VoiceNotePlayer` (a hand-built play/seek control over a real `<audio>` element), so
   `MessageBubble` and `PostCard` need no audio-specific code.
+- A video tile must never download the clip just to draw its preview. `/api/media/{id}`
+  ignores range requests and answers with the whole blob, so a tile that waits on the
+  video pays the full size for one frame. The poster is captured in the browser at upload
+  (`capturePoster` in `frontend/src/lib/videoPoster.ts`), sent in the same multipart
+  request, and served from `GET /api/media/{id}/poster` — a few KB, cached, ETagged.
+  `MediaGallery` primes the clip only on hover for a video that has a poster, so the
+  lightbox still opens onto bytes already in memory.
+- A poster is optional at every step. `capturePoster` returns null on any failure and the
+  upload proceeds; the server stores a poster only when one arrives and sniffs as an
+  image. A video with no poster (`poster_url is None`) is the pre-poster case, and
+  `useVideoPoster` decodes a frame in the browser for it, so old uploads need no backfill.
+  Any change here must keep that fallback working: it is what makes the migration safe.
+- `duration_ms` travels with the upload too, so the tile's duration badge needs no video
+  fetch either. The measured duration stays the fallback when it is absent.
 - When testing the recorder in a browser harness, pass Chromium
   `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream` so `getUserMedia`
   resolves without a permission prompt. A voice note that finishes playing shows its full
@@ -235,8 +249,25 @@ the public URL returns 502 until the dev server is bound to 12000.
   still sitting on the last commit that touched `backend/`. Check
   `git diff --name-only <render-sha> HEAD -- backend/` is empty before investigating.
 
-## Gotchas
+## Announcing changes on the official account
 
+Every fix and new feature gets a post from the official `pulse` account (the account the
+product's own updates are published from). It is a normal account: sign in through
+`POST /api/auth/login` with `{"username": "pulse", ...}` and create the post with
+`POST /api/posts`. There is no separate admin or announcement API, and no service token —
+the credential is the account's password, which is not stored in this repo, so ask for it
+rather than guessing.
+
+Write in the account's established voice, matching posts 74-84: a one-line headline with a
+single emoji, a blank line, a short paragraph in the second person saying what changed and
+why it matters to the reader, then a blank line and one or two hashtags. Describe the
+user-visible difference, not the implementation. Say so explicitly when existing content
+keeps working, because that is the reader's first worry.
+
+Publish only after the change is deployed and verified against production. Confirm the
+post landed by reading it back from `GET /api/users/pulse/posts`.
+
+## Gotchas
 - `AuthProvider` is mounted once, in `main.tsx`, above the router. Do not mount it again in
   `App.tsx`: a second provider runs a second, unused `api.me()` on every load and doubles
   every auth request.
@@ -560,11 +591,13 @@ the public URL returns 502 until the dev server is bound to 12000.
 - A lost race on a double-tap like or follow is a success, not a 500: the unique
   constraint rejects the duplicate insert and the caller's intent is already met.
   `IntegrityError` is caught and rolled back around the flush.
-- Videos get a poster from a frame decoded in the browser (`src/lib/videoPoster.ts`).
-  The backend has no ffmpeg, so no thumbnail can be made at upload time; the bytes are
-  already downloaded to render the tile, so a `<video>` decodes one frame, it is drawn
-  to a canvas and kept as a data URL, shared per media path and reference counted.
-  `captureFrame` returning null on a tainted canvas is a guard â€” media is same-origin.
+- Videos get a poster captured in the browser at upload (`src/lib/videoPoster.ts`), sent
+  with the clip and served from `/api/media/{id}/poster`. The backend has no ffmpeg, so a
+  thumbnail cannot be made server-side, and decoding a frame is work the browser already
+  has the bytes for. `useVideoPoster` remains the fallback for a video with no stored
+  poster - the pre-poster rows - decoding a frame from the downloaded clip and caching it
+  per media path. `captureFrame` returning null on a tainted canvas is a guard: media is
+  same-origin.
 - Uploads that predate storing bytes in `media.blob` were lost with the ephemeral
   disk and answer 404 forever; on this deployment that is a normal response, not a
   bug. The gallery says "Image unavailable"/"Video unavailable" for a failed download
