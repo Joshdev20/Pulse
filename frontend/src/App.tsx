@@ -3,7 +3,8 @@ import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react
 import { AppShell } from './components/Layout'
 import { Composer } from './components/Composer'
 import { NotificationCenter } from './components/NotificationCenter'
-import { Modal, Spinner } from './components/UI'
+import { Modal } from './components/UI'
+import { PulseLogo } from './components/PulseLogo'
 import { useAuth } from './context/AuthContext'
 import { RealtimeProvider } from './context/RealtimeContext'
 import { HomePage } from './pages/HomePage'
@@ -25,10 +26,12 @@ import { usePageTitle } from './lib/usePageTitle'
 /** Routes with room for the right-hand rail on wide screens. */
 const RAIL_ROUTES = ['/', '/explore', '/search', '/notifications']
 
-function FullPageSpinner() {
+/** The first-load screen: the mark animating while the session is checked. */
+function BrandLoader() {
   return (
-    <div className="state">
-      <Spinner size={22} />
+    <div className="loader-screen" role="status" aria-label="Loading Pulse">
+      <PulseLogo size={84} animated />
+      <p className="loader-word">Loading Pulse…</p>
     </div>
   )
 }
@@ -43,7 +46,7 @@ function RequireAuth() {
   const { user, loading } = useAuth()
   const location = useLocation()
 
-  if (loading) return <FullPageSpinner />
+  if (loading) return <BrandLoader />
   if (!user) {
     return (
       <Navigate to="/login" state={{ from: `${location.pathname}${location.search}` }} replace />
@@ -60,7 +63,7 @@ function RedirectIfAuthed({ children }: { children: React.ReactNode }) {
   // current session must stay put while that happens, so the redirect that
   // would normally bounce a signed-in visitor away is skipped here.
   const adding = new URLSearchParams(location.search).get('add') === '1'
-  if (loading) return <FullPageSpinner />
+  if (loading) return <BrandLoader />
   if (user && !adding) return <Navigate to="/" replace />
   return <>{children}</>
 }

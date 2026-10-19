@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { KeyIcon, SparkIcon } from '../components/Icons'
+import { KeyIcon } from '../components/Icons'
+import { PulseMark } from '../components/PulseLogo'
 import { api } from '../lib/api'
 
 /**
@@ -43,7 +44,7 @@ export function ForgotPasswordPage() {
       <aside className="auth-aside">
         <Link to="/" className="brand" style={{ padding: 0 }}>
           <span className="brand-mark">
-            <SparkIcon size={19} />
+            <PulseMark />
           </span>
           <span className="brand-name">Pulse</span>
         </Link>

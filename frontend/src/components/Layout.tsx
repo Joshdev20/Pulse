@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { AccountList } from './AccountList'
 import { Avatar, DisplayName } from './Avatar'
+import { PulseMark } from './PulseLogo'
 import { ThemeToggle } from './ThemeToggle'
 import {
   BellIcon,
@@ -12,7 +13,6 @@ import {
   MailIcon,
   SearchIcon,
   ShieldIcon,
-  SparkIcon,
   SwitchIcon,
   TrendIcon,
   UserIcon,
@@ -86,7 +86,7 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
     <aside className="sidebar">
       <Link to="/" className="brand">
         <span className="brand-mark">
-          <SparkIcon size={19} />
+          <PulseMark />
         </span>
         <span className="brand-name">Pulse</span>
       </Link>
