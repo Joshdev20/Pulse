@@ -35,10 +35,13 @@ logger = logging.getLogger("pulse.push")
 # Any other failure is treated as transient and the row is kept.
 GONE_STATUSES = {404, 410}
 
-# A push service that takes longer than this is treated as unreachable. Kept
-# short because sends happen inline after a commit; a slow push service must not
-# hold a worker or delay the response to the sender.
-PUSH_TIMEOUT_SECONDS = 10.0
+# How long one delivery may take before it is abandoned, in seconds. This is
+# the ceiling on how long a single push service can hold one of the pool's
+# workers: while a worker is stuck on a slow endpoint, every other alert queued
+# behind it waits. A shorter timeout bounds that head-of-line delay, and a push
+# service that has not answered within a few seconds is not going to deliver
+# fast enough to matter anyway.
+PUSH_TIMEOUT_SECONDS = 5.0
 
 # Delivery runs on a small fixed pool of long-lived threads, not one thread per
 # notification. A thread per event is unbounded: a slow or hanging push service
