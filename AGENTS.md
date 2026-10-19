@@ -211,6 +211,11 @@ the public URL returns 502 until the dev server is bound to 12000.
   breakpoint.
 - The push state is read when the menu first opens, not on mount. It costs a request, and
   the profile page should not pay for it before the user shows interest.
+- A frontend-only commit does not produce a Render deployment record, and that is not a
+  failed deploy. Render skips the build when nothing under `backend/` changed, so a push
+  that only touches `frontend/` shows a Vercel deployment for the new SHA and a Render one
+  still sitting on the last commit that touched `backend/`. Check
+  `git diff --name-only <render-sha> HEAD -- backend/` is empty before investigating.
 
 ## Gotchas
 
