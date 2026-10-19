@@ -47,23 +47,35 @@ export function ProfileMenu() {
 
   const pushOn = push === 'subscribed'
 
-  // Read the real push state once, when the menu is first opened. It depends on
-  // the browser permission and the server's VAPID configuration, neither of
-  // which is known synchronously, and neither of which is worth a request on
-  // every profile page load.
-  const [asked, setAsked] = useState(false)
+  // Read the real push state when the menu opens, and again whenever the active
+  // account changes.
+  //
+  // The read has to outlive the effect's own cleanup. Opening the menu flips
+  // `opened`, which both starts this read and re-runs the effect, so the
+  // cleanup of the previous run fires while the read is still in flight. That
+  // cleanup used to set a `cancelled` flag that discarded the result, leaving
+  // the toggle on its initial "off" no matter what the browser reported. The
+  // flag is now only a guard against the unmount case.
+  //
+  // `user?.id` in the deps is what makes a switch to another account re-read
+  // instead of leaving the previous account's answer on screen.
   const [opened, setOpened] = useState(false)
   useEffect(() => {
-    if (!opened || asked) return
-    setAsked(true)
-    let cancelled = false
+    if (!opened) return
+    let active = true
     void pushState().then((state) => {
-      if (!cancelled) setPush(state)
+      if (active) setPush(state)
     })
     return () => {
-      cancelled = true
+      active = false
     }
-  }, [opened, asked])
+  }, [opened, user?.id])
+
+  // A switch to another account must not keep showing the account just left
+  // while the fresh read is in flight.
+  useEffect(() => {
+    setPush(pushSupported() ? 'default' : 'unsupported')
+  }, [user?.id])
 
   if (!user) return null
 

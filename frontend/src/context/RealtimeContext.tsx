@@ -41,7 +41,26 @@ interface RealtimeValue {
 const RealtimeContext = createContext<RealtimeValue | null>(null)
 
 const MAX_BACKOFF_MS = 15_000
-const BASE_BACKOFF_MS = 800
+const BASE_BACKOFF_MS = 400
+
+/**
+ * Heartbeat cadence, and how long an unanswered ping is tolerated.
+ *
+ * A WebSocket over a mobile network or a suspended device commonly goes
+ * half-open: the socket still reports `OPEN` and `onclose` never fires, so a
+ * reconnect that only watches for `close` leaves the client silently receiving
+ * nothing. The heartbeat is what notices: a ping that goes unanswered for
+ * `LIVENESS_TIMEOUT_MS` (generous next to a normal sub-second round trip) means
+ * the socket is dead, and it is closed so the reconnect path runs.
+ */
+const HEARTBEAT_MS = 10_000
+const LIVENESS_TIMEOUT_MS = 15_000
+
+/** Reconnect after a drop gets a little random jitter, so a server restart
+ *  does not bring every client back in one synchronised wave. */
+function jitter(ms: number): number {
+  return Math.round(ms * (0.7 + Math.random() * 0.6))
+}
 
 /**
  * Resolve the websocket URL.
@@ -100,6 +119,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
     closedByUs.current = false
 
+    // Liveness bookkeeping. `lastSeen` is stamped on every frame from the
+    // server; the heartbeat closes a socket that has gone quiet for longer than
+    // the liveness window, which is the half-open case a `close` event misses.
+    let lastSeen = Date.now()
+    let pongPending = false
+    const probeTimers = new Set<number>()
+
     const connect = () => {
       let socket: WebSocket
       try {
@@ -109,6 +135,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         return
       }
       socketRef.current = socket
+      lastSeen = Date.now()
+      pongPending = false
 
       socket.onopen = () => {
         // The token travels in the first frame, never the URL, so it stays out
@@ -117,6 +145,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }
 
       socket.onmessage = (raw) => {
+        lastSeen = Date.now()
         let event: RealtimeEvent
         try {
           event = JSON.parse(raw.data)
@@ -128,6 +157,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           setConnected(true)
           return
         }
+        // Any frame is proof of life; a `pong` is the answer to our ping.
+        if (event.type === 'pong') pongPending = false
         emit(event)
       }
 
@@ -149,9 +180,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    const scheduleReconnect = () => {
-      if (closedByUs.current || reconnectTimer.current !== null) return
-      const delay = Math.min(BASE_BACKOFF_MS * 2 ** attemptsRef.current, MAX_BACKOFF_MS)
+    const scheduleReconnect = (immediate = false) => {
+      if (closedByUs.current) return
+      if (reconnectTimer.current !== null) {
+        // A recovery signal (the network came back) outranks a pending timer:
+        // cancel the wait and reconnect now instead of serving out the backoff.
+        if (!immediate) return
+        window.clearTimeout(reconnectTimer.current)
+        reconnectTimer.current = null
+      }
+      const delay = immediate ? 0 : jitter(Math.min(BASE_BACKOFF_MS * 2 ** attemptsRef.current, MAX_BACKOFF_MS))
       attemptsRef.current += 1
       reconnectTimer.current = window.setTimeout(() => {
         reconnectTimer.current = null
@@ -159,19 +197,73 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }, delay)
     }
 
-    connect()
-
-    // Keep the socket warm through proxies that idle out quiet connections.
-    const heartbeat = window.setInterval(() => {
+    /**
+     * Reconnect at once when the conditions that break a socket are undone.
+     *
+     * A phone that was asleep, a laptop that changed networks or a tab that was
+     * backgrounded all leave a socket that is dead but not yet closed. Waiting
+     * out the backoff would keep alerts slow for up to 15s after the user is
+     * back, so these events drive an immediate retry.
+     *
+     * A socket that still looks open is probed with a ping before it is
+     * discarded: on a flaky network `focus` can fire while the socket is fine,
+     * and dropping a healthy socket would lose any event in flight. The ping is
+     * answered by the server's `pong`, which stamps `lastSeen`.
+     */
+    const recover = () => {
+      if (closedByUs.current) return
       const socket = socketRef.current
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'ping' }))
+        const probe = window.setTimeout(() => {
+          probeTimers.delete(probe)
+          if (closedByUs.current) return
+          // A live socket answered the ping and stamped `lastSeen`; anything
+          // older than the liveness window means the ping was swallowed.
+          if (socketRef.current !== socket || Date.now() - lastSeen > LIVENESS_TIMEOUT_MS) return
+          attemptsRef.current = 0
+          socket.close()
+        }, LIVENESS_TIMEOUT_MS)
+        probeTimers.add(probe)
+        return
       }
-    }, 25_000)
+      attemptsRef.current = 0
+      scheduleReconnect(true)
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') recover()
+    }
+
+    connect()
+
+    // The heartbeat doubles as liveness detection and as the keep-alive that
+    // stops an idle proxy from closing a quiet connection.
+    const heartbeat = window.setInterval(() => {
+      const socket = socketRef.current
+      if (socket?.readyState !== WebSocket.OPEN) return
+      // A ping that is still unanswered after a full liveness window means the
+      // socket is half-open: closing it makes `onclose` schedule the reconnect.
+      if (pongPending && Date.now() - lastSeen > LIVENESS_TIMEOUT_MS) {
+        socket.close()
+        return
+      }
+      pongPending = true
+      socket.send(JSON.stringify({ type: 'ping' }))
+    }, HEARTBEAT_MS)
+
+    window.addEventListener('online', recover)
+    window.addEventListener('focus', recover)
+    document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
       closedByUs.current = true
       window.clearInterval(heartbeat)
+      for (const probe of probeTimers) window.clearTimeout(probe)
+      probeTimers.clear()
+      window.removeEventListener('online', recover)
+      window.removeEventListener('focus', recover)
+      document.removeEventListener('visibilitychange', onVisibility)
       if (reconnectTimer.current !== null) window.clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
       socketRef.current?.close()
