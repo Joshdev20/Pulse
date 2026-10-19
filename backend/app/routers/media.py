@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import or_, select
 
 from .. import storage
-from ..deps import CurrentUser, DbSession, serialize_media
+from ..deps import CurrentUser, DbSession, OptionalUser, serialize_media
 from ..models import Media, Post, User
 from ..schemas import MediaOut
 
@@ -69,16 +69,26 @@ async def upload(
     return serialize_media([media])[0]
 
 
-def _visible_to(db, media: Media, viewer: User) -> bool:
+def _visible_to(db, media: Media, viewer: User | None) -> bool:
     """Media is readable by anyone who can read the post or message it belongs to.
 
     An attachment not yet linked to a post or message is private to its owner,
     so an upload cannot be probed for by guessing ids.
+
+    ``viewer`` is None for an anonymous visitor. Post attachments and profile
+    pictures are public, because the posts and profiles they belong to are now
+    publicly readable; anything reached through a direct message is not, and
+    neither is an unattached upload.
     """
     if media.post_id is not None:
         return db.get(Post, media.post_id) is not None
 
     if media.message_id is not None:
+        # The one boundary that must not move. A direct message is private to
+        # its participants, so an anonymous visitor is refused outright rather
+        # than falling through to a later branch.
+        if viewer is None:
+            return False
         from ..models import ConversationParticipant, Message
 
         message = db.get(Message, media.message_id)
@@ -97,6 +107,8 @@ def _visible_to(db, media: Media, viewer: User) -> bool:
     if is_public_profile_image(db, media):
         return True
 
+    if viewer is None:
+        return False
     return viewer.id == media.owner_id
 
 
@@ -163,12 +175,20 @@ def _stream_blob(data: bytes, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
 
 
 @router.get("/{media_id}")
-def download(media_id: int, db: DbSession, viewer: CurrentUser, request: Request) -> Response:
+def download(
+    media_id: int, db: DbSession, viewer: OptionalUser, request: Request
+) -> Response:
     media = db.get(Media, media_id)
     if media is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
     if not _visible_to(db, media, viewer):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
+
+    # Public media (a post attachment or a profile picture) may be cached by a
+    # shared cache; everything else is per-viewer and must not be. Deriving this
+    # rather than assuming keeps a direct-message image out of a CDN even if the
+    # visibility rule above ever changes.
+    publicly_cacheable = media.post_id is not None or is_public_profile_image(db, media)
 
     # Bytes stored in the row are the durable copy and are preferred. Older
     # rows have no blob, and a local deployment may still hold the file, so the
@@ -178,10 +198,12 @@ def download(media_id: int, db: DbSession, viewer: CurrentUser, request: Request
         # else (PDF) and never let the browser sniff a different type.
         "Content-Disposition": _content_disposition(media),
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, max-age=86400",
+        "Cache-Control": (
+            "public, max-age=86400" if publicly_cacheable else "private, max-age=86400"
+        ),
         # The bytes never change for an id, so a validator makes a repeat load a
         # 304 with no body. `Vary: Authorization` is required because the
-        # response is per-viewer: a shared cache must not hand one account's
+        # response can be per-viewer: a shared cache must not hand one account's
         # bytes to another. Do not drop it when adding a shared cache.
         "ETag": _etag(media),
         "Vary": "Authorization",

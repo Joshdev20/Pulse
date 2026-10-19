@@ -14,6 +14,7 @@ so no arbitrary media id can be reached through them.
 
 import html
 import io
+import json
 import os
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -21,8 +22,8 @@ from fastapi.responses import Response
 from sqlalchemy import func, select
 
 from .. import storage
-from ..deps import DbSession
-from ..models import Media, User
+from ..deps import DbSession, public_base
+from ..models import Media, Post, User
 
 router = APIRouter(prefix="/api/preview", tags=["preview"])
 
@@ -38,6 +39,11 @@ FOREGROUND = (245, 246, 250)
 MUTED = (150, 155, 170)
 
 DESCRIPTION_LIMIT = 160
+
+# How many posts the server-rendered profile quotes. Enough to give a search
+# engine real text to index, small enough that the page stays a preview rather
+# than a full mirror of the app.
+RECENT_POSTS = 20
 
 
 def _load_font(size: int):
@@ -308,25 +314,11 @@ def _get_user_or_404(db: DbSession, username: str) -> User:
 def _public_base(request: Request) -> str:
     """The origin the visitor actually used, for the URLs in the preview page.
 
-    A crawler reaches this endpoint through the site (Vercel), which proxies to
-    this service, so the request's own host is not necessarily the public one.
-    The proxy headers are honoured first, and https is forced for anything that
-    is not local: WhatsApp discards an ``og:image`` served over plain http, and
-    the TLS-terminating proxy in front of the app makes the socket look like
-    http even when the visitor used https.
+    Thin alias for the shared helper so the existing call sites keep reading
+    naturally; the implementation lives in ``deps`` because the sitemap needs
+    the same origin.
     """
-    host = (
-        request.headers.get("x-forwarded-host")
-        or request.headers.get("host")
-        or request.url.netloc
-    )
-    host = host.split(",")[0].strip()
-    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
-    if not proto:
-        proto = request.url.scheme
-    if proto != "https" and not host.startswith(("localhost", "127.0.0.1")):
-        proto = "https"
-    return f"{proto}://{host}"
+    return public_base(request)
 
 
 def _card_url(request: Request, username: str) -> str:
@@ -350,12 +342,107 @@ def _escape(value: str) -> str:
     return html.escape(value, quote=True)
 
 
-def _render_page(user: User, request: Request) -> str:
+def _plain(text: str, limit: int = 280) -> str:
+    """Collapse whitespace and clip, for post bodies quoted into the page."""
+    collapsed = " ".join((text or "").split())
+    if len(collapsed) > limit:
+        collapsed = collapsed[: limit - 1].rstrip() + "…"
+    return collapsed
+
+
+def _json_ld(user: User, request: Request, posts: list[Post]) -> str:
+    """A ProfilePage graph, so a crawler reads structure rather than guessing.
+
+    The JSON is embedded in a ``<script>`` element, where the HTML parser looks
+    for the literal ``</script>`` rather than parsing JSON. ``json.dumps`` does
+    not escape ``<``, ``>`` or ``&``, so a display name of
+    ``</script><script>…`` would close the element and run as script on the
+    site's origin. Escaping those three to their ``\\uXXXX`` forms is the fix:
+    the bytes stay valid JSON and cannot terminate the element.
+    """
+    page_url = _page_url(request, user.username)
+    graph: dict[str, object] = {
+        "@context": "https://schema.org",
+        "@type": "ProfilePage",
+        "mainEntity": {
+            "@type": "Person",
+            "name": user.display_name,
+            "alternateName": f"@{user.username}",
+            "description": _description(user),
+            "url": page_url,
+            "interactionStatistic": [
+                {
+                    "@type": "InteractionCounter",
+                    "interactionType": "https://schema.org/FollowAction",
+                    "userInteractionCount": user.follower_count,
+                }
+            ],
+        },
+    }
+    person = graph["mainEntity"]
+    assert isinstance(person, dict)
+    if user.bio:
+        person["description"] = _plain(user.bio, DESCRIPTION_LIMIT)
+    if user.website:
+        person["sameAs"] = [user.website]
+    if user.location:
+        person["homeLocation"] = {"@type": "Place", "name": user.location}
+    if posts:
+        graph["hasPart"] = [
+            {
+                "@type": "SocialMediaPosting",
+                "headline": _plain(post.body, 110),
+                "datePublished": post.created_at.isoformat(),
+                # The app serves a single post at /p/<id>, not under the author's
+                # profile, so this must not be built by appending to page_url.
+                "url": f"{_public_base(request)}/p/{post.id}",
+                "author": {"@type": "Person", "name": user.display_name},
+            }
+            for post in posts
+        ]
+    return _json_for_script(graph)
+
+
+def _json_for_script(value: object) -> str:
+    """``json.dumps`` with the characters that could end a script element escaped."""
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def _render_posts(posts: list[Post]) -> str:
+    """The recent posts as plain HTML.
+
+    This is the page's indexable substance: a crawler that runs no JavaScript
+    otherwise sees only the profile header, which is not enough for a search
+    engine to judge what the profile is about.
+    """
+    if not posts:
+        return "<p>No posts yet.</p>"
+    items = "\n".join(
+        f'        <li><article><p>{_escape(_plain(post.body))}</p>'
+        f'<p><time datetime="{post.created_at.isoformat()}">'
+        f"{post.created_at.date().isoformat()}</time></p></article></li>"
+        for post in posts
+        if post.body
+    )
+    if not items:
+        return "<p>No posts yet.</p>"
+    return f"      <ol>\n{items}\n      </ol>"
+
+
+def _render_page(user: User, request: Request, posts: list[Post]) -> str:
     title = f"{user.display_name} (@{user.username}) · Pulse"
     description = _description(user)
     page_url = _page_url(request, user.username)
     image_url = _card_url(request, user.username)
     followers = f"{user.follower_count} followers"
+    json_ld = _json_ld(user, request, posts)
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -363,6 +450,9 @@ def _render_page(user: User, request: Request) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{_escape(title)}</title>
     <meta name="description" content="{_escape(description)}" />
+    <!-- Indexable: this page exists so a search engine can read a profile, so
+         an explicit directive is safer than relying on the default. -->
+    <meta name="robots" content="index, follow" />
     <link rel="canonical" href="{_escape(page_url)}" />
     <meta property="og:type" content="profile" />
     <meta property="og:site_name" content="Pulse" />
@@ -379,6 +469,7 @@ def _render_page(user: User, request: Request) -> str:
     <meta name="twitter:title" content="{_escape(title)}" />
     <meta name="twitter:description" content="{_escape(description)}" />
     <meta name="twitter:image" content="{_escape(image_url)}" />
+    <script type="application/ld+json">{json_ld}</script>
   </head>
   <body>
     <main>
@@ -386,6 +477,8 @@ def _render_page(user: User, request: Request) -> str:
       <p>@{_escape(user.username)} · {_escape(followers)}</p>
       <p>{_escape(description)}</p>
       <p><a href="{_escape(page_url)}">Open {_escape(user.display_name)} on Pulse</a></p>
+      <h2>Recent posts</h2>
+{_render_posts(posts)}
     </main>
   </body>
 </html>
@@ -404,13 +497,26 @@ def _not_found_page() -> str:
 
 @router.get("/u/{username}", response_class=Response, include_in_schema=False)
 def preview_profile(username: str, request: Request, db: DbSession) -> Response:
-    """The Open Graph page a crawler reads for a shared profile link."""
+    """The page a crawler reads for a profile link.
+
+    Doubles as the indexable HTML for the profile: a crawler that runs no
+    JavaScript would otherwise see an empty SPA shell. The recent posts are
+    rendered inline for the same reason.
+    """
     user = db.scalar(select(User).where(func.lower(User.username) == username.lower()))
     headers = {"Cache-Control": "public, max-age=300, s-maxage=900"}
     if user is None:
         return Response(content=_not_found_page(), status_code=404, media_type="text/html")
+    posts = list(
+        db.scalars(
+            select(Post)
+            .where(Post.author_id == user.id, Post.body != "")
+            .order_by(Post.created_at.desc(), Post.id.desc())
+            .limit(RECENT_POSTS)
+        ).all()
+    )
     return Response(
-        content=_render_page(user, request), media_type="text/html", headers=headers
+        content=_render_page(user, request, posts), media_type="text/html", headers=headers
     )
 
 

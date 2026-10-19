@@ -210,13 +210,19 @@ export function useRealtimeEvent(listener: Listener, deps: unknown[] = []) {
 export function useUnreadMessages(): { count: number; refresh: () => void } {
   const [count, setCount] = useState(0)
   const { subscribe } = useRealtime()
+  const { user } = useAuth()
 
   const refresh = useCallback(() => {
+    // Nothing to count without a session, and the request would only 401.
+    if (!user) {
+      setCount(0)
+      return
+    }
     api
       .messagesUnreadCount()
       .then((result) => setCount(result.count))
       .catch(() => undefined)
-  }, [])
+  }, [user])
 
   useEffect(() => {
     refresh()
@@ -237,13 +243,19 @@ export function useUnreadMessages(): { count: number; refresh: () => void } {
 export function useUnreadNotifications(): { count: number; refresh: () => void } {
   const [count, setCount] = useState(0)
   const { subscribe } = useRealtime()
+  const { user } = useAuth()
 
   const refresh = useCallback(() => {
+    // As above: a visitor has no unread anything.
+    if (!user) {
+      setCount(0)
+      return
+    }
     api
       .unreadCount()
       .then((result) => setCount(result.count))
       .catch(() => undefined)
-  }, [])
+  }, [user])
 
   useEffect(() => {
     refresh()

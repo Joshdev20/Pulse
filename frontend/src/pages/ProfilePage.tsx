@@ -24,7 +24,7 @@ import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
 import { formatCount, pluralize } from '../lib/format'
 import { useAsync } from '../lib/useAsync'
-import { usePageTitle } from '../lib/usePageTitle'
+import { useMetaDescription, usePageTitle } from '../lib/usePageTitle'
 import { usePostFeed } from '../lib/usePostFeed'
 import type { Post, User } from '../lib/types'
 
@@ -83,30 +83,52 @@ function ShareProfileButton({ username }: { username: string }) {
 export function ProfilePage() {
   const { username = '' } = useParams()
   const navigate = useNavigate()
-  const { user: me, setUser } = useAuth()
+  const { user: me, setUser, loading: sessionLoading } = useAuth()
   const [tab, setTab] = useState<Tab>('posts')
   const [editing, setEditing] = useState<Post | null>(null)
   const [listModal, setListModal] = useState<'followers' | 'following' | null>(null)
 
+  // Signed out, this page is public: the profile and its posts answer without a
+  // session, and the crawler that indexes them sees the same thing. The tabs
+  // and lists that would need an account are hidden rather than shown broken.
+  const signedOut = !sessionLoading && !me
+
   const profile = useAsync(() => api.user(username), [username, me?.id])
   const person = profile.data
-  const isMe = me?.username.toLowerCase() === username.toLowerCase()
+  const isMe = !!me && me.username.toLowerCase() === username.toLowerCase()
 
-  usePageTitle(`/u/${username}`, person ? `${person.display_name} (@${person.username})` : undefined)
+  // This page owns its title: the shell skips /u routes so it cannot overwrite
+  // this with a generic label. The username is the fallback while the profile
+  // loads, so the tab never shows a stale title from the previous page.
+  usePageTitle(
+    `/u/${username}`,
+    person ? `${person.display_name} (@${person.username})` : `@${username}`,
+  )
+  useMetaDescription(
+    person
+      ? person.bio?.trim() ||
+          `${person.display_name} (@${person.username}) on Pulse — ${pluralize(person.post_count, 'post')}.`
+      : undefined,
+  )
 
   const feed = usePostFeed(
-    (page) => (tab === 'posts' ? api.userPosts(username, page, 20) : api.userLikes(username, page, 20)),
+    (page) =>
+      tab === 'posts'
+        ? api.userPosts(username, page, 20)
+        : api.userLikes(username, page, 20),
+    // The tab is pinned to 'posts' while signed out, so the dependency cannot
+    // change under a visitor and fire a request the API would refuse.
     [username, tab, me?.id],
   )
 
   const lists = useAsync(
     () =>
-      listModal
+      listModal && !signedOut
         ? listModal === 'followers'
           ? api.followers(username)
           : api.following(username)
         : Promise.resolve<User[]>([]),
-    [listModal, username],
+    [listModal, username, signedOut],
   )
 
   // Keep the signed-in user's own header in sync after following someone from here.
@@ -167,6 +189,12 @@ export function ProfilePage() {
               <Link to="/settings" className="btn btn-outline">
                 Edit profile
               </Link>
+            ) : signedOut ? (
+              /* A visitor with no account gets the one action that can work for
+                 them, rather than a follow or message button that would 401. */
+              <Link to="/register" className="btn btn-primary">
+                Join Pulse
+              </Link>
             ) : (
               <>
                 <FollowButton user={person} onChange={profile.setData} />
@@ -201,23 +229,44 @@ export function ProfilePage() {
         </div>
 
         <div className="profile-counts">
-          <button type="button" onClick={() => setListModal('following')}>
-            <strong>{formatCount(person.following_count)}</strong> Following
-          </button>
-          <button type="button" onClick={() => setListModal('followers')}>
-            <strong>{formatCount(person.follower_count)}</strong> Followers
-          </button>
+          {signedOut ? (
+            /* The counts stay visible — they are part of the profile a crawler
+               reads — but they are plain text, because the lists behind them
+               need a session. */
+            <>
+              <span>
+                <strong>{formatCount(person.following_count)}</strong> Following
+              </span>
+              <span>
+                <strong>{formatCount(person.follower_count)}</strong> Followers
+              </span>
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={() => setListModal('following')}>
+                <strong>{formatCount(person.following_count)}</strong> Following
+              </button>
+              <button type="button" onClick={() => setListModal('followers')}>
+                <strong>{formatCount(person.follower_count)}</strong> Followers
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="tabs">
-        <button type="button" className={`tab${tab === 'posts' ? ' active' : ''}`} onClick={() => setTab('posts')}>
-          Posts
-        </button>
-        <button type="button" className={`tab${tab === 'likes' ? ' active' : ''}`} onClick={() => setTab('likes')}>
-          Likes
-        </button>
-      </div>
+      {/* The likes tab is omitted for a visitor: the list is somebody's
+          interests across the network and stays behind a session, and a tab
+          that is present but refuses to load is worse than one that is absent. */}
+      {!signedOut && (
+        <div className="tabs">
+          <button type="button" className={`tab${tab === 'posts' ? ' active' : ''}`} onClick={() => setTab('posts')}>
+            Posts
+          </button>
+          <button type="button" className={`tab${tab === 'likes' ? ' active' : ''}`} onClick={() => setTab('likes')}>
+            Likes
+          </button>
+        </div>
+      )}
 
       {feed.loading && <FeedSkeleton rows={4} />}
       {!feed.loading && feed.error && <ErrorState message={feed.error} onRetry={feed.reload} />}
@@ -245,6 +294,7 @@ export function ProfilePage() {
               key={post.id}
               post={post}
               currentUserId={me?.id}
+              readOnly={signedOut}
               onChange={feed.replace}
               onDeleted={feed.remove}
               onEdit={setEditing}

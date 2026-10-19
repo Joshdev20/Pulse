@@ -21,6 +21,7 @@ from .routers import (
     push,
     realtime,
     search,
+    sitemap,
     users,
 )
 from .schema import ensure_schema
@@ -104,6 +105,7 @@ app.include_router(users.router)
 # Unauthenticated by design: a link-preview crawler has no account. See the
 # module docstring in routers/preview.py.
 app.include_router(preview.router)
+app.include_router(sitemap.router)
 app.include_router(notifications.router)
 app.include_router(search.router)
 app.include_router(media.router)
