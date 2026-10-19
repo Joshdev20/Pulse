@@ -40,6 +40,12 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # filesystem is ephemeral. Nullable: rows written before this column keep
     # working through the on-disk fallback until they are backfilled.
     ("media", "blob", "BYTEA NULL"),
+    # The video preview frame and its type, captured in the browser at upload.
+    # Nullable: a video uploaded before this column existed keeps working
+    # through the in-browser capture until it is re-uploaded.
+    ("media", "poster_content_type", "VARCHAR(64) NULL"),
+    ("media", "poster_blob", "BYTEA NULL"),
+    ("media", "duration_ms", "INTEGER NULL"),
     # Swipe-to-reply. Nullable, so every message written before this column
     # stays a plain message. No FK is added by ALTER TABLE; the serializer
     # tolerates a quote whose target is gone.

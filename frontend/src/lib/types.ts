@@ -43,6 +43,14 @@ export interface Media {
   height: number | null
   alt_text: string
   url: string
+  /**
+   * A small image of the video's own first frame, captured in the browser at
+   * upload time. Null for images, and for videos uploaded before posters were
+   * captured — those still fall back to decoding a frame in the browser.
+   */
+  poster_url: string | null
+  /** Length in milliseconds, for the duration badge without a video fetch. */
+  duration_ms: number | null
 }
 
 export interface Post {

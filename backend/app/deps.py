@@ -19,6 +19,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 DbSession = Annotated[Session, Depends(get_db)]
 
 MEDIA_URL = "/api/media/{id}"
+MEDIA_POSTER_URL = "/api/media/{id}/poster"
 
 
 def online_user_ids() -> set[int]:
@@ -58,6 +59,13 @@ def serialize_media(items: list[Media]) -> list[MediaOut]:
             height=item.height,
             alt_text=item.alt_text,
             url=MEDIA_URL.format(id=item.id),
+            # Built from the stored type, not the bytes: `poster_blob` is
+            # deferred, and touching it here would load every preview image in
+            # the feed to answer a question the type already answers.
+            poster_url=(
+                MEDIA_POSTER_URL.format(id=item.id) if item.poster_content_type else None
+            ),
+            duration_ms=item.duration_ms,
         )
         for item in items
     ]

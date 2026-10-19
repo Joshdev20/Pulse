@@ -3,16 +3,23 @@ import { CloseIcon, MicIcon, UploadIcon } from './Icons'
 import { Spinner } from './UI'
 import { api, ApiError } from '../lib/api'
 import { useMediaUrl } from '../lib/useMediaUrl'
+import { capturePoster } from '../lib/videoPoster'
 import type { Media } from '../lib/types'
 
 const MAX_ATTACHMENTS = 4
 
 /** Uploaded-but-not-yet-posted preview. Owns its own authenticated fetch. */
 function Thumb({ item, onRemove }: { item: Media; onRemove: () => void }) {
-  const asset = useMediaUrl(item.url)
+  // A video shows its captured poster here for the same reason the feed does:
+  // the tile must not wait for the whole clip to download. A video with no
+  // poster (a capture that failed, or a browser that could not decode one)
+  // falls back to the file chip rather than an empty image.
+  const preview = item.kind === 'video' ? item.poster_url : item.url
+  const asset = useMediaUrl(preview)
+  const showImage = item.kind === 'image' || (item.kind === 'video' && preview !== null)
   return (
     <div className="media-thumb">
-      {item.kind === 'image' ? (
+      {showImage ? (
         <img src={asset?.url} alt={item.alt_text} />
       ) : item.kind === 'audio' ? (
         <span className="media-thumb-file">
@@ -68,7 +75,11 @@ export function MediaPicker({
       setUploading((count) => count + 1)
       setProgress(0)
       try {
-        uploaded.push(await api.upload(file, file.name, setProgress))
+        // Decode a frame from the local file before sending it. The bytes are
+        // already in memory here, so this costs nothing extra, and the poster
+        // then travels in the same request as the video.
+        const poster = file.type.startsWith('video/') ? await capturePoster(file) : null
+        uploaded.push(await api.upload(file, file.name, setProgress, poster))
       } catch (caught) {
         setError(caught instanceof ApiError ? caught.message : 'Upload failed')
       } finally {
