@@ -1,6 +1,7 @@
 """Tests for media upload, validation and authenticated delivery."""
 
 import io
+import json
 import os
 import struct
 import wave
@@ -15,6 +16,49 @@ PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
     "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
 )
+
+# An 8x8 JPEG, as the browser's `canvas.toDataURL('image/jpeg')` produces for a
+# captured video frame. Real bytes, so it exercises the same magic-byte path a
+# genuine poster takes.
+JPEG = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffdb0043000a07070807060a"
+    "0808080b0a0a0b0e18100e0d0d0e1d15161118231f2524221f2221262b372f26"
+    "293429212230413134393b3e3e3e252e4449433c48373d3e3bffdb0043010a0b"
+    "0b0e0d0e1c10101c3b2822283b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b"
+    "3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3bffc0"
+    "0011080008000803012200021101031101ffc4001f0000010501010101010100"
+    "000000000000000102030405060708090a0bffc400b510000201030302040305"
+    "0504040000017d01020300041105122131410613516107227114328191a10823"
+    "42b1c11552d1f02433627282090a161718191a25262728292a3435363738393a"
+    "434445464748494a535455565758595a636465666768696a737475767778797a"
+    "838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7"
+    "b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1"
+    "f2f3f4f5f6f7f8f9faffc4001f01000301010101010101010100000000000001"
+    "02030405060708090a0bffc400b5110002010204040304070504040001027700"
+    "0102031104052131061241510761711322328108144291a1b1c109233352f015"
+    "6272d10a162434e125f11718191a262728292a35363738393a43444546474849"
+    "4a535455565758595a636465666768696a737475767778797a82838485868788"
+    "898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4"
+    "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9"
+    "faffda000c03010002110311003f00e6a8a28afb63d63fffd9"
+)
+
+# A minimal but real MP4 header: `ftyp` with the generic `isom` brand, which
+# `sniff` classifies as video. Only the leading bytes matter to `sniff`, so this
+# stands in for a real upload.
+MP4 = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 32
+
+# A video-shaped payload comfortably larger than a poster, for the one test that
+# asserts a poster is the smaller of the two. A real clip is megabytes; the
+# fixture above is 44 bytes, which no preview image could undercut.
+BIG_MP4 = MP4 + b"\x00" * 64_000
+
+
+def upload_video(client, headers, poster=None, body=MP4, **form):
+    files = {"file": ("clip.mp4", io.BytesIO(body), "video/mp4")}
+    if poster is not None:
+        files["poster"] = ("poster.jpg", io.BytesIO(poster), "image/jpeg")
+    return client.post("/api/media", headers=headers, files=files, data=form)
 
 
 def upload(client, headers, data: bytes, filename: str = "x.png", alt: str = ""):
@@ -417,3 +461,182 @@ def test_wildcard_if_none_match_is_not_a_hit(client, make_user, tmp_path, monkey
     response = client.get(f"/api/media/{media_id}", headers={**headers, "If-None-Match": "*"})
     assert response.status_code == 200
     assert response.content == PNG
+
+
+# --- Video posters -----------------------------------------------------------
+#
+# A tile must not download a whole video to show a frame. The client captures
+# one at upload time and sends it with the file, so these cover the path that
+# makes a preview appear at once rather than after the download.
+
+
+def test_video_poster_is_stored_and_served(client, make_user, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    response = upload_video(
+        client, headers, poster=JPEG, body=BIG_MP4, alt_text="clip", duration_ms="10250"
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["kind"] == "video"
+    assert body["poster_url"] == f"/api/media/{body['id']}/poster"
+    assert body["duration_ms"] == 10250
+
+    # The poster is far smaller than the video it previews, which is the point:
+    # this is the download the tile no longer has to make.
+    poster = client.get(body["poster_url"], headers=headers)
+    assert poster.status_code == 200
+    assert poster.content == JPEG
+    assert poster.headers["content-type"] == "image/jpeg"
+    assert len(poster.content) < body["size_bytes"]
+
+
+def test_poster_is_public_exactly_when_the_video_is(client, make_user, tmp_path, monkeypatch):
+    """The poster reuses the video's own visibility rule, not a looser one."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    media = upload_video(client, ada, poster=JPEG).json()
+    path = media["poster_url"]
+
+    # Unattached: private to its owner, so it cannot be probed for by id.
+    assert client.get(path, headers=ada).status_code == 200
+    assert client.get(path, headers=grace).status_code == 404
+    assert client.get(path).status_code == 404
+
+    # Attached to a post: readable by anyone, like the post.
+    post = client.post("/api/posts", headers=ada, json={"body": "clip", "media_ids": [media["id"]]})
+    assert post.status_code == 201, post.text
+    assert client.get(path, headers=grace).status_code == 200
+    assert client.get(path).status_code == 200
+
+
+def test_poster_has_its_own_etag(client, make_user, tmp_path, monkeypatch):
+    """A poster's validator must not answer for the video, or vice versa.
+
+    They are different bytes under the same id, so a shared validator would let
+    a client that cached one be told 304 for the other and render the wrong
+    thing.
+    """
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    media = upload_video(client, headers, poster=JPEG).json()
+    poster_etag = client.get(media["poster_url"], headers=headers).headers["etag"]
+    video_etag = client.get(media["url"], headers=headers).headers["etag"]
+    assert poster_etag != video_etag
+
+    # Revalidating the poster with its own validator is a 304 with no body.
+    repeat = client.get(media["poster_url"], headers={**headers, "If-None-Match": poster_etag})
+    assert repeat.status_code == 304
+    assert repeat.content == b""
+
+    # The same validator against the video must not be treated as a hit.
+    wrong = client.get(media["url"], headers={**headers, "If-None-Match": poster_etag})
+    assert wrong.status_code == 200
+    assert wrong.content == MP4
+
+
+def test_poster_cache_directive_follows_the_video(client, make_user, tmp_path, monkeypatch):
+    """A public poster may be cached by a shared cache; a private one may not."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    media = upload_video(client, headers, poster=JPEG).json()
+
+    # Unattached, so private to the owner.
+    private = client.get(media["poster_url"], headers=headers)
+    assert private.headers["cache-control"].startswith("private")
+    assert "Authorization" in private.headers["Vary"]
+
+    client.post("/api/posts", headers=headers, json={"body": "x", "media_ids": [media["id"]]})
+    public = client.get(media["poster_url"], headers=headers)
+    assert public.headers["cache-control"].startswith("public")
+
+
+def test_non_image_poster_is_dropped(client, make_user, tmp_path, monkeypatch):
+    """A poster is sniffed like any upload, so script-bearing types are refused.
+
+    It is served back to whoever can read the video, so keeping an SVG or an
+    HTML payload here would be stored XSS under the API's own origin.
+    """
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    for payload in (b'<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>', b"<html>x</html>"):
+        response = upload_video(client, headers, poster=payload)
+        # The upload itself still succeeds — a poster is an enhancement — but
+        # the payload is not kept.
+        assert response.status_code == 201, response.text
+        assert response.json()["poster_url"] is None
+        path = f"/api/media/{response.json()['id']}/poster"
+        assert client.get(path, headers=headers).status_code == 404
+
+
+def test_poster_is_optional(client, make_user, tmp_path, monkeypatch):
+    """A client that cannot decode a frame must still be able to upload video."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    body = upload_video(client, headers).json()
+    assert body["kind"] == "video"
+    assert body["poster_url"] is None
+    assert body["duration_ms"] is None
+    assert client.get(f"/api/media/{body['id']}/poster", headers=headers).status_code == 404
+
+
+def test_image_uploads_never_get_a_poster(client, make_user, tmp_path, monkeypatch):
+    """An image is its own preview, so a poster field on one is ignored."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    response = client.post(
+        "/api/media",
+        headers=headers,
+        files={
+            "file": ("x.png", io.BytesIO(PNG), "image/png"),
+            "poster": ("poster.jpg", io.BytesIO(JPEG), "image/jpeg"),
+        },
+        data={"alt_text": "a dot", "duration_ms": "5000"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["poster_url"] is None
+    assert response.json()["duration_ms"] is None
+
+
+def test_nonsense_duration_is_dropped_not_fatal(client, make_user, tmp_path, monkeypatch):
+    """The length only drives a badge, so a bad value must not lose the upload."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    assert upload_video(client, headers, duration_ms="0").json()["duration_ms"] is None
+    assert upload_video(client, headers, duration_ms="-5").json()["duration_ms"] is None
+    # Absurd values are clamped rather than stored as reported.
+    clamped = upload_video(client, headers, duration_ms="99999999999").json()["duration_ms"]
+    assert clamped == 24 * 60 * 60 * 1000
+
+
+def test_oversized_poster_is_dropped(client, make_user, tmp_path, monkeypatch):
+    """The poster field cannot be used to push an unbounded blob into a row."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    huge = JPEG + b"\x00" * (2 * 1024 * 1024)
+    response = upload_video(client, headers, poster=huge)
+    assert response.status_code == 201, response.text
+    assert response.json()["poster_url"] is None
+
+
+def test_feed_response_does_not_load_poster_bytes(client, make_user, tmp_path, monkeypatch):
+    """Listing a feed must not pull every preview image into memory.
+
+    `poster_url` is built from the stored content type rather than the bytes,
+    and `poster_blob` is deferred. This asserts the property that deferral
+    exists for: a post listing carries the URL and no image data.
+    """
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+    media = upload_video(client, headers, poster=JPEG).json()
+    client.post("/api/posts", headers=headers, json={"body": "clip", "media_ids": [media["id"]]})
+
+    listed = client.get("/api/posts", headers=headers).json()["items"][0]["media"][0]
+    assert listed["poster_url"] == media["poster_url"]
+    assert "poster_blob" not in listed
+    # The response is a URL, not the image: nothing of the poster's size.
+    assert len(json.dumps(listed)) < len(JPEG)

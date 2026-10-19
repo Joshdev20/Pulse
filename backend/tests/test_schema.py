@@ -296,3 +296,49 @@ def test_ensure_schema_adds_push_columns_to_an_existing_table(legacy_engine):
     assert "push_subscriptions.last_used_at" in applied
     columns = {column["name"] for column in inspect(legacy_engine).get_columns("push_subscriptions")}
     assert {"user_agent", "last_used_at"} <= columns
+
+
+def test_ensure_schema_adds_poster_columns_to_an_existing_media_table(legacy_engine):
+    """A media table created before video posters is upgraded in place.
+
+    A database seeded by an earlier release holds videos whose tile still has to
+    decode a frame from the whole clip. The columns are added, nullable, so
+    those rows keep working through the in-browser capture rather than failing
+    to load.
+    """
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE media ("
+                "id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL, "
+                "stored_name VARCHAR(255) NOT NULL, content_type VARCHAR(64) NOT NULL, "
+                "kind VARCHAR(16) NOT NULL, size_bytes INTEGER NOT NULL, "
+                "blob BYTEA, width INTEGER, height INTEGER, "
+                "alt_text VARCHAR(280) NOT NULL DEFAULT '', "
+                "post_id INTEGER, created_at DATETIME NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO media (id, owner_id, stored_name, content_type, kind, "
+                "size_bytes, created_at) "
+                "VALUES (1, 1, 'legacy.mp4', 'video/mp4', 'video', 44, CURRENT_TIMESTAMP)"
+            )
+        )
+
+    applied = ensure_schema(legacy_engine)
+
+    assert {"media.poster_content_type", "media.poster_blob", "media.duration_ms"} <= set(applied)
+    columns = {column["name"] for column in inspect(legacy_engine).get_columns("media")}
+    assert {"poster_content_type", "poster_blob", "duration_ms"} <= columns
+
+    # The pre-existing row survives with the new columns null, which is what
+    # makes it fall back to the in-browser capture.
+    session = _session_for(legacy_engine)()
+    try:
+        row = session.execute(
+            text("SELECT kind, poster_content_type, duration_ms FROM media WHERE id = 1")
+        ).one()
+        assert row == ("video", None, None)
+    finally:
+        session.close()

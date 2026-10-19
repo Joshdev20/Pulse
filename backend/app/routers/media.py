@@ -14,6 +14,44 @@ from ..schemas import MediaOut
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
+# The client sends a preview frame with a video. It is an image the client
+# produced, so it is sniffed like any other upload and rejected if it is not a
+# real image — a poster is served to whoever can read the video, and an
+# ``image/svg+xml`` or an HTML payload smuggled through this field would be
+# served back with its own content type.
+MAX_POSTER_BYTES = 2 * 1024 * 1024
+
+
+def _poster_from(data: bytes | None) -> tuple[str, bytes] | None:
+    """Validate a client-supplied preview frame, or None if unusable.
+
+    A poster is an enhancement: a bad or missing one must not fail the upload
+    that carries it, or a client that cannot decode a frame would be unable to
+    post video at all. Anything that does not sniff as a supported image is
+    dropped silently.
+    """
+    if not data or len(data) > MAX_POSTER_BYTES:
+        return None
+    try:
+        sniffed = storage.sniff(data[: storage.SNIFF_BYTES])
+    except storage.UnsupportedMedia:
+        return None
+    if sniffed.kind != "image":
+        return None
+    return sniffed.content_type, data
+
+
+def _duration_ms(value: int | None) -> int | None:
+    """A sane video length, or None.
+
+    Clamped rather than rejected: the number only drives a badge, and a client
+    reporting a nonsense length should not lose its upload over it.
+    """
+    if value is None or value <= 0:
+        return None
+    # 24 hours. Past this the value is a units mistake, not a long video.
+    return min(value, 24 * 60 * 60 * 1000)
+
 
 @router.post("", response_model=MediaOut, status_code=status.HTTP_201_CREATED)
 async def upload(
@@ -21,6 +59,8 @@ async def upload(
     user: CurrentUser,
     file: UploadFile = File(...),
     alt_text: str = Form(""),
+    duration_ms: int | None = Form(None),
+    poster: UploadFile | None = File(None),
 ) -> MediaOut:
     """Accept one file, identify it by content, and store it under a random name."""
     # Read one byte past the largest allowed size so an oversized body is
@@ -51,6 +91,8 @@ async def upload(
         )
 
     stored_name = storage.store(data, sniffed.extension)
+    # Only a video carries a preview frame; an image is its own preview.
+    poster_data = _poster_from(await poster.read()) if (poster and sniffed.kind == "video") else None
     media = Media(
         owner_id=user.id,
         stored_name=stored_name,
@@ -61,6 +103,9 @@ async def upload(
         # filesystem loses `UPLOAD_DIR` on every redeploy while the database
         # keeps the row, so the file alone is not a durable copy of an upload.
         blob=data,
+        poster_content_type=poster_data[0] if poster_data else None,
+        poster_blob=poster_data[1] if poster_data else None,
+        duration_ms=_duration_ms(duration_ms) if sniffed.kind == "video" else None,
         alt_text=alt_text.strip()[:280],
     )
     db.add(media)
@@ -147,17 +192,30 @@ def _etag(media: Media) -> str:
     return f'"{media.id}-{media.stored_name}"'
 
 
-def _is_immutable_cache_hit(media: Media, headers) -> bool:
+def _poster_etag(media: Media) -> str:
+    """The poster's own validator.
+
+    Distinct from ``_etag`` because it names different bytes for the same id:
+    sharing a validator between the video and its preview would let a client
+    that cached one answer a conditional request for the other with 304.
+    """
+    return f'"{media.id}-{media.stored_name}-poster"'
+
+
+def _is_immutable_cache_hit(media: Media, headers, etag: str | None = None) -> bool:
     """Whether the client already holds these exact bytes.
 
     Only an exact-match ETag counts. An `If-None-Match: *` is deliberately not
     treated as a hit: it asserts "any copy will do", which is not the same as
     holding these bytes, and answering 304 for it would show the wrong picture.
+
+    ``etag`` overrides the default validator for routes serving something other
+    than the video's own bytes.
     """
     candidate = headers.get("if-none-match")
     if not candidate:
         return False
-    expected = _etag(media)
+    expected = etag or _etag(media)
     return any(part.strip() in (expected, expected[1:-1]) for part in candidate.split(","))
 
 
@@ -172,6 +230,47 @@ def _stream_blob(data: bytes, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
     view = memoryview(data)
     for start in range(0, len(view), chunk_size):
         yield bytes(view[start : start + chunk_size])
+
+
+@router.get("/{media_id}/poster")
+def poster(media_id: int, db: DbSession, viewer: OptionalUser, request: Request) -> Response:
+    """The stored preview frame for a video.
+
+    Separate from the video's own route so a feed can ask for a few kilobytes
+    instead of the whole file. Visibility is the *same* rule as the video's —
+    ``_visible_to`` is called here rather than a looser check, so a poster can
+    never disclose a video the caller may not read.
+    """
+    media = db.get(Media, media_id)
+    if media is None or media.poster_content_type is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
+    if not _visible_to(db, media, viewer):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
+
+    blob = media.poster_blob
+    if not blob:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
+
+    headers = {
+        # A poster is always safe to render inline: it was sniffed as an image
+        # on the way in, so the stored type cannot be HTML or SVG.
+        "Content-Type": media.poster_content_type,
+        "X-Content-Type-Options": "nosniff",
+        # Same reasoning as the video: public when the video is public, private
+        # otherwise, and `Vary: Authorization` keeps a shared cache honest.
+        "Cache-Control": (
+            "public, max-age=86400"
+            if media.post_id is not None or is_public_profile_image(db, media)
+            else "private, max-age=86400"
+        ),
+        # Distinct from the video's ETag: same id, different bytes.
+        "ETag": _poster_etag(media),
+        "Vary": "Authorization",
+    }
+    if _is_immutable_cache_hit(media, request.headers, etag=_poster_etag(media)):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
+    return Response(content=blob, headers=headers)
 
 
 @router.get("/{media_id}")

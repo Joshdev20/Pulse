@@ -4,11 +4,16 @@ import { useEffect, useState } from 'react'
  * Poster frames for uploaded videos, captured in the browser.
  *
  * The backend has no ffmpeg (and the free instance has no room for one), so a
- * thumbnail cannot be produced at upload time. It does not need to be: the
- * video's bytes are already downloaded to render the tile, and a `<video>`
- * element can be asked to decode one frame from them. That frame is drawn to a
- * canvas and kept as a small image URL, so a feed of videos shows real previews
- * instead of a black box behind a play button.
+ * thumbnail cannot be produced server-side. The browser can produce one though,
+ * and the best moment to do it is at upload: `capturePoster` decodes a frame
+ * from the local file and sends it with the video, so the feed later fetches a
+ * few kilobytes of image instead of the whole clip.
+ *
+ * `useVideoPoster` is the fallback for a video that has no stored poster —
+ * uploaded before this existed, or whose capture failed. It decodes a frame
+ * from the downloaded video, which is the work the upload-time capture moves
+ * out of the viewing path. That frame is drawn to a canvas and kept as a small
+ * image URL, so such a tile still shows a real preview rather than a black box.
  *
  * Entries are keyed by the media path, so every element showing the same
  * attachment shares one capture. This is a module-level cache for the same
@@ -168,4 +173,70 @@ export function useVideoPoster(path: string | null | undefined): string | null {
 /** Drop every generated poster. Used when the account changes. */
 export function clearVideoPosters() {
   posters.clear()
+}
+
+export type CapturedPoster = {
+  /** A JPEG of one real frame, ready to upload beside the video. */
+  blob: Blob
+  /** The clip's length, so the tile can show a duration without the video. */
+  durationMs: number
+}
+
+/**
+ * Decode a frame of a just-chosen file, to send with the upload.
+ *
+ * This is the same work the feed used to do on every view, moved to the one
+ * moment the bytes are already in memory. A tile then fetches a few kilobytes
+ * of image instead of the whole clip, which is the difference between a preview
+ * appearing at once and appearing after the video downloads.
+ *
+ * Resolves to null on any failure. The upload must still proceed: a browser
+ * that cannot decode a frame here (an unsupported codec, a very short clip)
+ * would otherwise be unable to post video at all, and the tile falls back to
+ * the in-browser capture it used before.
+ */
+export async function capturePoster(file: File): Promise<CapturedPoster | null> {
+  const url = URL.createObjectURL(file)
+  try {
+    const video = document.createElement('video')
+    video.preload = 'auto'
+    video.muted = true
+    video.playsInline = true
+    video.src = url
+
+    const frame = await new Promise<string | null>((resolve) => {
+      let settled = false
+      const finish = (result: string | null) => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        resolve(result)
+      }
+      const timer = window.setTimeout(() => finish(null), CAPTURE_TIMEOUT_MS)
+
+      video.addEventListener('loadedmetadata', () => {
+        // A little way in: frame zero of many uploads is a black fade-in.
+        const target = Number.isFinite(video.duration) ? Math.min(0.5, video.duration / 2) : 0.1
+        try {
+          video.currentTime = Math.max(0.1, target)
+        } catch {
+          finish(captureFrame(video))
+        }
+      })
+      video.addEventListener('seeked', () => finish(captureFrame(video)))
+      video.addEventListener('loadeddata', () => {
+        if (video.readyState >= 2) finish(captureFrame(video))
+      })
+      video.addEventListener('error', () => finish(null))
+    })
+
+    if (frame === null) return null
+    const blob = await (await fetch(frame)).blob()
+    const durationMs = Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0
+    return { blob, durationMs }
+  } catch {
+    return null
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }

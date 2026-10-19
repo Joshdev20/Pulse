@@ -280,6 +280,19 @@ class Media(Base):
     # remove `deferred` — `serialize_media` never touches `blob`, so a feed
     # would otherwise load megabytes per post for nothing.
     blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    # A video's preview frame, captured in the browser at upload time and sent
+    # with the file. Without it a tile can only be shown after the whole video
+    # has downloaded — `/api/media/{id}` ignores range requests and answers with
+    # the entire blob, so a 30MB clip costs 30MB before the first frame appears.
+    #
+    # The type is stored beside the bytes and is NOT deferred, so it doubles as
+    # the "has a poster" flag: `serialize_media` can build `poster_url` from it
+    # alone without loading a single byte of image data into a feed response.
+    poster_content_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    poster_blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    # The video's length, so the duration badge needs no metadata fetch. Null
+    # for everything that is not a video, and for rows written before this.
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     alt_text: Mapped[str] = mapped_column(String(280), default="")

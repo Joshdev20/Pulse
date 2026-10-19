@@ -290,8 +290,12 @@ export const api = {
   trendingPeople: (limit = 5) => request<User[]>(`/api/trending/people${query({ limit })}`),
 
   /** Multipart upload. Content-Type is left to the browser so the boundary is set. */
-  upload: (file: File, altText = '', onProgress?: (percent: number) => void) =>
-    uploadWithProgress<Media>('/api/media', file, altText, onProgress),
+  upload: (
+    file: File,
+    altText = '',
+    onProgress?: (percent: number) => void,
+    poster?: { blob: Blob; durationMs: number } | null,
+  ) => uploadWithProgress<Media>('/api/media', file, altText, onProgress, poster),
 
   conversations: () => request<Conversation[]>('/api/conversations'),
 
@@ -384,11 +388,19 @@ function uploadWithProgress<T>(
   file: File,
   altText: string,
   onProgress?: (percent: number) => void,
+  poster?: { blob: Blob; durationMs: number } | null,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const form = new FormData()
     form.append('file', file)
     form.append('alt_text', altText)
+    // The preview frame is captured before the upload starts, so it travels in
+    // the same request. Sending it separately would need a second round trip
+    // and leave a window where the video exists with no poster.
+    if (poster) {
+      form.append('poster', poster.blob, 'poster.jpg')
+      form.append('duration_ms', String(poster.durationMs))
+    }
 
     const xhr = new XMLHttpRequest()
     // Must go through apiUrl like every other request: in a split deploy the

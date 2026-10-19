@@ -163,6 +163,12 @@ class MediaOut(BaseModel):
     height: int | None = None
     alt_text: str = ""
     url: str
+    # A small image of the video's first real frame, so a tile can render
+    # without downloading the video. Null for images and for videos uploaded
+    # before posters were captured.
+    poster_url: str | None = None
+    # Length in milliseconds, so the duration badge needs no video fetch.
+    duration_ms: int | None = None
 
 
 class PostOut(BaseModel):
