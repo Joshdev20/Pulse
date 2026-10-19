@@ -180,6 +180,24 @@ the public URL returns 502 until the dev server is bound to 12000.
   the body before concluding the route is missing. Likewise `/api/media/{id}` returning
   `404` for every id is data drift on the free instance, not a media bug.
 
+### Brand assets
+
+- The mark is a heartbeat waveform in a lime-to-sky tile. `PulseLogo.tsx` is the single
+  source of its geometry: `PulseLogo` (optional animation) and `PulseMark` (static) share
+  one path, and the static files in `frontend/public/` are rasterised from the same shape.
+  Change the path in one place and the favicon, app icons and chrome drift apart, so
+  regenerate the assets whenever it moves.
+- `favicon.ico` is packed by hand (16/32/48 frames), not by Pillow. Pillow's ICO writer
+  takes one image and downscales it, which discards the artwork tuned for 16px; the frames
+  must each keep their own rendering. Verify with `Image.open('favicon.ico').info['sizes']`,
+  which should list all three.
+- The first-load screen (`BrandLoader` in `App.tsx`) only renders for a returning visitor.
+  With no stored token the session check resolves without a request, so the loader never
+  shows; seed `pulse.token` in `localStorage` to exercise it in a browser test.
+- `index.html` carries the icon links, Open Graph and Twitter tags. Profile links get a
+  per-user card from the backend, but every other route relies on these static tags, so a
+  new top-level route does not need its own preview work.
+
 ### Multiple signed-in accounts
 
 - `frontend/src/lib/accounts.ts` keeps every signed-in account in `pulse.accounts`, each
