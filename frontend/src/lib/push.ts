@@ -394,7 +394,19 @@ async function runSync(userId?: number): Promise<void> {
       return
     }
     if (!current) {
-      remember('granted')
+      // The user opted in, permission is still granted, but the browser has no
+      // subscription: a reinstalled Home Screen app, cleared site data, or an
+      // expired endpoint the browser dropped on its own. Their choice still
+      // stands, so rebuild the subscription rather than showing the switch off
+      // and making them ask again. Nothing is prompted for — permission is
+      // already granted, and this only runs when the recorded choice is on.
+      const body = subscriptionBody(await subscribeWithKey(await registration(), status.public_key))
+      if (body) {
+        await api.pushSubscribe(body)
+        remember('subscribed')
+      } else {
+        remember('granted')
+      }
       return
     }
 
