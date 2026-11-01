@@ -28,6 +28,29 @@ export type PushState =
   | 'denied'
   | 'subscribed'
 
+/**
+ * The last state that was computed, so a freshly mounted settings menu can show
+ * the truth at once instead of flashing "off" and correcting itself a moment
+ * later. Session-scoped; cleared when the signed-in account changes, because
+ * the answer belongs to the account.
+ */
+let cachedState: PushState | null = null
+
+/** The last known state, or null if none has been computed yet this session. */
+export function cachedPushState(): PushState | null {
+  return cachedState
+}
+
+/** Forget the cached state, for when the answer no longer applies. */
+export function clearCachedPushState(): void {
+  cachedState = null
+}
+
+function remember(state: PushState): PushState {
+  cachedState = state
+  return state
+}
+
 /** Whether this browser can do Web Push at all. */
 export function pushSupported(): boolean {
   return (
@@ -120,18 +143,29 @@ async function replaceSubscription(publicKey: string): Promise<PushSubscriptionB
 
 /** The current state, without prompting for anything. */
 export async function pushState(): Promise<PushState> {
-  if (!pushSupported()) return 'unsupported'
+  if (!pushSupported()) return remember('unsupported')
+  // Report the last known answer while a replacement is in progress. Reading
+  // the browser mid-heal would see the old subscription already dropped and
+  // report "off" for a device that is only being renewed.
+  const settling = settleInFlight
+  if (settling) {
+    try {
+      await settling
+    } catch {
+      // A failed heal leaves the cached answer in place; the next read corrects it.
+    }
+  }
   const current = await currentSubscription()
   const status = await api.pushStatus(current?.body.endpoint).catch(() => null)
-  if (!status?.enabled || !status.public_key) return 'unconfigured'
-  if (Notification.permission === 'denied') return 'denied'
-  if (Notification.permission === 'default') return 'default'
-  if (!current) return 'granted'
+  if (!status?.enabled || !status.public_key) return remember('unconfigured')
+  if (Notification.permission === 'denied') return remember('denied')
+  if (Notification.permission === 'default') return remember('default')
+  if (!current) return remember('granted')
   // The browser holds a subscription, but the server no longer has the row
   // (pruned after a key rotation, or the endpoint moved to another account on
   // this shared browser). Report it as needing attention rather than claiming
   // the device is subscribed and deliverable.
-  return status.endpoint_registered === false ? 'granted' : 'subscribed'
+  return remember(status.endpoint_registered === false ? 'granted' : 'subscribed')
 }
 
 /**
@@ -142,12 +176,12 @@ export async function pushState(): Promise<PushState> {
  * settings screen can show what happened instead of breaking.
  */
 export async function enablePush(): Promise<PushState> {
-  if (!pushSupported()) return 'unsupported'
+  if (!pushSupported()) return remember('unsupported')
   const status = await api.pushStatus().catch(() => null)
-  if (!status?.enabled || !status.public_key) return 'unconfigured'
+  if (!status?.enabled || !status.public_key) return remember('unconfigured')
 
   const permission = await Notification.requestPermission()
-  if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'default'
+  if (permission !== 'granted') return remember(permission === 'denied' ? 'denied' : 'default')
 
   const existing = await currentSubscription()
   if (existing) {
@@ -159,23 +193,23 @@ export async function enablePush(): Promise<PushState> {
       .then((s) => s.endpoint_registered !== false)
       .catch(() => false)
     if (!known) {
-      return (await replaceSubscription(status.public_key)) ? 'subscribed' : 'default'
+      return remember((await replaceSubscription(status.public_key)) ? 'subscribed' : 'default')
     }
     await api.pushSubscribe(existing.body)
-    return 'subscribed'
+    return remember('subscribed')
   }
 
   const reg = await registration()
   await navigator.serviceWorker.ready
   const body = subscriptionBody(await subscribeWithKey(reg, status.public_key))
-  if (!body) return 'default'
+  if (!body) return remember('default')
   await api.pushSubscribe(body)
-  return 'subscribed'
+  return remember('subscribed')
 }
 
 /** Cancel the browser subscription and forget it on the server. */
 export async function disablePush(): Promise<PushState> {
-  if (!pushSupported()) return 'unsupported'
+  if (!pushSupported()) return remember('unsupported')
   const reg = await navigator.serviceWorker.getRegistration('/')
   const subscription = await reg?.pushManager.getSubscription()
   if (subscription) {
@@ -184,7 +218,7 @@ export async function disablePush(): Promise<PushState> {
     await api.pushUnsubscribe(subscription.endpoint).catch(() => undefined)
     await subscription.unsubscribe().catch(() => undefined)
   }
-  return notificationPermission() === 'granted' ? 'granted' : 'default'
+  return remember(notificationPermission() === 'granted' ? 'granted' : 'default')
 }
 
 /**
@@ -210,31 +244,63 @@ export async function disablePush(): Promise<PushState> {
  */
 let syncInFlight: Promise<void> | null = null
 
+/**
+ * The heal currently replacing a stale subscription, if any.
+ *
+ * A replacement drops the browser's subscription before creating the new one,
+ * so for a few hundred milliseconds there is genuinely no subscription. A read
+ * that lands in that window would report "off" for a device that is merely
+ * being renewed. Readers await this instead.
+ */
+let settleInFlight: Promise<void> | null = null
+
 export function syncPushSubscription(): Promise<void> {
   if (!syncInFlight) {
-    syncInFlight = runSync().finally(() => {
+    settleInFlight = runSync().finally(() => {
       syncInFlight = null
+      settleInFlight = null
     })
+    syncInFlight = settleInFlight
   }
   return syncInFlight
 }
 
 async function runSync(): Promise<void> {
-  if (!pushSupported() || Notification.permission !== 'granted') return
+  if (!pushSupported()) {
+    remember('unsupported')
+    return
+  }
+  if (Notification.permission === 'denied') {
+    remember('denied')
+    return
+  }
+  // Not granted: there is nothing to sync, but the menu still needs the truth
+  // on its first open, so record it here rather than leaving the cache empty.
+  if (Notification.permission !== 'granted') {
+    remember('default')
+    return
+  }
   try {
     const current = await currentSubscription()
     const status = await api.pushStatus(current?.body.endpoint).catch(() => null)
-    if (!status?.enabled || !status.public_key) return
-    if (!current) return
+    if (!status?.enabled || !status.public_key) {
+      remember('unconfigured')
+      return
+    }
+    if (!current) {
+      remember('granted')
+      return
+    }
 
     if (status.endpoint_registered === false) {
       // The server does not have this endpoint, so it can never be delivered
       // to. Replace it with one bound to the current key.
-      await replaceSubscription(status.public_key)
+      remember((await replaceSubscription(status.public_key)) ? 'subscribed' : 'granted')
       return
     }
 
     await api.pushSubscribe(current.body)
+    remember('subscribed')
   } catch {
     // A failed re-sync is not worth surfacing; the next load tries again.
   }

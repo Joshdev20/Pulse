@@ -6,7 +6,7 @@ import { Dropdown } from './UI'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { isSoundEnabled, playNotificationSound, setSoundEnabled } from '../lib/sound'
-import { disablePush, enablePush, pushState, pushSupported } from '../lib/push'
+import { cachedPushState, disablePush, enablePush, pushState, pushSupported } from '../lib/push'
 import type { PushState } from '../lib/push'
 import { useTheme } from '../lib/useTheme'
 
@@ -30,38 +30,23 @@ function pushSubtitle(state: PushState): string {
 }
 
 /**
- * The profile menu behind the hamburger on your own profile.
+ * The push toggle, mounted only while the menu is open.
  *
- * It holds everything about the account and the device — appearance, the
- * notification preferences, the saved-account switcher and signing out — so the
- * profile page itself can keep only what edits the profile. These are the
- * controls that used to sit on the Settings screen beside the profile fields.
+ * Mounting with the menu is what makes it show the truth immediately: the
+ * background sync records the state as it runs, and this component's initial
+ * value is read from that record at the moment the menu opens. Holding the
+ * state in the always-mounted menu instead would seed it before the sync had
+ * finished and flash "off" until the async read corrected it.
  */
-export function ProfileMenu() {
-  const { user, logout } = useAuth()
+function PushToggleRow() {
   const { notify } = useToast()
-  const { theme, setTheme } = useTheme()
-  const [sound, setSound] = useState(() => isSoundEnabled())
-  const [push, setPush] = useState<PushState>(() => (pushSupported() ? 'default' : 'unsupported'))
-  const [pushBusy, setPushBusy] = useState(false)
+  const { user } = useAuth()
+  const [push, setPush] = useState<PushState>(() =>
+    cachedPushState() ?? (pushSupported() ? 'default' : 'unsupported'),
+  )
+  const [busy, setBusy] = useState(false)
 
-  const pushOn = push === 'subscribed'
-
-  // Read the real push state when the menu opens, and again whenever the active
-  // account changes.
-  //
-  // The read has to outlive the effect's own cleanup. Opening the menu flips
-  // `opened`, which both starts this read and re-runs the effect, so the
-  // cleanup of the previous run fires while the read is still in flight. That
-  // cleanup used to set a `cancelled` flag that discarded the result, leaving
-  // the toggle on its initial "off" no matter what the browser reported. The
-  // flag is now only a guard against the unmount case.
-  //
-  // `user?.id` in the deps is what makes a switch to another account re-read
-  // instead of leaving the previous account's answer on screen.
-  const [opened, setOpened] = useState(false)
   useEffect(() => {
-    if (!opened) return
     let active = true
     void pushState().then((state) => {
       if (active) setPush(state)
@@ -69,18 +54,10 @@ export function ProfileMenu() {
     return () => {
       active = false
     }
-  }, [opened, user?.id])
-
-  // A switch to another account must not keep showing the account just left
-  // while the fresh read is in flight.
-  useEffect(() => {
-    setPush(pushSupported() ? 'default' : 'unsupported')
   }, [user?.id])
 
-  if (!user) return null
-
-  const togglePush = async (next: boolean) => {
-    setPushBusy(true)
+  const toggle = async (next: boolean) => {
+    setBusy(true)
     try {
       const state = next ? await enablePush() : await disablePush()
       setPush(state)
@@ -91,13 +68,47 @@ export function ProfileMenu() {
     } catch {
       notify('Could not change push notifications', 'error')
     } finally {
-      setPushBusy(false)
+      setBusy(false)
     }
   }
 
   return (
+    <label className="switch-row profile-menu-row">
+      <span className="switch-row-text">
+        <span className="profile-menu-label">Push notifications</span>
+        <span className="profile-menu-sub">{pushSubtitle(push)}</span>
+      </span>
+      <input
+        type="checkbox"
+        className="switch-input"
+        checked={push === 'subscribed'}
+        disabled={busy || push === 'unsupported' || push === 'unconfigured'}
+        onChange={(event) => void toggle(event.target.checked)}
+      />
+      <span className="switch" aria-hidden="true">
+        <BellIcon size={14} />
+      </span>
+    </label>
+  )
+}
+
+/**
+ * The profile menu behind the hamburger on your own profile.
+ *
+ * It holds everything about the account and the device — appearance, the
+ * notification preferences, the saved-account switcher and signing out — so the
+ * profile page itself can keep only what edits the profile. These are the
+ * controls that used to sit on the Settings screen beside the profile fields.
+ */
+export function ProfileMenu() {
+  const { user, logout } = useAuth()
+  const { theme, setTheme } = useTheme()
+  const [sound, setSound] = useState(() => isSoundEnabled())
+
+  if (!user) return null
+
+  return (
     <Dropdown
-      onOpenChange={setOpened}
       trigger={() => (
         <span className="profile-menu-trigger" aria-label="Profile menu">
           <MenuIcon size={20} />
@@ -157,22 +168,7 @@ export function ProfileMenu() {
             </span>
           </label>
 
-          <label className="switch-row profile-menu-row">
-            <span className="switch-row-text">
-              <span className="profile-menu-label">Push notifications</span>
-              <span className="profile-menu-sub">{pushSubtitle(push)}</span>
-            </span>
-            <input
-              type="checkbox"
-              className="switch-input"
-              checked={pushOn}
-              disabled={pushBusy || push === 'unsupported' || push === 'unconfigured'}
-              onChange={(event) => void togglePush(event.target.checked)}
-            />
-            <span className="switch" aria-hidden="true">
-              <BellIcon size={14} />
-            </span>
-          </label>
+          <PushToggleRow />
 
           <div className="profile-menu-head">Accounts</div>
           <AccountList onClose={close} />
