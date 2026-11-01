@@ -26,6 +26,26 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim())
 })
 
+/**
+ * A pass-through fetch handler, present purely to satisfy the install criteria.
+ *
+ * Chrome refuses to fire `beforeinstallprompt` unless the service worker has a
+ * fetch listener, even though it dropped that requirement for the menu entry in
+ * 108. Without one, Android users never get the in-app install prompt and are
+ * left to find "Add to Home screen" themselves.
+ *
+ * Deliberately does *not* call `respondWith`: an empty listener leaves the
+ * browser to make the request exactly as it would without a worker, so nothing
+ * is cached and no response is synthesised. That keeps the promise above — a
+ * cache here would serve one signed-in user's feed to the next on a shared
+ * device. Adding `respondWith(fetch(...))` would also work but would take the
+ * request over for no benefit and risk a rejected promise turning into a failed
+ * navigation.
+ */
+self.addEventListener('fetch', () => {
+  // Intentionally empty; see the comment above.
+})
+
 self.addEventListener('push', (event) => {
   let payload = {}
   try {

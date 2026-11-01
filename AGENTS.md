@@ -110,6 +110,33 @@ the public URL returns 502 until the dev server is bound to 12000.
   pane a `calc(100vh - Npx)` height â€” that magic constant drifts out of step with the
   header and bottom padding and leaves a stray page scroll.
 
+### Installability and the service worker
+
+- `public/sw.js` is push-only and must stay that way: it **caches nothing**. The app is
+  authenticated, so a cached feed would be served to the next person on a shared device.
+- It nevertheless registers a `fetch` listener with an empty body, because Chrome's
+  documented install criteria call for a worker with a fetch handler. The listener
+  deliberately does **not** call `respondWith` — an empty listener leaves the browser to
+  make the request as if no worker existed, so nothing is cached and no response is
+  synthesised. Do not "fix" it into `respondWith(fetch(...))`, and do not add caching to it.
+  A test Chromium fired `beforeinstallprompt` with and without this listener, so treat the
+  criteria as documented behaviour to satisfy rather than something a local run proves.
+- `main.tsx` registers the worker on every load. It used to be registered only from
+  `lib/push.ts`, so a user who never enabled push had no worker at all — and the criteria
+  above then went unmet. Keep the startup registration; `push.ts` still registers for
+  itself because it needs the result, and registration is idempotent.
+- `lib/installPrompt.ts` holds platform detection and the deferred event. The event is
+  captured at module scope, not in a component effect, because it can fire before React
+  mounts. It is single-use: `triggerInstall` drops it once spent.
+- Android gets a button that replays the native prompt. iOS cannot be triggered from the
+  page at all, so it gets Share > Add to Home Screen instructions instead, and only in
+  Safari — Chrome and Firefox on iOS have no such option, which `isIOSSafari` encodes.
+- The card is shown only to someone still using the site in a browser tab: `isStandalone`
+  excludes an installed app, `platform === 'other'` excludes desktop, and it waits for a
+  visible, non-hidden tab. A dismissal is remembered for 30 days.
+- A dismissal of Chrome's own dialog is not recorded as a refusal — that is a decision
+  about the prompt, not the app, so the card stays and the button works again.
+
 ### Realtime
 
 - One socket per session, owned by `RealtimeContext`. Components never open their own

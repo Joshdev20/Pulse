@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell } from './components/Layout'
 import { Composer } from './components/Composer'
+import { InstallPrompt } from './components/InstallPrompt'
 import { NotificationCenter } from './components/NotificationCenter'
 import { Modal } from './components/UI'
 import { PulseLogo } from './components/PulseLogo'
@@ -86,6 +87,7 @@ function Layout() {
       {/* Rendered inside the authenticated shell so popups and the chime only
           run while a session is active, even when the tab is in the background. */}
       <NotificationCenter />
+      <InstallPrompt />
       {composeOpen && (
         <Modal title="New post" onClose={() => setComposeOpen(false)}>
           <Composer autoFocus onPosted={() => setComposeOpen(false)} />
