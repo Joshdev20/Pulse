@@ -6,7 +6,7 @@ import { Dropdown } from './UI'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { isSoundEnabled, playNotificationSound, setSoundEnabled } from '../lib/sound'
-import { cachedPushState, disablePush, enablePush, pushState, pushSupported } from '../lib/push'
+import { disablePush, enablePush, initialPushState, pushState } from '../lib/push'
 import type { PushState } from '../lib/push'
 import { useTheme } from '../lib/useTheme'
 
@@ -32,23 +32,20 @@ function pushSubtitle(state: PushState): string {
 /**
  * The push toggle, mounted only while the menu is open.
  *
- * Mounting with the menu is what makes it show the truth immediately: the
- * background sync records the state as it runs, and this component's initial
- * value is read from that record at the moment the menu opens. Holding the
- * state in the always-mounted menu instead would seed it before the sync had
- * finished and flash "off" until the async read corrected it.
+ * The initial value comes from `initialPushState`, which reads the user's stored
+ * decision and the browser's permission synchronously, so the switch shows the
+ * right thing on its very first paint. The async read that follows only refines
+ * it — and, if the server cannot be reached, does not flip it off.
  */
 function PushToggleRow() {
   const { notify } = useToast()
   const { user } = useAuth()
-  const [push, setPush] = useState<PushState>(() =>
-    cachedPushState() ?? (pushSupported() ? 'default' : 'unsupported'),
-  )
+  const [push, setPush] = useState<PushState>(() => initialPushState(user?.id))
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let active = true
-    void pushState().then((state) => {
+    void pushState(user?.id).then((state) => {
       if (active) setPush(state)
     })
     return () => {
@@ -59,7 +56,7 @@ function PushToggleRow() {
   const toggle = async (next: boolean) => {
     setBusy(true)
     try {
-      const state = next ? await enablePush() : await disablePush()
+      const state = next ? await enablePush(user?.id) : await disablePush(user?.id)
       setPush(state)
       if (next && state === 'subscribed') notify('Push notifications enabled')
       else if (next && state === 'denied') notify('Notifications are blocked in your browser', 'error')

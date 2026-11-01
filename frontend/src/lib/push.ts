@@ -51,6 +51,70 @@ function remember(state: PushState): PushState {
   return state
 }
 
+/**
+ * The user's own decision for an account: 'on' once they have turned push on,
+ * 'off' once they have turned it off.
+ *
+ * Kept in localStorage, keyed by account, because the decision is the user's and
+ * not a fact the server can supply. Everything else here is derived from live
+ * reads that can fail or race; without this record the switch has no memory, so
+ * it renders off on every mount and can be flipped back on by a background sync
+ * the user never asked for. Persisting it is what makes the choice stick.
+ */
+function choiceKey(userId?: number): string {
+  return userId === undefined ? 'pulse.push' : `pulse.push.${userId}`
+}
+
+export function storedPushChoice(userId?: number): 'on' | 'off' | null {
+  try {
+    const value = localStorage.getItem(choiceKey(userId))
+    return value === 'on' || value === 'off' ? value : null
+  } catch {
+    return null
+  }
+}
+
+function rememberChoice(userId: number | undefined, choice: 'on' | 'off'): void {
+  try {
+    localStorage.setItem(choiceKey(userId), choice)
+  } catch {
+    // Nothing to persist; the in-memory cache still holds this session's answer.
+  }
+}
+
+/**
+ * What to show the instant the menu opens, before any request has answered.
+ *
+ * A stored decision is the strongest signal: it is what the user last chose, so
+ * showing it avoids the switch rendering off and flipping on once the reads
+ * land. Absent a decision, the browser's own permission answers for itself.
+ */
+export function initialPushState(userId?: number): PushState {
+  const cached = cachedPushState()
+  if (cached) return cached
+  if (!pushSupported()) return 'unsupported'
+  const permission = notificationPermission()
+  if (permission === 'denied') return 'denied'
+  if (permission !== 'granted') return 'default'
+  return storedPushChoice(userId) === 'on' ? 'subscribed' : 'granted'
+}
+
+/**
+ * The best answer available when the server cannot be reached.
+ *
+ * A failed status read is not the same as "push is switched off at the server".
+ * Reporting it as `unconfigured` both disabled the switch and told the user the
+ * server was misconfigured, when the real cause was a dropped request — which
+ * on a free-tier host that cold-starts is routine. Fall back to the browser and
+ * the stored decision instead.
+ */
+function unreachableState(userId?: number): PushState {
+  const permission = notificationPermission()
+  if (permission === 'denied') return 'denied'
+  if (permission !== 'granted') return 'default'
+  return storedPushChoice(userId) === 'on' ? 'subscribed' : 'granted'
+}
+
 /** Whether this browser can do Web Push at all. */
 export function pushSupported(): boolean {
   return (
@@ -142,7 +206,7 @@ async function replaceSubscription(publicKey: string): Promise<PushSubscriptionB
 }
 
 /** The current state, without prompting for anything. */
-export async function pushState(): Promise<PushState> {
+export async function pushState(userId?: number): Promise<PushState> {
   if (!pushSupported()) return remember('unsupported')
   // Report the last known answer while a replacement is in progress. Reading
   // the browser mid-heal would see the old subscription already dropped and
@@ -156,11 +220,15 @@ export async function pushState(): Promise<PushState> {
     }
   }
   const current = await currentSubscription()
-  const status = await api.pushStatus(current?.body.endpoint).catch(() => null)
-  if (!status?.enabled || !status.public_key) return remember('unconfigured')
+  // A request that fails (a cold start, a dropped connection) must not be read
+  // as "push is off at the server": that would disable the switch and blame the
+  // configuration. Only a real answer can say `enabled: false`.
+  const status = await api.pushStatus(current?.body.endpoint).catch(() => undefined)
+  if (status === undefined) return remember(unreachableState(userId))
+  if (!status.enabled || !status.public_key) return remember('unconfigured')
   if (Notification.permission === 'denied') return remember('denied')
   if (Notification.permission === 'default') return remember('default')
-  if (!current) return remember('granted')
+  if (!current) return remember(storedPushChoice(userId) === 'on' ? 'granted' : 'default')
   // The browser holds a subscription, but the server no longer has the row
   // (pruned after a key rotation, or the endpoint moved to another account on
   // this shared browser). Report it as needing attention rather than claiming
@@ -175,13 +243,20 @@ export async function pushState(): Promise<PushState> {
  * otherwise. Every failure is reported as a state rather than thrown, so the
  * settings screen can show what happened instead of breaking.
  */
-export async function enablePush(): Promise<PushState> {
+export async function enablePush(userId?: number): Promise<PushState> {
   if (!pushSupported()) return remember('unsupported')
-  const status = await api.pushStatus().catch(() => null)
-  if (!status?.enabled || !status.public_key) return remember('unconfigured')
+  const status = await api.pushStatus().catch(() => undefined)
+  // A failed read is not a reason to refuse: the user asked for this, so carry
+  // on and let the subscribe call be the thing that fails if the server is down.
+  if (status !== undefined && (!status.enabled || !status.public_key)) {
+    return remember('unconfigured')
+  }
 
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return remember(permission === 'denied' ? 'denied' : 'default')
+
+  const publicKey = status?.public_key
+  if (!publicKey) return remember('unconfigured')
 
   const existing = await currentSubscription()
   if (existing) {
@@ -193,22 +268,26 @@ export async function enablePush(): Promise<PushState> {
       .then((s) => s.endpoint_registered !== false)
       .catch(() => false)
     if (!known) {
-      return remember((await replaceSubscription(status.public_key)) ? 'subscribed' : 'default')
+      const state = (await replaceSubscription(publicKey)) ? 'subscribed' : 'default'
+      if (state === 'subscribed') rememberChoice(userId, 'on')
+      return remember(state)
     }
     await api.pushSubscribe(existing.body)
+    rememberChoice(userId, 'on')
     return remember('subscribed')
   }
 
   const reg = await registration()
   await navigator.serviceWorker.ready
-  const body = subscriptionBody(await subscribeWithKey(reg, status.public_key))
+  const body = subscriptionBody(await subscribeWithKey(reg, publicKey))
   if (!body) return remember('default')
   await api.pushSubscribe(body)
+  rememberChoice(userId, 'on')
   return remember('subscribed')
 }
 
 /** Cancel the browser subscription and forget it on the server. */
-export async function disablePush(): Promise<PushState> {
+export async function disablePush(userId?: number): Promise<PushState> {
   if (!pushSupported()) return remember('unsupported')
   const reg = await navigator.serviceWorker.getRegistration('/')
   const subscription = await reg?.pushManager.getSubscription()
@@ -218,6 +297,10 @@ export async function disablePush(): Promise<PushState> {
     await api.pushUnsubscribe(subscription.endpoint).catch(() => undefined)
     await subscription.unsubscribe().catch(() => undefined)
   }
+  // The user's decision is recorded even if the network calls above failed: the
+  // browser subscription is gone either way, and this is what stops the next
+  // load's background sync from quietly turning push back on.
+  rememberChoice(userId, 'off')
   return remember(notificationPermission() === 'granted' ? 'granted' : 'default')
 }
 
@@ -245,6 +328,12 @@ export async function disablePush(): Promise<PushState> {
 let syncInFlight: Promise<void> | null = null
 
 /**
+ * The account the in-flight sync belongs to, so a run started for one account is
+ * not reused for another.
+ */
+let syncUserId: number | undefined
+
+/**
  * The heal currently replacing a stale subscription, if any.
  *
  * A replacement drops the browser's subscription before creating the new one,
@@ -254,18 +343,22 @@ let syncInFlight: Promise<void> | null = null
  */
 let settleInFlight: Promise<void> | null = null
 
-export function syncPushSubscription(): Promise<void> {
-  if (!syncInFlight) {
-    settleInFlight = runSync().finally(() => {
-      syncInFlight = null
-      settleInFlight = null
+export function syncPushSubscription(userId?: number): Promise<void> {
+  if (!syncInFlight || syncUserId !== userId) {
+    const run = runSync(userId).finally(() => {
+      if (syncInFlight === run) {
+        syncInFlight = null
+        settleInFlight = null
+      }
     })
-    syncInFlight = settleInFlight
+    syncInFlight = run
+    syncUserId = userId
+    settleInFlight = run
   }
   return syncInFlight
 }
 
-async function runSync(): Promise<void> {
+async function runSync(userId?: number): Promise<void> {
   if (!pushSupported()) {
     remember('unsupported')
     return
@@ -281,9 +374,22 @@ async function runSync(): Promise<void> {
     return
   }
   try {
+    // The sync exists to keep a subscription the user already turned on alive.
+    // It must never turn push on by itself: if the user chose off, doing nothing
+    // is the correct outcome, not re-subscribing them.
+    if (storedPushChoice(userId) !== 'on') {
+      remember('granted')
+      return
+    }
     const current = await currentSubscription()
-    const status = await api.pushStatus(current?.body.endpoint).catch(() => null)
-    if (!status?.enabled || !status.public_key) {
+    // As in pushState, an unreachable server is not "push is off"; leave the
+    // recorded answer alone and let the next load try again.
+    const status = await api.pushStatus(current?.body.endpoint).catch(() => undefined)
+    if (status === undefined) {
+      remember(unreachableState(userId))
+      return
+    }
+    if (!status.enabled || !status.public_key) {
       remember('unconfigured')
       return
     }

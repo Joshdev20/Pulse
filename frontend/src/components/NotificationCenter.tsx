@@ -160,7 +160,7 @@ export function NotificationCenter() {
   // self-healing. Only runs when permission is already granted, so it never
   // triggers a prompt.
   useEffect(() => {
-    if (user?.id) void syncPushSubscription()
+    if (user?.id) void syncPushSubscription(user.id)
   }, [user?.id])
 
   if (popups.length === 0) return null
