@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { ApiError, api, setToken, getToken } from '../lib/api'
 import { clearMediaCache } from '../lib/mediaCache'
+import { clearCachedPushState } from '../lib/push'
 import {
   getActiveId,
   listAccounts,
@@ -80,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // discarding credentials the server never invalidated.
         if (error instanceof ApiError && error.status === 401) {
           clearMediaCache()
+          clearCachedPushState()
           setToken(null)
           setUserState(null)
           return
@@ -110,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // The previous session's media is keyed only by path, so it has to go
       // before the new account renders anything.
       clearMediaCache()
+      clearCachedPushState()
       setToken(access_token)
       const me = await api.me()
       setUserState(me)
@@ -130,6 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (data: { username: string; email: string; display_name: string; password: string }) => {
       const { access_token } = await api.register(data)
       clearMediaCache()
+      clearCachedPushState()
       setToken(access_token)
       const me = await api.me()
       setUserState(me)
@@ -155,6 +159,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const logout = useCallback(() => {
     clearMediaCache()
+    clearCachedPushState()
     if (activeAccountId !== null) removeAccount(activeAccountId)
     syncAccounts()
     setToken(null)
@@ -199,6 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // The token is good, so adopt it. Everything below is local bookkeeping
       // that cannot fail, which is what keeps the current session safe.
       clearMediaCache()
+      clearCachedPushState()
       setToken(account.token)
       setActiveId(id)
       setUserState(me)
@@ -215,6 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       syncAccounts()
       if (wasActive) {
         clearMediaCache()
+        clearCachedPushState()
         setUserState(null)
         setSessionEpoch((value) => value + 1)
       }
