@@ -4539,3 +4539,112 @@ h4 {
   letter-spacing: 0.02em;
   color: var(--text-muted);
 }
+
+/* ---- Install prompt -------------------------------------------------------
+   A card inviting the user to install Pulse as an app. It clears the mobile
+   navigation bar and the home indicator, because a phone is the only place it
+   is shown. */
+.install-prompt {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 18px;
+  z-index: 80;
+  width: min(430px, calc(100vw - 24px));
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 15px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  animation: install-prompt-in 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes install-prompt-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.install-prompt-mark {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.install-prompt-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.install-prompt-text strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.install-prompt-text p {
+  margin: 3px 0 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* The step the user must tap, highlighted inside the sentence. */
+.install-prompt-text p strong {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.install-prompt-icon {
+  vertical-align: -2px;
+  color: var(--sky);
+}
+
+.install-prompt-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.install-prompt-hint {
+  margin: 0;
+  max-width: 132px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-faint);
+  text-align: right;
+}
+
+@media (max-width: 780px) {
+  .install-prompt {
+    bottom: calc(78px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 420px) {
+  .install-prompt {
+    flex-direction: column;
+    gap: 11px;
+  }
+
+  .install-prompt-actions {
+    flex-direction: row;
+    align-self: stretch;
+  }
+
+  .install-prompt-hint {
+    max-width: none;
+    text-align: left;
+  }
+}
+
