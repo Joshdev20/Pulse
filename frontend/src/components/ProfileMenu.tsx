@@ -6,7 +6,7 @@ import { Dropdown } from './UI'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { isSoundEnabled, playNotificationSound, setSoundEnabled } from '../lib/sound'
-import { disablePush, enablePush, initialPushState, pushState } from '../lib/push'
+import { disablePush, enablePush, initialPushState, pushChoiceOn, pushState } from '../lib/push'
 import type { PushState } from '../lib/push'
 import { useTheme } from '../lib/useTheme'
 
@@ -32,21 +32,25 @@ function pushSubtitle(state: PushState): string {
 /**
  * The push toggle, mounted only while the menu is open.
  *
- * The initial value comes from `initialPushState`, which reads the user's stored
- * decision and the browser's permission synchronously, so the switch shows the
- * right thing on its very first paint. The async read that follows only refines
- * it — and, if the server cannot be reached, does not flip it off.
+ * The switch position is the user's recorded decision and nothing else. The async
+ * read that follows only updates the explanatory line underneath; it can never
+ * move the switch. That is the point: opening the menu, refreshing the page, or a
+ * background sync used to re-derive the position from live reads, so the control
+ * could flip on its own. Only the user moving it changes it now.
  */
 function PushToggleRow() {
   const { notify } = useToast()
   const { user } = useAuth()
   const [push, setPush] = useState<PushState>(() => initialPushState(user?.id))
+  const [on, setOn] = useState(() => pushChoiceOn(user?.id))
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let active = true
     void pushState(user?.id).then((state) => {
-      if (active) setPush(state)
+      if (!active) return
+      // Position stays put; only the subtitle follows the live read.
+      setPush(pushChoiceOn(user?.id) ? 'subscribed' : state === 'unconfigured' ? state : 'granted')
     })
     return () => {
       active = false
@@ -57,6 +61,10 @@ function PushToggleRow() {
     setBusy(true)
     try {
       const state = next ? await enablePush(user?.id) : await disablePush(user?.id)
+      // Turning it off always succeeds in removing the subscription; turning it on
+      // only counts if a subscription actually exists, so a denied permission or
+      // an unconfigured server must not leave the switch showing on.
+      setOn(next ? state === 'subscribed' : false)
       setPush(state)
       if (next && state === 'subscribed') notify('Push notifications enabled')
       else if (next && state === 'denied') notify('Notifications are blocked in your browser', 'error')
@@ -78,7 +86,7 @@ function PushToggleRow() {
       <input
         type="checkbox"
         className="switch-input"
-        checked={push === 'subscribed'}
+        checked={on}
         disabled={busy || push === 'unsupported' || push === 'unconfigured'}
         onChange={(event) => void toggle(event.target.checked)}
       />
