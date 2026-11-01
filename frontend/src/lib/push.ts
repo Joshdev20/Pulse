@@ -83,20 +83,49 @@ function rememberChoice(userId: number | undefined, choice: 'on' | 'off'): void 
 }
 
 /**
- * What to show the instant the menu opens, before any request has answered.
+ * Whether the switch should read as on. This is the user's recorded decision and
+ * nothing else.
  *
- * A stored decision is the strongest signal: it is what the user last chose, so
- * showing it avoids the switch rendering off and flipping on once the reads
- * land. Absent a decision, the browser's own permission answers for itself.
+ * The switch position must not be derived from a live read: a read can fail, can
+ * arrive late, or can be triggered by the app itself, and any of those would move
+ * a control the user set. Only `enablePush` and `disablePush` — which run because
+ * the user moved the switch — may change this.
+ */
+export function pushChoiceOn(userId?: number): boolean {
+  return storedPushChoice(userId) === 'on'
+}
+
+/**
+ * Record the browser's existing subscription as the decision, once, for someone
+ * who has never made one.
+ *
+ * Only a real subscription is adopted, and only as on. A *missing* subscription
+ * is deliberately not recorded as off: the service worker may simply not be
+ * registered yet on a fresh load, and writing 'off' there would switch off a
+ * device the user never touched — the very thing this module exists to prevent.
+ * Absence of a decision already reads as off, so nothing is lost by waiting.
+ */
+export function adoptPushChoice(userId: number | undefined, state: PushState): void {
+  if (storedPushChoice(userId) !== null) return
+  if (state === 'subscribed') rememberChoice(userId, 'on')
+}
+
+/**
+ * The state to show the instant the menu opens, before any request has answered.
+ *
+ * The on/off decision comes from the recorded choice, so the subtitle matches the
+ * switch on the first paint. `unconfigured`/`unsupported` are the exceptions: they
+ * are worth showing straight away because they explain why the switch cannot be
+ * used at all.
  */
 export function initialPushState(userId?: number): PushState {
-  const cached = cachedPushState()
-  if (cached) return cached
   if (!pushSupported()) return 'unsupported'
+  const cached = cachedPushState()
+  if (cached === 'unconfigured' || cached === 'unsupported') return cached
   const permission = notificationPermission()
   if (permission === 'denied') return 'denied'
-  if (permission !== 'granted') return 'default'
-  return storedPushChoice(userId) === 'on' ? 'subscribed' : 'granted'
+  if (pushChoiceOn(userId)) return 'subscribed'
+  return permission === 'granted' ? 'granted' : 'default'
 }
 
 /**
@@ -111,8 +140,8 @@ export function initialPushState(userId?: number): PushState {
 function unreachableState(userId?: number): PushState {
   const permission = notificationPermission()
   if (permission === 'denied') return 'denied'
-  if (permission !== 'granted') return 'default'
-  return storedPushChoice(userId) === 'on' ? 'subscribed' : 'granted'
+  if (pushChoiceOn(userId)) return 'subscribed'
+  return permission === 'granted' ? 'granted' : 'default'
 }
 
 /** Whether this browser can do Web Push at all. */
@@ -367,39 +396,52 @@ async function runSync(userId?: number): Promise<void> {
     remember('denied')
     return
   }
-  // Not granted: there is nothing to sync, but the menu still needs the truth
-  // on its first open, so record it here rather than leaving the cache empty.
+  // Not granted: there is nothing to sync, and the switch's position comes from
+  // the recorded choice, so only the subtitle needs the browser's answer.
   if (Notification.permission !== 'granted') {
-    remember('default')
+    remember(pushChoiceOn(userId) ? 'subscribed' : 'default')
     return
   }
   try {
-    // The sync exists to keep a subscription the user already turned on alive.
-    // It must never turn push on by itself: if the user chose off, doing nothing
-    // is the correct outcome, not re-subscribing them.
-    if (storedPushChoice(userId) !== 'on') {
-      remember('granted')
-      return
-    }
+    // This runs on every authenticated load, so it must never change the switch:
+    // it reports the recorded choice and, at most, repairs delivery underneath
+    // it. Nothing here may flip the switch on or off — the user does that.
+    // Register first: a fresh load may not have a worker yet, and without it the
+    // subscription check below would report "none" and misread an existing
+    // subscriber as someone who never opted in.
+    await registration().catch(() => undefined)
     const current = await currentSubscription()
-    // As in pushState, an unreachable server is not "push is off"; leave the
-    // recorded answer alone and let the next load try again.
     const status = await api.pushStatus(current?.body.endpoint).catch(() => undefined)
     if (status === undefined) {
       remember(unreachableState(userId))
       return
     }
     if (!status.enabled || !status.public_key) {
+      // The server genuinely cannot send. Say so, which disables the switch, so
+      // the user is not left thinking alerts will arrive.
       remember('unconfigured')
       return
     }
+
+    // No decision yet: adopt whatever the browser already holds, once. An
+    // existing subscriber is recorded as on rather than being shown as off and
+    // left to wonder why alerts stopped.
+    if (storedPushChoice(userId) === null) {
+      adoptPushChoice(userId, current ? 'subscribed' : 'granted')
+    }
+
+    if (!pushChoiceOn(userId)) {
+      // The user chose off, so there is nothing to maintain. Reporting the choice
+      // keeps the switch off, which is what they asked for.
+      remember('granted')
+      return
+    }
+
     if (!current) {
-      // The user opted in, permission is still granted, but the browser has no
-      // subscription: a reinstalled Home Screen app, cleared site data, or an
-      // expired endpoint the browser dropped on its own. Their choice still
-      // stands, so rebuild the subscription rather than showing the switch off
-      // and making them ask again. Nothing is prompted for — permission is
-      // already granted, and this only runs when the recorded choice is on.
+      // Chose on, permission granted, but the browser has no subscription: a
+      // reinstalled Home Screen app, cleared site data, or an endpoint the
+      // browser dropped. Their choice still stands, so rebuild the subscription
+      // rather than leaving alerts silently broken. Nothing is prompted for.
       const body = subscriptionBody(await subscribeWithKey(await registration(), status.public_key))
       if (body) {
         await api.pushSubscribe(body)
