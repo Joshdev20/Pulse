@@ -9,12 +9,13 @@ part of the feature that lives in this repository. Signing and transport are
 
 import base64
 import json
+import logging
 
 import pytest
 from sqlalchemy import select
 
 from app import push as push_module
-from app.config import settings
+from app.config import Settings, settings
 from app.models import PushSubscription
 
 
@@ -651,6 +652,7 @@ def test_notify_user_prunes_a_subscription_the_service_rejects_for_a_key_change(
 
     monkeypatch.setattr(pywebpush, "webpush", rejected)
 
+
     from app.database import get_db
 
     session = next(client.app.dependency_overrides[get_db]())
@@ -832,3 +834,140 @@ def test_the_documented_command_prints_a_key_pair():
     assert private
     public_raw = base64.urlsafe_b64decode(public + "=" * (-len(public) % 4))
     assert len(public_raw) == 65 and public_raw[0] == 0x04
+
+# --- Apple's VAPID subject rule ---------------------------------------------
+#
+# Apple refuses the whole request with 403 BadJwtToken when the `sub` claim is
+# not a deliverable URL or mailto address. FCM accepts the same request, so the
+# only symptom is "Android is fine, iPhone gets nothing" -- which is exactly the
+# bug this guards. Verified against web.push.apple.com: `.local` returns 403
+# BadJwtToken while a real domain is accepted and fails only on the device token.
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "mailto:no-reply@pulse.local",  # the placeholder that caused the bug
+        "mailto:admin@localhost",
+        "mailto:a@b.invalid",
+        "mailto:a@b.test",
+        "mailto:a@b.internal",
+        "mailto:a@b",  # no dot, so no real TLD
+        "mailto:a@b.LOCAL",  # case must not matter
+        "no-reply@pulse.app",  # not a mailto: or https: URI at all
+        "mailto: <a@b.com>",  # display-name form Apple also rejects
+        "mailto:a b@c.com",  # whitespace in the address
+        "",
+    ],
+)
+def test_a_subject_apple_would_reject_is_flagged(subject, monkeypatch):
+    monkeypatch.setattr(settings, "vapid_subject", subject)
+    assert settings.push_subject_valid is False
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "mailto:someone@yourdomain.com",
+        # A public TLD is the bar, not a mailbox that exists: Apple does not
+        # do MX lookups, so a documentation domain on a real TLD passes.
+        "mailto:someone@example.com",
+        "https://pulse-hazel-nine.vercel.app",
+        "https://example.org/contact",
+    ],
+)
+def test_a_deliverable_subject_is_accepted(subject, monkeypatch):
+    monkeypatch.setattr(settings, "vapid_subject", subject)
+    assert settings.push_subject_valid is True
+
+
+def test_the_shipped_default_subject_is_deliverable():
+    """The default must not be the thing that breaks iPhone push.
+
+    This is the regression guard for the actual bug: the default was
+    `mailto:no-reply@pulse.local`, which every local check passed and Apple
+    refused, so the failure only ever appeared on a real iPhone.
+    """
+    assert Settings().push_subject_valid is True
+
+
+def test_the_boot_warning_reaches_the_log_not_stdout(monkeypatch, caplog):
+    """A misconfiguration must be reported through `logging`, not `print`.
+
+    stdout is block-buffered when it is not a TTY, which is exactly how a
+    process manager runs the server, so a printed warning can stay in the
+    buffer and never appear in the deployment's logs -- defeating the point of
+    warning at boot at all.
+    """
+    from app import main as main_module
+
+    monkeypatch.setattr(settings, "vapid_subject", "mailto:no-reply@pulse.local")
+    monkeypatch.setattr(settings, "vapid_public_key", vapid_public())
+    monkeypatch.setattr(settings, "vapid_private_key", b64key(32))
+
+    with caplog.at_level(logging.WARNING, logger="pulse.main"):
+        main_module._warn_on_push_misconfiguration()
+
+    assert any("BadJwtToken" in r.getMessage() for r in caplog.records)
+
+
+def test_a_valid_subject_does_not_warn(monkeypatch, caplog):
+    from app import main as main_module
+
+    monkeypatch.setattr(settings, "vapid_subject", "mailto:someone@yourdomain.com")
+    monkeypatch.setattr(settings, "vapid_public_key", vapid_public())
+    monkeypatch.setattr(settings, "vapid_private_key", b64key(32))
+
+    with caplog.at_level(logging.WARNING, logger="pulse.main"):
+        main_module._warn_on_push_misconfiguration()
+
+    assert not caplog.records
+
+
+def test_a_bad_subject_is_reported_as_configuration_not_a_dead_device(
+    client, make_user, vapid, monkeypatch, caplog
+):
+    """A BadJwtToken refusal must not prune the subscription.
+
+    The endpoint is healthy and would deliver once the subject is corrected, so
+    deleting the row would make every iPhone user re-enable notifications for a
+    problem they did not cause and cannot see.
+    """
+    headers, user = make_user("ada")
+    subscribe(client, headers)
+
+    def rejected(**kwargs):
+        raise _webpush_error(403, '{"reason":"BadJwtToken"}')
+
+    import pywebpush
+
+    monkeypatch.setattr(pywebpush, "webpush", rejected)
+
+    from app.database import get_db
+
+    session = next(client.app.dependency_overrides[get_db]())
+    try:
+        with caplog.at_level("WARNING"):
+            assert push_module.notify_user(session, user["id"], {"title": "x"}) == 0
+        # The row survives, so a fixed deployment delivers without user action.
+        assert len(session.scalars(select(PushSubscription)).all()) == 1
+        assert "VAPID_SUBJECT" in caplog.text
+    finally:
+        session.close()
+
+
+def test_a_bad_jwt_is_distinguished_from_a_key_mismatch():
+    """Both are 403, but one prunes the row and the other must not."""
+    bad_jwt = type(
+        "R", (), {"status_code": 403, "text": '{"reason":"BadJwtToken"}', "content": b""}
+    )()
+    assert push_module._is_bad_jwt(bad_jwt)
+    # The key-mismatch phrase is a different failure with the opposite remedy.
+    mismatch = (
+        "the VAPID credentials in the authorization header do not correspond to "
+        "the credentials used to create the subscriptions."
+    )
+    mismatch_response = type("R", (), {"status_code": 403, "text": mismatch, "content": b""})()
+    assert push_module._is_bad_jwt(mismatch_response) is False
+    assert push_module._is_vapid_mismatch(mismatch_response) is True
+    assert push_module._is_bad_jwt(None) is False

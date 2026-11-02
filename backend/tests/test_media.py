@@ -7,6 +7,7 @@ import struct
 import wave
 
 import pytest
+from PIL import Image
 
 from app import storage
 from app.config import settings
@@ -291,6 +292,7 @@ def test_audio_upload_rejects_html_disguised_as_audio(client, make_user):
 def test_audio_has_its_own_size_ceiling():
     """A voice note is bounded well below video, since it lands in a DB row."""
     assert storage.max_bytes_for("audio") < storage.max_bytes_for("video")
+
     assert storage.max_bytes_for("audio") > 0
 
 
@@ -487,9 +489,14 @@ def test_video_poster_is_stored_and_served(client, make_user, tmp_path, monkeypa
     # this is the download the tile no longer has to make.
     poster = client.get(body["poster_url"], headers=headers)
     assert poster.status_code == 200
-    assert poster.content == JPEG
+    # Not byte-identical any more: a poster is stored in the same database column
+    # as everything else, so it is re-encoded on the way in. What matters is that
+    # it is still a valid JPEG of the same picture, and small.
     assert poster.headers["content-type"] == "image/jpeg"
+    assert poster.content.startswith(b"\xff\xd8")
     assert len(poster.content) < body["size_bytes"]
+    with Image.open(io.BytesIO(poster.content)) as image:
+        image.load()
 
 
 def test_poster_is_public_exactly_when_the_video_is(client, make_user, tmp_path, monkeypatch):
@@ -640,3 +647,86 @@ def test_feed_response_does_not_load_poster_bytes(client, make_user, tmp_path, m
     assert "poster_blob" not in listed
     # The response is a URL, not the image: nothing of the poster's size.
     assert len(json.dumps(listed)) < len(JPEG)
+
+# --- Storage optimization ---------------------------------------------------
+#
+# Every upload byte lands in `media.blob`, a database column, and the deployment
+# runs on a metered Postgres allowance. A phone photo stored verbatim is what
+# exhausted it, so the route itself -- not just the helper -- must shrink an
+# image before the row is written.
+
+
+def big_photo(width: int = 4000, height: int = 3000) -> bytes:
+    """A noisy JPEG, so the encoder cannot compress flat colour for free."""
+    from PIL import Image
+
+    image = Image.new("RGB", (width, height))
+    pixels = image.load()
+    for y in range(height):
+        for x in range(width):
+            pixels[x, y] = ((x * 7 + y * 13) % 256, (x * 3) % 256, (y * 5) % 256)
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def test_a_large_upload_is_stored_smaller_than_it_was_sent(
+    client, make_user, tmp_path, monkeypatch
+):
+    """The row must hold the optimized bytes, which is the whole storage saving."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    original = big_photo()
+    response = client.post(
+        "/api/media",
+        headers=headers,
+        files={"file": ("photo.jpg", io.BytesIO(original), "image/jpeg")},
+    )
+    assert response.status_code == 201, response.text
+    stored = response.json()
+
+    # The reported size is what the row charges the database, so it is the number
+    # that has to be smaller -- not merely the bytes on disk.
+    assert stored["size_bytes"] < len(original)
+    assert stored["size_bytes"] < len(original) / 2
+
+    #  is deliberately not in the response, so the file on disk is
+    # found the way the route left it: the only file in the upload directory.
+    on_disk = os.path.getsize(os.path.join(tmp_path, os.listdir(tmp_path)[0]))
+    assert on_disk == stored["size_bytes"]
+
+
+def test_an_optimized_upload_still_serves_as_a_valid_image(
+    client, make_user, tmp_path, monkeypatch
+):
+    """Shrinking must not corrupt the file the feed will display."""
+    from PIL import Image
+
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    response = client.post(
+        "/api/media",
+        headers=headers,
+        files={"file": ("photo.jpg", io.BytesIO(big_photo()), "image/jpeg")},
+    )
+    assert response.status_code == 201, response.text
+    stored = response.json()
+
+    fetched = client.get(f"/api/media/{stored['id']}", headers=headers)
+    assert fetched.status_code == 200
+    with Image.open(io.BytesIO(fetched.content)) as image:
+        image.load()
+        assert max(image.size) <= 1600
+
+
+def test_a_video_is_stored_untouched(client, make_user, tmp_path, monkeypatch):
+    """Re-encoding video is out of scope, so the bytes must pass through whole."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    response = upload_video(client, headers)
+    assert response.status_code == 201, response.text
+    response.json()
+    assert os.path.getsize(os.path.join(tmp_path, os.listdir(tmp_path)[0])) == len(MP4)

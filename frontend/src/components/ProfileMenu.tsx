@@ -17,6 +17,8 @@ function pushSubtitle(state: PushState): string {
       return 'This browser does not support push notifications.'
     case 'unconfigured':
       return 'Push notifications are not configured on the server.'
+    case 'needs-install':
+      return 'On iPhone, add Pulse to your home screen first — then alerts arrive even when it is closed.'
     case 'denied':
       return 'Blocked in your browser settings. Allow notifications for Pulse to turn this on.'
     case 'subscribed':
@@ -50,7 +52,13 @@ function PushToggleRow() {
     void pushState(user?.id).then((state) => {
       if (!active) return
       // Position stays put; only the subtitle follows the live read.
-      setPush(pushChoiceOn(user?.id) ? 'subscribed' : state === 'unconfigured' ? state : 'granted')
+      setPush(
+        pushChoiceOn(user?.id)
+          ? 'subscribed'
+          : state === 'unconfigured' || state === 'needs-install'
+            ? state
+            : 'granted',
+      )
     })
     return () => {
       active = false
@@ -69,6 +77,7 @@ function PushToggleRow() {
       if (next && state === 'subscribed') notify('Push notifications enabled')
       else if (next && state === 'denied') notify('Notifications are blocked in your browser', 'error')
       else if (next && state === 'unconfigured') notify('Push notifications are not configured', 'error')
+      else if (next && state === 'needs-install') notify('Add Pulse to your home screen first', 'error')
       else if (!next) notify('Push notifications disabled')
     } catch {
       notify('Could not change push notifications', 'error')
@@ -87,7 +96,10 @@ function PushToggleRow() {
         type="checkbox"
         className="switch-input"
         checked={on}
-        disabled={busy || push === 'unsupported' || push === 'unconfigured'}
+        // `needs-install` disables the switch because the control genuinely
+        // cannot work yet, not because something failed: iOS delivers push to
+        // an installed app only. The subtitle says what to do about it.
+        disabled={busy || push === 'unsupported' || push === 'unconfigured' || push === 'needs-install'}
         onChange={(event) => void toggle(event.target.checked)}
       />
       <span className="switch" aria-hidden="true">

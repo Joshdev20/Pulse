@@ -4,7 +4,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from .. import cache, storage
+from .. import cache, images, storage
 from ..config import settings
 from ..deps import (
     CurrentUser,
@@ -143,11 +143,20 @@ async def _set_profile_image(
             f"{label} must be an image",
         )
 
-    stored_name = storage.store(data, sniffed.extension)
+    # A profile picture and a cover are stored in the same database column as
+    # everything else, so both are shrunk to the size they are actually drawn at.
+    # The cap differs because the two are rendered very differently.
+    data, content_type = images.optimize_image(
+        data,
+        sniffed.content_type,
+        images.COVER_MAX_EDGE if field == "cover_media_id" else images.AVATAR_MAX_EDGE,
+    )
+
+    stored_name = storage.store(data, storage.ALLOWED_TYPES.get(content_type, sniffed.extension))
     media = Media(
         owner_id=user.id,
         stored_name=stored_name,
-        content_type=sniffed.content_type,
+        content_type=content_type,
         kind="image",
         size_bytes=len(data),
         # Same reason as post uploads: the bytes go in the row so a profile

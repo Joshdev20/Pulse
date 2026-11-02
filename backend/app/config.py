@@ -3,6 +3,7 @@
 import base64
 import binascii
 from functools import lru_cache
+from typing import ClassVar
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -72,9 +73,51 @@ class Settings(BaseSettings):
     vapid_private_key: str | None = None
     # The `sub` claim. Push services require a mailto: or https: contact so they
     # can reach an operator about a misbehaving sender.
-    vapid_subject: str = "mailto:no-reply@pulse.local"
+    #
+    # The default must be a reachable, real domain. Apple validates this claim
+    # and refuses the request with `403 BadJwtToken` when the address sits on a
+    # reserved or non-public domain, so a placeholder like `no-reply@pulse.local`
+    # silently killed every iPhone alert while FCM accepted the same request and
+    # Android kept working. Verified against Apple's push service: `.local`
+    # returns 403 BadJwtToken, while this URL is accepted (it fails only on the
+    # device token). See `push_subject_valid` for the guard.
+    #
+    # An https URL is used rather than a mailbox because it must be something
+    # Pulse actually controls; claiming an address on a domain we do not own
+    # would make the operator contact undeliverable.
+    vapid_subject: str = "https://pulse-hazel-nine.vercel.app"
     # How long a push service should retain an undelivered alert, in seconds.
     push_ttl_seconds: int = 12 * 60 * 60
+
+    # TLDs that can never be delivered to, because they are reserved for
+    # documentation, testing or private networks. Apple rejects a VAPID subject
+    # on any of them; FCM does not, which is why the failure is iPhone-only.
+    UNROUTABLE_TLDS: ClassVar[frozenset[str]] = frozenset(
+        {"local", "localhost", "invalid", "test", "example", "internal", "lan", "home", "corp"}
+    )
+
+    @property
+    def push_subject_valid(self) -> bool:
+        """Whether the VAPID subject is one Apple's push service will accept.
+
+        Only the subject is checked here, not the keys: the keys failing is
+        caught by `push_configured`, while a bad subject passes every local
+        check and fails only at send time, on iPhones only, with a 403 that
+        looks like an authentication problem rather than a configuration one.
+        """
+        subject = (self.vapid_subject or "").strip()
+        if subject.startswith("https://"):
+            return True
+        if not subject.startswith("mailto:"):
+            return False
+        address = subject[len("mailto:") :]
+        if "@" not in address or any(ch.isspace() for ch in address):
+            return False
+        # A display-name form like `mailto: <a@b.com>` is also rejected.
+        if any(ch in address for ch in "<>"):
+            return False
+        domain = address.rsplit("@", 1)[1]
+        return "." in domain and domain.rsplit(".", 1)[1].lower() not in self.UNROUTABLE_TLDS
 
     @property
     def push_configured(self) -> bool:
