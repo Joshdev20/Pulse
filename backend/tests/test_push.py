@@ -9,6 +9,7 @@ part of the feature that lives in this repository. Signing and transport are
 
 import base64
 import json
+import logging
 
 import pytest
 from sqlalchemy import select
@@ -888,6 +889,39 @@ def test_the_shipped_default_subject_is_deliverable():
     refused, so the failure only ever appeared on a real iPhone.
     """
     assert Settings().push_subject_valid is True
+
+
+def test_the_boot_warning_reaches_the_log_not_stdout(monkeypatch, caplog):
+    """A misconfiguration must be reported through `logging`, not `print`.
+
+    stdout is block-buffered when it is not a TTY, which is exactly how a
+    process manager runs the server, so a printed warning can stay in the
+    buffer and never appear in the deployment's logs -- defeating the point of
+    warning at boot at all.
+    """
+    from app import main as main_module
+
+    monkeypatch.setattr(settings, "vapid_subject", "mailto:no-reply@pulse.local")
+    monkeypatch.setattr(settings, "vapid_public_key", vapid_public())
+    monkeypatch.setattr(settings, "vapid_private_key", b64key(32))
+
+    with caplog.at_level(logging.WARNING, logger="pulse.main"):
+        main_module._warn_on_push_misconfiguration()
+
+    assert any("BadJwtToken" in r.getMessage() for r in caplog.records)
+
+
+def test_a_valid_subject_does_not_warn(monkeypatch, caplog):
+    from app import main as main_module
+
+    monkeypatch.setattr(settings, "vapid_subject", "mailto:someone@yourdomain.com")
+    monkeypatch.setattr(settings, "vapid_public_key", vapid_public())
+    monkeypatch.setattr(settings, "vapid_private_key", b64key(32))
+
+    with caplog.at_level(logging.WARNING, logger="pulse.main"):
+        main_module._warn_on_push_misconfiguration()
+
+    assert not caplog.records
 
 
 def test_a_bad_subject_is_reported_as_configuration_not_a_dead_device(

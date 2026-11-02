@@ -1,5 +1,6 @@
 """Pulse — a small social media API built with FastAPI."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -25,6 +26,8 @@ from .routers import (
     users,
 )
 from .schema import ensure_schema
+
+logger = logging.getLogger("pulse.main")
 
 
 def _backfill_media_blobs() -> None:
@@ -58,10 +61,14 @@ def _warn_on_push_misconfiguration() -> None:
     deployment with the wrong subject is still better off serving the app.
     """
     if settings.push_configured and not settings.push_subject_valid:
-        print(
-            "WARNING: VAPID_SUBJECT is not deliverable and Apple will reject it "
-            f"(403 BadJwtToken); iPhone push will not work. Got {settings.vapid_subject!r}. "
-            "Use a real address such as mailto:you@yourdomain.com, or an https:// URL."
+        # `logging`, not `print`: stdout is block-buffered when it is not a TTY,
+        # which is exactly the case under a process manager, so a printed warning
+        # can sit in the buffer and never reach the deployment's logs.
+        logger.warning(
+            "VAPID_SUBJECT is not deliverable and Apple will reject it "
+            "(403 BadJwtToken); iPhone push will not work. Got %r. Use a real "
+            "address such as mailto:you@yourdomain.com, or an https:// URL.",
+            settings.vapid_subject,
         )
 
 
