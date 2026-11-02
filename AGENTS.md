@@ -538,6 +538,21 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   Row-stored bytes are bounded by the same caps as the files (images 8MB, video 32MB), which
   keeps the largest row modest; a deployment serving much larger video should put those bytes
   in object storage instead.
+- Because every upload byte lands in a Postgres column, **image size is a database-bill
+  problem, not just a bandwidth one**. The deployment runs on a metered Neon allowance, and
+  storing phone photos verbatim exhausted it. `app/images.py` re-encodes every image on the
+  way in: capped at `MAX_EDGE` 1600 on the longest edge and JPEG quality 82, which typically
+  removes 70-85% of the bytes. It is applied in `routers/media.py` for uploads and posters,
+  and in `routers/users.py` for avatars (`AVATAR_MAX_EDGE` 512) and covers
+  (`COVER_MAX_EDGE` 1280), which are drawn far smaller than a feed photo. Two rules matter:
+  it always keeps the **smaller** of the original and the re-encode, so it can never cost
+  storage; and it returns the original unchanged on any decode failure, because a larger
+  upload is a much smaller problem than a corrupted one. Animated GIFs are passed through
+  untouched (re-encoding drops the animation) and PNG alpha is preserved.
+- `tests/test_media.py::test_video_poster_is_stored_and_served` no longer asserts the poster
+  is byte-identical to what was uploaded — it is re-encoded now. It asserts a valid JPEG of
+  the same picture that is smaller than the video. Any other test that pinned exact upload
+  bytes will need the same treatment.
 - On a host without a persistent disk â€” `render.yaml` sets `plan: free`, which cannot attach
   one â€” a redeploy wipes `UPLOAD_DIR` while `DATABASE_URL` (an external Postgres) keeps the
   rows. Before media moved into `blob`, every attachment 404'd at once and the symptom looked
@@ -573,6 +588,35 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   unavailable when it is wrong, so a bad key is a configuration error rather than a runtime
   one. A key pair also cannot be rotated without invalidating every stored subscription,
   since each browser subscribed against the old public key.
+- `VAPID_SUBJECT` must be a deliverable `mailto:` address on a real public TLD, or an
+  `https://` URL. Apple validates the claim and refuses the *whole request* with
+  `403 {"reason":"BadJwtToken"}`, while FCM accepts the identical request. The symptom is
+  therefore "Android works, iPhone gets nothing", which reads like a broken key rather than a
+  bad config value. The default used to be `mailto:no-reply@pulse.local`; `.local` is
+  unroutable and Apple rejects it, so **iPhone push was dead for the life of the feature**.
+  Confirmed by probing `web.push.apple.com` directly with a synthetic endpoint: `.local`
+  returns 403 BadJwtToken, `localhost`/`a@b` return 403 too, and a real domain returns
+  400 BadWebPushToken (JWT accepted, only the fake device token refused). The bar is a public
+  TLD, not a mailbox that exists — Apple does no MX lookup, so `someone@example.com` passes.
+  `config.push_subject_valid` enforces this, `main._warn_on_push_misconfiguration` prints a
+  warning at boot, and `render.yaml` leaves the value to be set per deployment.
+- A `403 BadJwtToken` must NOT prune the subscription row, unlike the key-mismatch 403.
+  The endpoint is healthy and starts delivering the moment the subject is corrected, so
+  deleting it would make every iPhone user re-enable notifications for a problem they did not
+  cause. `push._is_bad_jwt` distinguishes the two 403s by the response body, and both cases
+  are pinned in `tests/test_push.py`.
+- iPhone Web Push requires the app to be *installed* to the home screen. A Safari tab on iOS
+  reports `serviceWorker`, `PushManager` and `Notification` — so every capability check
+  passes and the toggle looks usable — but subscribing cannot deliver. `push.needsInstallForPush`
+  gates on `installPlatform() === 'ios' && !isStandalone()`, returning the `needs-install`
+  state; `enablePush` refuses *before* calling `Notification.requestPermission`, because
+  granting permission there leaves the user allowed-but-undeliverable. Android and desktop
+  deliver to an ordinary tab, so gating them would withdraw a working feature.
+- Testing that gate needs a real engine and the right emulation: bundle `push.ts` with
+  `esbuild --define:import.meta.env='{}'` (an `iife` build leaves `import.meta` empty, which
+  breaks `api.ts`) and drive it with Playwright. Playwright's `hasTouch` sets
+  `maxTouchPoints` to **1**, but iPadOS detection needs `> 1`; a real iPad reports 5, so
+  override it in an init script or the iPad case silently fails.
 - Web Push must not be sent inline in an `async` handler. `pywebpush` is synchronous
   `requests`, so a send blocks for a full push-service round trip and stalls the event loop
   for every other request (measured at 279 ms on a like). `push.schedule_notify` hands the

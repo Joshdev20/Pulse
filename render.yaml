@@ -41,8 +41,14 @@ services:
         sync: false
       - key: VAPID_PRIVATE_KEY
         sync: false
+      # Must be a reachable address on a real domain, or an https:// URL. Apple
+      # rejects a reserved or non-public domain with 403 BadJwtToken, which
+      # breaks iPhone alerts only -- FCM accepts the same request, so Android
+      # keeps working and the failure looks like a broken key. Set this to a real
+      # mailbox you control, e.g. mailto:you@yourdomain.com. The server logs a
+      # warning at boot if it is not deliverable.
       - key: VAPID_SUBJECT
-        value: "mailto:no-reply@pulse.local"
+        sync: false
     # Requires a paid instance type. Uncomment this AND change `plan` above,
     # then add UPLOAD_DIR=/data/uploads to envVars.
     # disk:

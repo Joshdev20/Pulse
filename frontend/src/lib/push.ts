@@ -18,11 +18,13 @@
  */
 
 import { api } from './api'
+import { isStandalone, installPlatform } from './installPrompt'
 import type { PushSubscriptionBody } from './types'
 
 export type PushState =
   | 'unsupported'
   | 'unconfigured'
+  | 'needs-install'
   | 'default'
   | 'granted'
   | 'denied'
@@ -120,8 +122,9 @@ export function adoptPushChoice(userId: number | undefined, state: PushState): v
  */
 export function initialPushState(userId?: number): PushState {
   if (!pushSupported()) return 'unsupported'
+  if (needsInstallForPush()) return 'needs-install'
   const cached = cachedPushState()
-  if (cached === 'unconfigured' || cached === 'unsupported') return cached
+  if (cached === 'unconfigured' || cached === 'unsupported' || cached === 'needs-install') return cached
   const permission = notificationPermission()
   if (permission === 'denied') return 'denied'
   if (pushChoiceOn(userId)) return 'subscribed'
@@ -152,6 +155,22 @@ export function pushSupported(): boolean {
     'PushManager' in window &&
     'Notification' in window
   )
+}
+
+/**
+ * Whether this iPhone is running Pulse in a Safari tab rather than installed.
+ *
+ * iOS grants Web Push to an installed home screen app only. A Safari tab on the
+ * same phone reports `PushManager`, `Notification` and a service worker, so every
+ * capability check passes and the toggle looks usable — but subscribing either
+ * throws or yields an endpoint that never delivers. Checking this first lets the
+ * UI ask the user to install instead of offering a switch that cannot work.
+ *
+ * Deliberately limited to iOS: Android and desktop deliver to an ordinary tab,
+ * so gating them the same way would withhold a feature that does work.
+ */
+export function needsInstallForPush(): boolean {
+  return installPlatform() === 'ios' && !isStandalone()
 }
 
 export function notificationPermission(): NotificationPermission | 'unsupported' {
@@ -237,6 +256,10 @@ async function replaceSubscription(publicKey: string): Promise<PushSubscriptionB
 /** The current state, without prompting for anything. */
 export async function pushState(userId?: number): Promise<PushState> {
   if (!pushSupported()) return remember('unsupported')
+  // An iPhone in a Safari tab cannot receive push at all, so say that before
+  // asking the server or the browser anything: both would report a healthy
+  // subscription that can never be delivered to.
+  if (needsInstallForPush()) return remember('needs-install')
   // Report the last known answer while a replacement is in progress. Reading
   // the browser mid-heal would see the old subscription already dropped and
   // report "off" for a device that is only being renewed.
@@ -274,6 +297,10 @@ export async function pushState(userId?: number): Promise<PushState> {
  */
 export async function enablePush(userId?: number): Promise<PushState> {
   if (!pushSupported()) return remember('unsupported')
+  // Refuse before touching the permission prompt. Asking an iPhone user in a
+  // Safari tab to allow notifications would grant permission that can never
+  // deliver anything, leaving them with a "granted" toggle and no alerts.
+  if (needsInstallForPush()) return remember('needs-install')
   const status = await api.pushStatus().catch(() => undefined)
   // A failed read is not a reason to refuse: the user asked for this, so carry
   // on and let the subscribe call be the thing that fails if the server is down.
