@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, s
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import or_, select
 
-from .. import storage
+from .. import images, storage
 from ..deps import CurrentUser, DbSession, OptionalUser, serialize_media
 from ..models import Media, Post, User
 from ..schemas import MediaOut
@@ -38,7 +38,11 @@ def _poster_from(data: bytes | None) -> tuple[str, bytes] | None:
         return None
     if sniffed.kind != "image":
         return None
-    return sniffed.content_type, data
+    # Posters are stored in the row like any other media, so they are optimized
+    # too. A poster is a single video frame and needs nothing like a full-size
+    # photo, which makes it the most rewarding thing to shrink.
+    optimized, content_type = images.optimize_image(data, sniffed.content_type)
+    return content_type, optimized
 
 
 def _duration_ms(value: int | None) -> int | None:
@@ -90,13 +94,22 @@ async def upload(
             f"{storage.max_bytes_for(sniffed.kind) // (1024 * 1024)}MB",
         )
 
-    stored_name = storage.store(data, sniffed.extension)
+    # Shrink an image before anything is written. The original is accepted up to
+    # the limit above and then re-encoded, so a client can keep uploading a
+    # full-resolution photo while what lands in the database is a fraction of it.
+    # The type is re-derived from the returned bytes, because re-encoding can
+    # change the extension a re-download should carry.
+    content_type = sniffed.content_type
+    if sniffed.kind == "image":
+        data, content_type = images.optimize_image(data, sniffed.content_type)
+
+    stored_name = storage.store(data, storage.ALLOWED_TYPES.get(content_type, sniffed.extension))
     # Only a video carries a preview frame; an image is its own preview.
     poster_data = _poster_from(await poster.read()) if (poster and sniffed.kind == "video") else None
     media = Media(
         owner_id=user.id,
         stored_name=stored_name,
-        content_type=sniffed.content_type,
+        content_type=content_type,
         kind=sniffed.kind,
         size_bytes=len(data),
         # The bytes live in the row, not only on disk. A host with an ephemeral

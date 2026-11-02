@@ -48,6 +48,13 @@ GONE_STATUSES = {404, 410}
 VAPID_MISMATCH_STATUS = 403
 VAPID_MISMATCH_MARKER = "do not correspond to the credentials used to create the subscriptions"
 
+# Apple refuses the whole request with 403 when the VAPID `sub` claim is not a
+# real URL or mailto address, and says so only as `BadJwtToken` -- which reads
+# like a broken key rather than a bad configuration value. FCM accepts the same
+# request, so the symptom is "Android is fine, iPhone gets nothing". Named here
+# so the log line says what to fix instead of leaving a 403 to be interpreted.
+BAD_JWT_MARKER = "BadJwtToken"
+
 # How long one delivery may take before it is abandoned, in seconds. This is
 # the ceiling on how long a single push service can hold one of the pool's
 # workers: while a worker is stuck on a slow endpoint, every other alert queued
@@ -219,6 +226,20 @@ def send_to_subscription(subscription: PushSubscription, payload: dict[str, Any]
             # either way this row can never deliver, so the caller deletes it.
             logger.info("push subscription %s is gone (%s)", subscription.id, status)
             raise
+        if _is_bad_jwt(response):
+            # Not a dead subscription, and pruning it would be wrong: the
+            # endpoint is fine and would work once the subject is corrected. The
+            # row is kept so a fixed deployment delivers without asking every
+            # iPhone user to re-enable notifications.
+            logger.warning(
+                "Apple rejected the push JWT for subscription %s (403 BadJwtToken). "
+                "This is a configuration problem, not a dead device: VAPID_SUBJECT %r is "
+                "not a deliverable URL or mailto address. Set VAPID_SUBJECT to a real "
+                "address, such as mailto:you@yourdomain.com.",
+                subscription.id,
+                settings.vapid_subject,
+            )
+            return False
         logger.warning("push to subscription %s failed: %s", subscription.id, exc)
         return False
     except Exception as exc:  # noqa: BLE001 - a push must never break the request
@@ -242,6 +263,24 @@ def _is_vapid_mismatch(response: Any) -> bool:
         body = getattr(response, "content", b"")
         body = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
     return VAPID_MISMATCH_MARKER in str(body)
+
+
+def _is_bad_jwt(response: Any) -> bool:
+    """Whether Apple refused the request over the VAPID subject.
+
+    Distinct from ``_is_vapid_mismatch``, which is permanent and prunes the row.
+    A bad subject is a deployment misconfiguration: the subscription is still
+    valid and starts working the moment ``VAPID_SUBJECT`` is corrected, so the
+    row must be kept. Matched on Apple's ``reason`` value rather than the status
+    code, because a 403 also covers a genuinely stale key.
+    """
+    if getattr(response, "status_code", None) != VAPID_MISMATCH_STATUS:
+        return False
+    body = getattr(response, "text", None)
+    if body is None:
+        body = getattr(response, "content", b"")
+        body = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
+    return BAD_JWT_MARKER in str(body)
 
 
 def notify_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:

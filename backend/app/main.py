@@ -48,6 +48,23 @@ def _backfill_media_blobs() -> None:
         db.close()
 
 
+def _warn_on_push_misconfiguration() -> None:
+    """Report a VAPID subject that Apple's push service will refuse.
+
+    This failure is otherwise invisible: the server starts, Android alerts
+    arrive, and only iPhones are silently dropped with a 403 that reads like an
+    authentication problem. Saying so at boot turns a support report into a log
+    line. Warns rather than raises, because push is a side channel and a
+    deployment with the wrong subject is still better off serving the app.
+    """
+    if settings.push_configured and not settings.push_subject_valid:
+        print(
+            "WARNING: VAPID_SUBJECT is not deliverable and Apple will reject it "
+            f"(403 BadJwtToken); iPhone push will not work. Got {settings.vapid_subject!r}. "
+            "Use a real address such as mailto:you@yourdomain.com, or an https:// URL."
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -57,6 +74,7 @@ async def lifespan(_app: FastAPI):
     ensure_schema(engine)
     storage.ensure_upload_dir()
     _backfill_media_blobs()
+    _warn_on_push_misconfiguration()
     if settings.auto_seed:
         # Demo deploys start with an empty database; populate it once. `seed`
         # is a no-op when users already exist, so restarts are safe.
