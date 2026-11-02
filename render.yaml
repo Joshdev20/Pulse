@@ -44,11 +44,16 @@ services:
       # Must be a reachable address on a real domain, or an https:// URL. Apple
       # rejects a reserved or non-public domain with 403 BadJwtToken, which
       # breaks iPhone alerts only -- FCM accepts the same request, so Android
-      # keeps working and the failure looks like a broken key. Set this to a real
-      # mailbox you control, e.g. mailto:you@yourdomain.com. The server logs a
+      # keeps working and the failure looks like a broken key. The server logs a
       # warning at boot if it is not deliverable.
+      #
+      # Pinned here rather than left to the dashboard (`sync: false`). A value
+      # already present in the dashboard wins over the application default, so
+      # the previous `mailto:no-reply@pulse.local` survived the deploy that was
+      # meant to replace it and kept iPhone push broken. The blueprint is the
+      # source of truth; change the value here to use a mailbox you control.
       - key: VAPID_SUBJECT
-        sync: false
+        value: "https://pulse-hazel-nine.vercel.app"
     # Requires a paid instance type. Uncomment this AND change `plan` above,
     # then add UPLOAD_DIR=/data/uploads to envVars.
     # disk:

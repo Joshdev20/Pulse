@@ -971,3 +971,27 @@ def test_a_bad_jwt_is_distinguished_from_a_key_mismatch():
     assert push_module._is_bad_jwt(mismatch_response) is False
     assert push_module._is_vapid_mismatch(mismatch_response) is True
     assert push_module._is_bad_jwt(None) is False
+
+
+def test_the_blueprint_pins_a_subject_the_app_would_accept():
+    """The Render blueprint must not leave VAPID_SUBJECT to the dashboard.
+
+    A dashboard value wins over the application default, so declaring the key
+    with `sync: false` let the broken `mailto:no-reply@pulse.local` outlive the
+    deploy that corrected the default and keep iPhone push dead. The blueprint
+    has to state the value, and it has to be one `push_subject_valid` accepts.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    blueprint = Path(__file__).resolve().parents[2] / "render.yaml"
+    doc = yaml.safe_load(blueprint.read_text())
+    service = next(s for s in doc["services"] if s["name"] == "pulse-api")
+    entries = {e["key"]: e for e in service["envVars"]}
+
+    assert "VAPID_SUBJECT" in entries, "the blueprint must declare VAPID_SUBJECT"
+    entry = entries["VAPID_SUBJECT"]
+    assert "value" in entry, "the value must be pinned, not left to the dashboard"
+    assert Settings(vapid_subject=entry["value"]).push_subject_valid
+
