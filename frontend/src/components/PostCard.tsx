@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, DisplayName } from './Avatar'
-import { CommentIcon, HeartIcon, MoreIcon, RepostIcon, ShareIcon, TrashIcon, EditIcon } from './Icons'
+import { CommentIcon, EyeIcon, HeartIcon, MoreIcon, RepostIcon, TrashIcon, EditIcon, LinkIcon } from './Icons'
 import { MediaGallery } from './MediaGallery'
+import { TranslatedText } from './TranslatedText'
 import { Dropdown, RelativeTime } from './UI'
 import { api } from '../lib/api'
 import { formatCount, segmentBody } from '../lib/format'
@@ -134,11 +135,6 @@ export function PostCard({
     }
   }
 
-  const share = (event: React.MouseEvent) => {
-    event.stopPropagation()
-    void copyLink()
-  }
-
   async function remove() {
     await api.deletePost(post.id)
     onDeleted?.(post.id)
@@ -210,7 +206,7 @@ export function PostCard({
                         void copyLink()
                       }}
                     >
-                      <ShareIcon size={16} /> Copy link
+                      <LinkIcon size={16} /> Copy link
                     </button>
                     {/* Editing and deleting act on the row itself, so a repost
                         can be removed but not rewritten. */}
@@ -246,7 +242,7 @@ export function PostCard({
             </div>
           </div>
 
-          {content.body && <PostText body={content.body} className="post-text" />}
+          {content.body && <TranslatedText post={content} className="post-text" />}
 
           <MediaGallery items={content.media} />
 
@@ -293,9 +289,19 @@ export function PostCard({
               </button>
             )}
 
-            <button type="button" className="action share" onClick={share} aria-label="Copy link">
-              <ShareIcon size={17} />
-            </button>
+            {/* No share action here: the same link is already one tap away in the
+                overflow menu ("Copy link"), and a second button that only did the
+                same thing read as a broken control. */}
+
+            {/* The view count is shown for the author only. To everyone else it
+                would be a number to compare against, which changes how people
+                post; the author is the one person it is actually feedback for. */}
+            {isOwn && content.view_count > 0 && (
+              <span className="action views" aria-label={`${content.view_count} views`}>
+                <EyeIcon size={17} />
+                <span>{formatCount(content.view_count)}</span>
+              </span>
+            )}
           </div>
         </div>
       </div>

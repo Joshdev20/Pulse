@@ -18,6 +18,7 @@
  */
 
 import { api } from './api'
+import { listAccounts } from './accounts'
 import { isStandalone, installPlatform } from './installPrompt'
 import type { PushSubscriptionBody } from './types'
 
@@ -325,7 +326,13 @@ export async function enablePush(userId?: number): Promise<PushState> {
       .catch(() => false)
     if (!known) {
       const state = (await replaceSubscription(publicKey)) ? 'subscribed' : 'default'
-      if (state === 'subscribed') rememberChoice(userId, 'on')
+      if (state === 'subscribed') {
+        rememberChoice(userId, 'on')
+        // The replacement endpoint is new, so the other accounts on this browser
+        // are not linked to it yet. Re-link them, or they would be silently cut
+        // off by a heal that was only meant to repair one account.
+        await linkAccountsToPush()
+      }
       return remember(state)
     }
     await api.pushSubscribe(existing.body)
@@ -339,10 +346,25 @@ export async function enablePush(userId?: number): Promise<PushState> {
   if (!body) return remember('default')
   await api.pushSubscribe(body)
   rememberChoice(userId, 'on')
+  // A brand-new endpoint serves every account signed in on this browser, not
+  // only the one that happened to create it.
+  await linkAccountsToPush()
   return remember('subscribed')
 }
 
-/** Cancel the browser subscription and forget it on the server. */
+/**
+ * Stop alerting *this account* on this browser, leaving other accounts alone.
+ *
+ * The switch is per account, and so is this. The browser's subscription is the
+ * device's, not the account's: tearing it down here would also silence every
+ * other account signed in on the same browser — the exact scenario multi-account
+ * push exists for. Only this account's link is dropped, so the endpoint stays
+ * alive for the others.
+ *
+ * The one exception is the last account: with nobody left to alert, the browser
+ * subscription itself is released, so the device is genuinely quiet and no
+ * endpoint is left behind on the push service.
+ */
 export async function disablePush(userId?: number): Promise<PushState> {
   if (!pushSupported()) return remember('unsupported')
   const reg = await navigator.serviceWorker.getRegistration('/')
@@ -350,12 +372,19 @@ export async function disablePush(userId?: number): Promise<PushState> {
   if (subscription) {
     // Tell the server first: once the browser subscription is gone we no longer
     // have the endpoint to send, and the row would linger forever.
-    await api.pushUnsubscribe(subscription.endpoint).catch(() => undefined)
-    await subscription.unsubscribe().catch(() => undefined)
+    const othersRemain = listAccounts().some(
+      (account) => account.id !== userId && storedPushChoice(account.id) !== 'off',
+    )
+    if (othersRemain) {
+      await api.pushUnsubscribe(subscription.endpoint, false).catch(() => undefined)
+    } else {
+      await api.pushUnsubscribe(subscription.endpoint, true).catch(() => undefined)
+      await subscription.unsubscribe().catch(() => undefined)
+    }
   }
   // The user's decision is recorded even if the network calls above failed: the
-  // browser subscription is gone either way, and this is what stops the next
-  // load's background sync from quietly turning push back on.
+  // switch position is what stops the next load's background sync from quietly
+  // turning push back on for this account.
   rememberChoice(userId, 'off')
   return remember(notificationPermission() === 'granted' ? 'granted' : 'default')
 }
@@ -490,5 +519,37 @@ async function runSync(userId?: number): Promise<void> {
     remember('subscribed')
   } catch {
     // A failed re-sync is not worth surfacing; the next load tries again.
+  }
+}
+
+/**
+ * Link this browser's endpoint to every account saved on the device.
+ *
+ * A browser signed into several accounts has one push endpoint, and the alert
+ * that matters most is the one for the account you are *not* looking at. The
+ * server models this as one link per account (``PushSubscriptionUser``), so all
+ * this has to do is present the same endpoint under each account's token.
+ *
+ * Only accounts that have not switched push off are linked. An account with no
+ * recorded decision is linked, because the alternative — staying silent for an
+ * account the user never touched — is the bug this fixes. The choice stays the
+ * user's: switching push off records 'off' for that account and it is skipped.
+ *
+ * Best-effort: a failure for one account must not stop the others, and this
+ * never prompts for permission. Nothing happens unless a subscription already
+ * exists, so it cannot turn push on for someone who has not opted in.
+ */
+export async function linkAccountsToPush(): Promise<void> {
+  if (!pushSupported()) return
+  if (notificationPermission() !== 'granted') return
+  try {
+    const current = await currentSubscription()
+    if (!current) return
+    for (const account of listAccounts()) {
+      if (storedPushChoice(account.id) === 'off') continue
+      await api.pushSubscribe(current.body, account.token).catch(() => undefined)
+    }
+  } catch {
+    // A browser with no worker yet, or a transient failure: the next load tries.
   }
 }

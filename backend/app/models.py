@@ -234,6 +234,11 @@ class PushSubscription(Base):
     push service issued and is unique across all users, so re-subscribing the
     same browser (after a key rotation, say) updates the existing row rather
     than accumulating duplicates.
+
+    ``user_id`` is the account that first registered the endpoint. It is kept
+    because the column predates multi-account support and is NOT NULL, and it
+    still names a sensible owner for cleanup. It is *not* the delivery set:
+    ``accounts`` is, and it holds every account signed into this browser.
     """
 
     __tablename__ = "push_subscriptions"
@@ -255,6 +260,57 @@ class PushSubscription(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[User] = relationship()
+    accounts: Mapped[list["PushSubscriptionUser"]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan"
+    )
+
+
+class PushSubscriptionUser(Base):
+    """Which accounts a browser's push endpoint should be alerted for.
+
+    A browser is commonly signed into more than one account on the same device,
+    and each of those accounts must keep receiving its own notifications. The
+    alert that matters most is exactly the one for the account you are *not*
+    currently using, which is what Web Push exists for.
+
+    Modelling this as its own row per (endpoint, account) keeps the endpoint —
+    and the push-service identity behind it — in a single row while the set of
+    accounts it serves grows and shrinks with sign-ins. The previous shape put
+    ``user_id`` directly on the subscription, so signing into a second account
+    in the same browser *reassigned* the endpoint and silently cut the first
+    account off.
+    """
+
+    __tablename__ = "push_subscription_users"
+    __table_args__ = (UniqueConstraint("subscription_id", "user_id", name="uq_push_sub_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("push_subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    subscription: Mapped[PushSubscription] = relationship(back_populates="accounts")
+
+
+class PostView(Base):
+    """One account's view of one post, which is what makes the count meaningful.
+
+    Counting requests would be noise: the feed refetches on every scroll and the
+    detail page on every open, so a single reader could add dozens. One row per
+    (post, viewer) is the dedupe, and the unique constraint enforces it — an
+    insert that collides is ignored rather than retried, because "already seen"
+    is the correct outcome.
+    """
+
+    __tablename__ = "post_views"
+    __table_args__ = (UniqueConstraint("post_id", "user_id", name="uq_post_view"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Media(Base):

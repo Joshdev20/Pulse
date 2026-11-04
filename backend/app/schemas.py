@@ -152,6 +152,19 @@ class PostUpdate(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
 
 
+class PostTranslation(BaseModel):
+    """The result of asking to translate a post.
+
+    ``translated`` is null when the post is already in the UI's language, is too
+    short to detect, or the translation service could not be reached — all of
+    which mean the same thing to the client: no toggle to show.
+    """
+
+    source: str | None = None
+    source_name: str | None = None
+    translated: str | None = None
+
+
 class MediaOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -190,6 +203,13 @@ class PostOut(BaseModel):
     # it and when, while this holds the post that was shared. Null for an
     # original. Always one level deep, so the recursion terminates.
     repost_of: "PostOut | None" = None
+    # The detected language of `body`, and its display name. Null when the post
+    # is too short, the guess too weak, or detection is unavailable. The client
+    # shows a translate prompt only when this is present and not the UI language.
+    language: str | None = None
+    language_name: str | None = None
+    # How many distinct accounts have seen this post. Shown under the post.
+    view_count: int = 0
 
 
 # The annotation above is a forward reference, which Pydantic resolves lazily.

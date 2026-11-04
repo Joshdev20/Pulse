@@ -14,6 +14,8 @@ ever adds columns.
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
+from .models import utcnow
+
 # (table, column, column definition). Additive only — never destructive.
 _ADDITIONS: list[tuple[str, str, str]] = [
     ("users", "is_admin", "BOOLEAN NOT NULL DEFAULT false"),
@@ -76,4 +78,38 @@ def ensure_schema(engine: Engine) -> list[str]:
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
             applied.append(f"{table}.{column}")
 
+    applied.extend(_backfill_push_links(engine))
     return applied
+
+
+def _backfill_push_links(engine: Engine) -> list[str]:
+    """Give every existing subscription a link to the account it was stored for.
+
+    The link table is new, and until a browser re-subscribes its endpoint has no
+    rows in it — which would mean delivery silently stopped for every device that
+    was already registered. Each existing ``push_subscriptions.user_id`` becomes
+    the first link, which is exactly the account that row used to serve.
+
+    Idempotent: a link that is already there is skipped, so this is safe on every
+    startup.
+    """
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "push_subscriptions" not in tables or "push_subscription_users" not in tables:
+        return []
+
+    with engine.begin() as connection:
+        result = connection.execute(
+            text(
+                "INSERT INTO push_subscription_users (subscription_id, user_id, created_at) "
+                "SELECT s.id, s.user_id, :now FROM push_subscriptions s "
+                "WHERE NOT EXISTS ("
+                "  SELECT 1 FROM push_subscription_users l "
+                "  WHERE l.subscription_id = s.id AND l.user_id = s.user_id"
+                ")"
+            ),
+            {"now": utcnow()},
+        )
+        count = result.rowcount or 0
+
+    return [f"push_subscription_users:{count} link(s) backfilled"] if count else []

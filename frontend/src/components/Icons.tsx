@@ -167,6 +167,14 @@ export const LinkIcon = (p: IconProps) => (
   </Base>
 )
 
+export const TranslateIcon = (p: IconProps) => (
+  <Base {...p} size={p.size ?? 16}>
+    <path d="M3.5 6h9M8 3.8V6M5.6 6c.3 3.2 2 5.6 4.6 7.2" />
+    <path d="M11.5 6c-.3 3.4-2.2 6-5.2 7.6" />
+    <path d="m12.6 20 3.7-9 3.7 9M13.9 17h4.8" />
+  </Base>
+)
+
 export const CalendarIcon = (p: IconProps) => (
   <Base {...p} size={p.size ?? 16}>
     <rect x="4" y="5.5" width="16" height="15" rx="2.5" />

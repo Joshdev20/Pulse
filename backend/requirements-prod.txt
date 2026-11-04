@@ -28,3 +28,8 @@ pywebpush==2.0.3
 # (/api/preview/card/{username}). Imported lazily by app.routers.preview, so the
 # app still boots without it and only the card endpoint degrades.
 pillow==13.0.0
+
+# Language detection for post translation. A local, pure-Python classifier with
+# no network cost, imported lazily by app.translate, so the app boots without it
+# and simply offers no translate affordance.
+langdetect==1.0.9

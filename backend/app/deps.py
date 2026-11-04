@@ -8,11 +8,13 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from .config import settings
 from .database import get_db
 from .models import Follow, Like, Media, Post, User, utcnow
 from .realtime import manager
 from .schemas import MediaOut, PostOut, UserPublic
 from .security import decode_access_token
+from .translate import detect_language, language_name
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -391,6 +393,17 @@ def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) 
             .group_by(Post.repost_of_id)
         ).all()
     )
+    # Distinct accounts that have seen each post. One row per (post, viewer) in
+    # `post_views` makes this a plain count.
+    from .models import PostView
+
+    view_counts = dict(
+        db.execute(
+            select(PostView.post_id, func.count(PostView.id))
+            .where(PostView.post_id.in_(post_ids))
+            .group_by(PostView.post_id)
+        ).all()
+    )
 
     liked_ids: set[int] = set()
     reposted_ids: set[int] = set()
@@ -412,7 +425,24 @@ def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) 
 
     authors = serialize_users(db, [post.author for post in involved.values()], viewer)
 
+    # Detect each distinct body once. A feed repeats the same post across a
+    # repost and its original, and detection is pure, so the work is memoized by
+    # body. Only posts in a language other than the UI's are worth naming: a post
+    # already in the reader's language is never offered a translation, so
+    # reporting its language would be noise the client would have to filter.
+    languages: dict[str, tuple[str | None, str | None]] = {}
+    for post in involved.values():
+        body = post.body
+        if body in languages:
+            continue
+        code, _ = detect_language(body)
+        if code is None or code == settings.translate_target_language:
+            languages[body] = (None, None)
+        else:
+            languages[body] = (code, language_name(code))
+
     def build(post: Post, include_repost: bool) -> PostOut:
+        language, name = languages.get(post.body, (None, None))
         return PostOut(
             id=post.id,
             body=post.body,
@@ -426,6 +456,9 @@ def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) 
             liked_by_me=post.id in liked_ids,
             repost_count=repost_counts.get(post.id, 0),
             reposted_by_me=post.id in reposted_ids,
+            view_count=view_counts.get(post.id, 0),
+            language=language,
+            language_name=name,
             # Deliberately no further nesting: a repost always points at an
             # original, so this branch is taken at most once.
             repost_of=build(post.repost_of, False)

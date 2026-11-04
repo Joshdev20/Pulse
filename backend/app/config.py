@@ -153,6 +153,23 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 240
     rate_limit_window_seconds: int = 60
 
+    # Translation of posts written in another language.
+    #
+    # Detection and translation both run server-side. Detection is a local
+    # library (no network); translation uses a free, keyless public endpoint, so
+    # the feature works on a deployment that pays for nothing. `translate_enabled`
+    # turns the whole feature off — the UI then shows no translate affordance at
+    # all rather than a button that fails.
+    translate_enabled: bool = True
+    translate_endpoint: str = "https://api.mymemory.translated.net/get"
+    # The service refuses anything longer than 500 characters per request, so a
+    # longer post is split on sentence boundaries and translated in pieces.
+    translate_max_chars: int = 500
+    translate_timeout_seconds: float = 8.0
+    # The language the UI is written in. A post detected as this is never offered
+    # a translation.
+    translate_target_language: str = "en"
+
     # Response caching for hot read endpoints. Redis is used when `redis_url`
     # is set and reachable; otherwise an in-process store is used, so the app
     # and its tests run fine without a Redis server.

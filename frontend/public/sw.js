@@ -60,16 +60,32 @@ self.addEventListener('push', (event) => {
   const body = payload.body || 'You have a new notification.'
   const url = payload.url || '/notifications'
 
+  // A browser signed into several accounts receives alerts for all of them, so
+  // the account is named. Without it, a message for the account in the
+  // background looks exactly like one for the account in front — and the user
+  // has no way to tell which is which from the notification alone.
+  const account = payload.account
+  const heading = account ? `${title} · ${account}` : title
+
+  // The collapse tag is scoped per account. Two accounts can carry the same
+  // tag value (a conversation id is global), and collapsing across accounts
+  // would let one account's alert silently replace another's.
+  const tag = payload.tag
+    ? payload.account_id
+      ? `${payload.account_id}:${payload.tag}`
+      : payload.tag
+    : undefined
+
   event.waitUntil(
-    self.registration.showNotification(title, {
+    self.registration.showNotification(heading, {
       body,
       // Same tag replaces the previous alert for the same conversation or
       // notification, so a burst collapses instead of stacking up.
-      tag: payload.tag,
-      renotify: Boolean(payload.tag),
+      tag,
+      renotify: Boolean(tag),
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      data: { url },
+      data: { url, accountId: payload.account_id },
     }),
   )
 })
@@ -77,6 +93,16 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const target = event.notification.data?.url || '/notifications'
+  const accountId = event.notification.data?.accountId
+
+  // An alert can belong to an account that is not the one in front. Landing on
+  // the right page is not enough — the page would be rendered for the wrong
+  // account — so the account is carried through and the app switches to it
+  // before navigating. The parameter is additive: a single-account device has
+  // no account id and gets the plain URL.
+  const destination = accountId
+    ? `${target}${target.includes('?') ? '&' : '?'}pulse_account=${accountId}`
+    : target
 
   // Focus a Pulse tab if one is already open, rather than opening a second.
   // Navigating an existing client keeps the session and the realtime socket.
@@ -84,11 +110,11 @@ self.addEventListener('notificationclick', (event) => {
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if (new URL(client.url).origin === self.location.origin) {
-          client.navigate(target)
+          client.navigate(destination)
           return client.focus()
         }
       }
-      return self.clients.openWindow(target)
+      return self.clients.openWindow(destination)
     }),
   )
 })

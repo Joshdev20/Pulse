@@ -26,6 +26,22 @@ def b64key(length: int = 65, seed: int = 0) -> str:
     )
 
 
+def wait_for_calls(calls: list, count: int = 1, timeout: float = 5.0) -> None:
+    """Block until a background delivery has been recorded.
+
+    ``schedule_notify`` hands the send to a worker thread, so a request
+    returning does not mean the spy has been called yet. Asserting straight
+    after the response is a race that a loaded machine loses, so the tests wait
+    on the observable effect rather than on a fixed sleep.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while len(calls) < count and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(calls) >= count, f"expected {count} push call(s), saw {len(calls)}"
+
+
 def vapid_public(seed: int = 1) -> str:
     """A VAPID public key shaped the way a browser requires it."""
     raw = bytes([0x04]) + bytes((i + seed) % 256 for i in range(64))
@@ -191,8 +207,13 @@ def test_subscribe_is_idempotent_for_the_same_endpoint(client, make_user, vapid)
     assert again.json() == {"devices": 1}
 
 
-def test_resubscribe_moves_the_endpoint_to_the_new_user(client, make_user, vapid):
-    """A shared browser signed into another account must not keep pushing to the old one."""
+def test_resubscribe_links_the_endpoint_to_the_second_account_too(client, make_user, vapid):
+    """A shared browser signed into two accounts must alert for both.
+
+    This is the bug the link table fixes: the endpoint used to be reassigned to
+    whoever signed in last, so the account you were *not* using went silent —
+    exactly the alert Web Push exists to deliver.
+    """
     ada, _ = make_user("ada")
     grace, _ = make_user("grace")
 
@@ -200,9 +221,17 @@ def test_resubscribe_moves_the_endpoint_to_the_new_user(client, make_user, vapid
     assert client.get("/api/push/status", headers=ada).json()["devices"] == 1
 
     subscribe(client, grace)
+    # Both accounts now hold the endpoint.
     assert client.get("/api/push/status", headers=grace).json()["devices"] == 1
-    # The endpoint now belongs to grace alone.
-    assert client.get("/api/push/status", headers=ada).json()["devices"] == 0
+    assert client.get("/api/push/status", headers=ada).json()["devices"] == 1
+
+    # And each still reports the shared endpoint as registered to it.
+    assert client.get(
+        "/api/push/status", headers=ada, params={"endpoint": endpoint("a")}
+    ).json()["endpoint_registered"] is True
+    assert client.get(
+        "/api/push/status", headers=grace, params={"endpoint": endpoint("a")}
+    ).json()["endpoint_registered"] is True
 
 
 def test_subscribe_rejects_non_https_endpoint(client, make_user, vapid):
@@ -232,19 +261,56 @@ def test_subscribe_is_unavailable_without_keys(client, make_user, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_unsubscribe_removes_only_the_callers_device(client, make_user, vapid):
+def test_unsubscribe_removes_only_the_callers_link(client, make_user, vapid):
     ada, _ = make_user("ada")
     grace, _ = make_user("grace")
     subscribe(client, ada, "shared")
     subscribe(client, grace, "shared")
 
-    # Grace tries to drop the endpoint; it is hers now, so it goes.
+    # Grace drops her link; Ada's is untouched, so the shared browser still
+    # alerts for the account that is not in front.
     dropped = client.post(
         "/api/push/unsubscribe", headers=grace, json={"endpoint": endpoint("shared")}
     )
     assert dropped.status_code == 200
     assert dropped.json() == {"devices": 0}
+    assert client.get("/api/push/status", headers=ada).json()["devices"] == 1
+    assert client.get(
+        "/api/push/status", headers=ada, params={"endpoint": endpoint("shared")}
+    ).json()["endpoint_registered"] is True
+
+
+def test_unsubscribe_all_releases_the_whole_endpoint(client, make_user, vapid):
+    """Switching the push switch off means "nothing from this browser"."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    subscribe(client, ada, "shared")
+    subscribe(client, grace, "shared")
+
+    dropped = client.post(
+        "/api/push/unsubscribe",
+        headers=grace,
+        json={"endpoint": endpoint("shared"), "all": True},
+    )
+    assert dropped.status_code == 200
     assert client.get("/api/push/status", headers=ada).json()["devices"] == 0
+    assert client.get("/api/push/status", headers=grace).json()["devices"] == 0
+
+
+def test_unsubscribe_all_cannot_release_another_accounts_endpoint(client, make_user, vapid):
+    """`all` is still scoped through the caller's own link."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    subscribe(client, ada, "ada-phone")
+    subscribe(client, grace, "grace-phone")
+
+    client.post(
+        "/api/push/unsubscribe",
+        headers=grace,
+        json={"endpoint": endpoint("ada-phone"), "all": True},
+    )
+
+    assert client.get("/api/push/status", headers=ada).json()["devices"] == 1
 
 
 def test_unsubscribe_of_an_unknown_endpoint_is_a_no_op(client, make_user, vapid):
@@ -296,6 +362,7 @@ def test_a_direct_message_pushes_to_the_recipient(client, make_user, vapid, monk
     )
     assert sent.status_code == 201, sent.text
 
+    wait_for_calls(calls)
     assert len(calls) == 1
     recipient, payload = calls[0]
     assert recipient == grace_user["id"]
@@ -318,6 +385,7 @@ def test_the_sender_is_not_pushed_their_own_message(client, make_user, vapid, mo
     client.post(f"/api/conversations/{cid}/messages", headers=ada, json={"body": "hi"})
 
     # Exactly the other participant, never the author.
+    wait_for_calls(calls)
     assert len(calls) == 1
 
 
@@ -553,6 +621,92 @@ def test_notify_user_sends_to_every_device(client, make_user, vapid, monkeypatch
 
     assert count == 2
     assert sorted(delivered) == [endpoint("laptop"), endpoint("phone")]
+
+
+def test_notify_user_reaches_an_account_sharing_a_browser(client, make_user, vapid, monkeypatch):
+    """The core multi-account guarantee.
+
+    Two accounts on one browser share a single push endpoint. A notification for
+    the account that is *not* in front must still be delivered — that is the
+    whole reason Web Push exists — and the payload must say which account it is
+    for, since the screen gives no clue.
+    """
+    ada, ada_user = make_user("ada")
+    grace, grace_user = make_user("grace")
+    subscribe(client, ada, "shared")
+    subscribe(client, grace, "shared")
+
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        push_module,
+        "send_to_subscription",
+        lambda subscription, payload: calls.append((subscription.endpoint, payload)) or True,
+    )
+
+    from app.database import get_db
+
+    session = next(client.app.dependency_overrides[get_db]())
+    try:
+        # Grace is the account in the background; Ada is signed in "in front".
+        count = push_module.notify_user(session, grace_user["id"], {"title": "Ada", "body": "hi"})
+    finally:
+        session.close()
+
+    assert count == 1
+    assert calls[0][0] == endpoint("shared")
+    # The label tells the user which account the alert belongs to.
+    assert calls[0][1]["account"] == "Grace"
+    assert calls[0][1]["account_id"] == grace_user["id"]
+
+
+def test_notify_user_leaves_a_single_account_payload_unlabelled(client, make_user, vapid, monkeypatch):
+    """One account on a browser needs no label: the alert is obviously theirs."""
+    headers, user = make_user("ada")
+    subscribe(client, headers, "solo")
+
+    payloads: list[dict] = []
+    monkeypatch.setattr(
+        push_module,
+        "send_to_subscription",
+        lambda subscription, payload: payloads.append(payload) or True,
+    )
+
+    from app.database import get_db
+
+    session = next(client.app.dependency_overrides[get_db]())
+    try:
+        push_module.notify_user(session, user["id"], {"title": "x", "body": "y"})
+    finally:
+        session.close()
+
+    assert "account" not in payloads[0]
+
+
+def test_a_pruned_endpoint_stops_being_retried_for_every_linked_account(
+    client, make_user, vapid, monkeypatch
+):
+    """A dead endpoint is deleted once, taking its links with it."""
+    ada, ada_user = make_user("ada")
+    grace, grace_user = make_user("grace")
+    subscribe(client, ada, "shared")
+    subscribe(client, grace, "shared")
+
+    def gone(subscription, payload):
+        raise RuntimeError("410 Gone")
+
+    monkeypatch.setattr(push_module, "send_to_subscription", gone)
+
+    from app.database import get_db
+
+    session = next(client.app.dependency_overrides[get_db]())
+    try:
+        push_module.notify_user(session, ada_user["id"], {"title": "x"})
+        push_module.notify_user(session, grace_user["id"], {"title": "x"})
+    finally:
+        session.close()
+
+    assert client.get("/api/push/status", headers=ada).json()["devices"] == 0
+    assert client.get("/api/push/status", headers=grace).json()["devices"] == 0
 
 
 def test_notify_user_prunes_an_endpoint_the_service_reports_gone(

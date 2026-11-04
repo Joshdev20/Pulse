@@ -11,6 +11,7 @@ import type {
   Notification,
   Page,
   Post,
+  PostTranslation,
   PushStatus,
   PushSubscriptionBody,
   Stats,
@@ -204,6 +205,12 @@ export const api = {
     request<Post>('/api/posts', { method: 'POST', body: JSON.stringify({ body, media_ids: mediaIds }) }),
 
   getPost: (id: number) => request<Post>(`/api/posts/${id}`),
+  /**
+   * Ask the server to translate a post. Resolves with a null `translated` when
+   * the post is already in the reader's language or the service is unavailable,
+   * so the caller shows no toggle rather than an error.
+   */
+  translatePost: (id: number) => request<PostTranslation>(`/api/posts/${id}/translation`),
 
   updatePost: (id: number, body: string) =>
     request<Post>(`/api/posts/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
@@ -261,21 +268,36 @@ export const api = {
   unreadCount: () => request<{ count: number }>('/api/notifications/unread-count'),
 
   /** Web Push: whether the server can push, its public key, and device count. */
-  pushStatus: (endpoint?: string) =>
+  pushStatus: (endpoint?: string, token?: string) =>
     request<PushStatus>(
       `/api/push/status${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ''}`,
+      token ? { headers: { Authorization: `Bearer ${token}` } } : {},
     ),
 
-  pushSubscribe: (body: PushSubscriptionBody) =>
+  /**
+   * Link this browser's endpoint to an account.
+   *
+   * `token` targets an account other than the one in use, which is how a
+   * browser signed into several accounts registers them all on one endpoint so
+   * each keeps receiving its own alerts.
+   */
+  pushSubscribe: (body: PushSubscriptionBody, token?: string) =>
     request<{ devices: number }>('/api/push/subscribe', {
       method: 'POST',
       body: JSON.stringify(body),
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
     }),
 
-  pushUnsubscribe: (endpoint: string) =>
+  /**
+   * Stop pushing to an endpoint. By default only the calling account's link is
+   * removed; `all` drops the endpoint itself, which is what switching the push
+   * toggle off means.
+   */
+  pushUnsubscribe: (endpoint: string, all = false, token?: string) =>
     request<{ devices: number }>('/api/push/unsubscribe', {
       method: 'POST',
-      body: JSON.stringify({ endpoint }),
+      body: JSON.stringify({ endpoint, all }),
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
     }),
 
   markRead: (id: number) => request<Notification>(`/api/notifications/${id}/read`, { method: 'POST' }),

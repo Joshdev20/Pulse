@@ -72,6 +72,24 @@ export interface Post {
    * original, and always exactly one level deep.
    */
   repost_of: Post | null
+  /**
+   * The detected language of `body`, and its display name. Null when the post
+   * is too short, the guess too weak, or detection is unavailable. The server
+   * only sets this when the post is in a language other than the UI's, so a
+   * non-null value is exactly the case where a translate prompt is useful.
+   */
+  language: string | null
+  language_name: string | null
+  /** How many distinct accounts have seen this post. */
+  view_count: number
+}
+
+export interface PostTranslation {
+  /** The detected source language, or null when it could not be determined. */
+  source: string | null
+  source_name: string | null
+  /** The translated text, or null when no translation is available. */
+  translated: string | null
 }
 
 export interface Comment {
