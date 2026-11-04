@@ -8,6 +8,29 @@ A full-stack social platform. `backend/` is a FastAPI + SQLAlchemy 2 API backed 
 `frontend/` is a React 18 + TypeScript single-page app built with Vite. There is no
 component library — all styling is hand-written CSS in `frontend/src/styles.css`.
 
+## Standing instructions
+
+Read these before starting work. They are the owner's standing wishes, and they
+override what a bare reading of a request might otherwise suggest.
+
+- **Do not do database-migration or backup work.** cPanel, Neon, Supabase and
+  data-backup tasks are explicitly not wanted. When the owner mentions a migration,
+  a usage warning, or a database they are planning, in passing or as the reason
+  behind a request, that is context, not a task. Do the thing that was actually
+  asked for (usually fixing a feature) and leave the migration alone. Only touch
+  migration or backup work if the current message asks for it directly and
+  unambiguously.
+- **The database is fixed.** The app runs on the free Aiven PostgreSQL instance;
+  the connection string is in `PGURL`. Do not propose, set up, or switch to a paid
+  or different database. The old cPanel database path is dead.
+- **Always push to `main`.** Do not open a branch or a pull request for routine work.
+- **Make the official post after shipping, without being reminded.** Once a change
+  is deployed and verified, publish the `pulse` post in the same session. See "The
+  official account" below for the voice and the API.
+- **Fix the reported feature; do not wander.** When asked to fix something, work
+  that problem to a verified conclusion. Do not branch off into adjacent
+  infrastructure work, and do not treat a passing mention as a new task.
+
 ## Production environments
 
 The live instances, and the value the frontend must be built with.
