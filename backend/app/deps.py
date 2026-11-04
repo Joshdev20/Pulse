@@ -1,16 +1,18 @@
 """Shared FastAPI dependencies and serialization helpers."""
 
 import time
+from collections.abc import Iterable
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .models import Follow, Like, Media, Post, User, utcnow
+from .models import Follow, Like, Media, Post, PostView, User, utcnow
 from .realtime import manager
 from .schemas import MediaOut, PostOut, UserPublic
 from .security import decode_access_token
@@ -349,6 +351,56 @@ def serialize_users(
         )
         for user in users
     }
+
+
+def record_post_views(
+    db: Session, post_ids: Iterable[int], viewer: User | None, include_author: bool = False
+) -> None:
+    """Record that ``viewer`` has seen each of ``post_ids``, at most once each.
+
+    One insert per (post, account), deduped by the unique constraint on
+    ``post_views``, so a refetch, a scroll back or a second tab costs nothing.
+    The author's own reads are skipped: the number under a post says how many
+    *other* accounts saw it. ``include_author`` is for the one case where the
+    author is unambiguously a viewer — liking their own post — so that a like can
+    never leave the like count above the view count.
+
+    Best-effort by design. A view is a side effect of a read, so no failure here
+    may fail the request that triggered it — a lost race with another tab is
+    caught and treated as "already seen".
+    """
+    if viewer is None:
+        return
+    ids = set(post_ids)
+    if not ids:
+        return
+    if not include_author:
+        # One query for the authors rather than loading each post: the author id
+        # is the only field this needs.
+        authors = dict(db.execute(select(Post.id, Post.author_id).where(Post.id.in_(ids))).all())
+        ids = {post_id for post_id, author_id in authors.items() if author_id != viewer.id}
+    pending = False
+    for post_id in ids:
+        db.add(PostView(post_id=post_id, user_id=viewer.id))
+        pending = True
+    if not pending:
+        return
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+    except Exception:  # noqa: BLE001 - a view count must never break a read
+        db.rollback()
+
+
+def record_page_views(db: Session, page: dict, viewer: User | None) -> None:
+    """Record a view of every post in a serialized page.
+
+    Runs after the page is produced — cached or fresh — so scrolling a feed,
+    a profile or a search result counts the posts that were actually shown.
+    """
+    ids = {item["id"] for item in page.get("items", []) if isinstance(item, dict)}
+    record_post_views(db, ids, viewer)
 
 
 def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) -> list[PostOut]:

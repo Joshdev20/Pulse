@@ -51,6 +51,42 @@ def _backfill_media_blobs() -> None:
         db.close()
 
 
+def _backfill_like_views() -> None:
+    """Treat a like as proof of a view.
+
+    Liking a post means reading it, but views were not recorded on every path
+    that served a post — profiles and search were missed — so a post could end up
+    showing more likes than views. Fill in the missing rows once per boot. The
+    unique constraint keeps this idempotent, and the NOT EXISTS filter skips a
+    liker who already has a view row, so a restart adds nothing.
+    """
+    from sqlalchemy import select as sa_select
+
+    from .database import SessionLocal
+    from .models import Like, PostView
+
+    seen = (
+        sa_select(PostView.id)
+        .where(PostView.post_id == Like.post_id, PostView.user_id == Like.user_id)
+        .correlate(Like)
+        .exists()
+    )
+    db = SessionLocal()
+    try:
+        pairs = db.execute(sa_select(Like.post_id, Like.user_id).where(~seen)).all()
+        if not pairs:
+            return
+        for post_id, user_id in pairs:
+            db.add(PostView(post_id=post_id, user_id=user_id))
+        db.commit()
+        print(f"Backfilled {len(pairs)} view(s) implied by existing likes.")
+    except Exception as exc:  # noqa: BLE001 - startup must survive a bad row
+        db.rollback()
+        print(f"Like-view backfill skipped: {exc}")
+    finally:
+        db.close()
+
+
 def _warn_on_push_misconfiguration() -> None:
     """Report a VAPID subject that Apple's push service will refuse.
 
@@ -81,6 +117,7 @@ async def lifespan(_app: FastAPI):
     ensure_schema(engine)
     storage.ensure_upload_dir()
     _backfill_media_blobs()
+    _backfill_like_views()
     _warn_on_push_misconfiguration()
     if settings.auto_seed:
         # Demo deploys start with an empty database; populate it once. `seed`

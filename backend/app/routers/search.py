@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 
 from .. import cache
 from ..config import settings
-from ..deps import CurrentUser, DbSession, serialize_posts, serialize_users
+from ..deps import CurrentUser, DbSession, record_post_views, serialize_posts, serialize_users
 from ..models import Post, User
 from ..schemas import PostOut, UserPublic
 
@@ -36,7 +36,9 @@ def search_posts(
         posts = list(db.scalars(query).all())
         return [post.model_dump(mode="json") for post in serialize_posts(db, posts, viewer)]
 
-    return cache.get_or_set("search", SEARCH_TTL, (viewer.id, "posts", q.strip().lower(), limit), produce)
+    result = cache.get_or_set("search", SEARCH_TTL, (viewer.id, "posts", q.strip().lower(), limit), produce)
+    record_post_views(db, [item["id"] for item in result if isinstance(item, dict)], viewer)
+    return result
 
 
 @router.get("/users", response_model=list[UserPublic])

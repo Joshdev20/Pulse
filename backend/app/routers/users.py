@@ -10,6 +10,7 @@ from ..deps import (
     CurrentUser,
     DbSession,
     OptionalUser,
+    record_page_views,
     serialize_posts,
     serialize_user,
     serialize_users,
@@ -317,9 +318,11 @@ def user_posts(
         ).model_dump(mode="json")
 
     viewer_id = viewer.id if viewer is not None else 0
-    return cache.get_or_set(
+    result = cache.get_or_set(
         "posts", settings.cache_ttl_seconds, (viewer_id, "user", username.lower(), page, page_size), produce
     )
+    record_page_views(db, result, viewer)
+    return result
 
 
 @router.get("/{username}/likes", response_model=Page)
@@ -358,9 +361,11 @@ def user_likes(
             has_more=page * page_size < total,
         ).model_dump(mode="json")
 
-    return cache.get_or_set(
+    result = cache.get_or_set(
         "posts", settings.cache_ttl_seconds, (viewer.id, "likes", username.lower(), page, page_size), produce
     )
+    record_page_views(db, result, viewer)
+    return result
 
 
 @router.post("/{username}/follow", response_model=UserPublic, status_code=status.HTTP_201_CREATED)

@@ -13,6 +13,8 @@ from ..config import settings
 from ..deps import (
     CurrentUser,
     DbSession,
+    record_page_views,
+    record_post_views,
     serialize_posts,
     serialize_users,
 )
@@ -24,7 +26,6 @@ from ..models import (
     Media,
     Notification,
     Post,
-    PostView,
     User,
     utcnow,
 )
@@ -68,27 +69,6 @@ def _get_post_or_404(db: DbSession, post_id: int) -> Post:
     if post is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Post not found")
     return post
-
-
-def _record_view(db: DbSession, post: Post, viewer: User) -> None:
-    """Record that ``viewer`` has seen ``post``, at most once.
-
-    The unique constraint on (post_id, user_id) is the dedupe, so a lost race
-    with a second tab is caught here and ignored: "already seen" is the correct
-    outcome, not an error. The author's own views are not counted — the number
-    under a post is meant to say how many *other* people saw it.
-
-    A view is not worth failing a request over, so every failure is swallowed.
-    """
-    if post.author_id == viewer.id:
-        return
-    db.add(PostView(post_id=post.id, user_id=viewer.id))
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-    except Exception:  # noqa: BLE001 - a view count must never break a read
-        db.rollback()
 
 
 def _claim_media(db: DbSession, media_ids: list[int], user: User) -> list[Media]:
@@ -302,33 +282,6 @@ def _ordered_feed(
     )
 
 
-def _record_page_views(db: DbSession, page: dict, viewer: User) -> None:
-    """Record a view of every post in a serialized page.
-
-    Runs after the page is produced — cached or fresh — so scrolling the feed
-    counts the posts that were actually shown. One insert per post per account,
-    deduped by the unique constraint, so a refetch or a second scroll is free.
-    """
-    ids = {item["id"] for item in page.get("items", []) if isinstance(item, dict)}
-    if not ids:
-        return
-    # A single query for the authors avoids loading each post; only the author's
-    # own views are skipped, and that is the one field needed.
-    authors = dict(
-        db.execute(select(Post.id, Post.author_id).where(Post.id.in_(ids))).all()
-    )
-    for post_id, author_id in authors.items():
-        if author_id == viewer.id:
-            continue
-        db.add(PostView(post_id=post_id, user_id=viewer.id))
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-    except Exception:  # noqa: BLE001 - a view count must never break a read
-        db.rollback()
-
-
 @router.get("/feed", response_model=Page)
 def feed(
     db: DbSession,
@@ -365,7 +318,7 @@ def feed(
         (viewer.id, page, page_size, scope, seed or ""),
         produce,
     )
-    _record_page_views(db, result, viewer)
+    record_page_views(db, result, viewer)
     return result
 
 
@@ -388,7 +341,7 @@ def list_posts(
             viewer,
         ).model_dump(mode="json"),
     )
-    _record_page_views(db, result, viewer)
+    record_page_views(db, result, viewer)
     return result
 
 
@@ -421,7 +374,7 @@ def get_post(post_id: int, db: DbSession, viewer: CurrentUser) -> PostOut:
     # Counted before the read is served so the number the caller sees includes
     # their own visit. The write is deduped and best-effort; it never fails the
     # request.
-    _record_view(db, post, viewer)
+    record_post_views(db, [post.id], viewer)
     return cache.get_or_set(
         "posts",
         settings.cache_ttl_seconds,
@@ -520,6 +473,11 @@ async def like_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
                 )
             db.commit()
             db.refresh(post)
+    # A like means the liker read the post, so make sure that read is on record
+    # even if they reached it by a path that does not count views, and even when
+    # the liker is the author liking their own post. Without this a post could
+    # show more likes than views.
+    record_post_views(db, [post.id], user, include_author=True)
     invalidate_post_reads()
     return serialize_posts(db, [post], user)[0]
 
