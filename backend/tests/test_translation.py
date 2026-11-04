@@ -237,6 +237,64 @@ def test_the_request_never_pins_the_local_guess(monkeypatch):
     assert pairs == ["Autodetect|en"]
 
 
+def test_google_is_preferred_and_its_answer_is_parsed(monkeypatch):
+    """The Google endpoint answers first, and its ``[[text, detected]]`` shape parses."""
+    calls: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, body): self._body = body
+        def raise_for_status(self): pass
+        def json(self): return self._body
+
+    class FakeClient:
+        def get(self, url, params=None, headers=None):
+            calls.append(url)
+            return FakeResponse([["Hi how are you? My name is Chukwuemeka", "ig"]])
+
+    monkeypatch.setattr(
+        translate_module, "_request_translation",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("MyMemory should not be reached")),
+    )
+
+    translated, detected = translate_module._translate_chunk(
+        FakeClient(), "Ndewo, kedu ka ị mere?", "ig", "en"
+    )
+    assert translated == "Hi how are you? My name is Chukwuemeka"
+    assert detected == "ig"
+    assert calls == ["https://clients5.google.com/translate_a/t"]
+
+
+def test_google_failure_falls_through_to_the_other_provider(monkeypatch):
+    """When Google will not answer, the other provider is tried."""
+    monkeypatch.setattr(translate_module, "_translate_google", lambda *a, **k: None)
+    monkeypatch.setattr(
+        translate_module, "_request_translation",
+        lambda client, chunk, pair: {
+            "responseStatus": 200,
+            "responseData": {"translatedText": "hello", "detectedLanguage": "ig"},
+        },
+    )
+    translated, detected = translate_module._translate_chunk(object(), "Ndewo", "ig", "en")
+    assert (translated, detected) == ("hello", "ig")
+
+
+def test_an_igbo_post_translates_through_the_provider_chain(monkeypatch):
+    """The end the user sees: Igbo in, English out, labelled Igbo."""
+    monkeypatch.setattr(translate_module, "_translate_google", lambda *a, **k: None)
+    monkeypatch.setattr(
+        translate_module, "_request_translation",
+        lambda client, chunk, pair: {
+            "responseStatus": 200,
+            "responseData": {"translatedText": "I want money that comes daily", "detectedLanguage": "ig"},
+        },
+    )
+    translated, detected = translate_with_detection(
+        "ACHỌRỌ M EGO NA-ABATA KWA ỤBỌCHỊ NKE GA-EGBO MKPA M", "ig"
+    )
+    assert translated == "I want money that comes daily"
+    assert detected == "ig"
+
+
 def test_the_request_falls_back_to_the_named_source_when_autodetect_is_refused(monkeypatch):
     """The free service turns away some callers; the pinned path still works."""
     pairs: list[str] = []
