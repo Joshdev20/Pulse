@@ -279,31 +279,26 @@ def _translate_chunk(
 ) -> tuple[str | None, str | None]:
     """Translate one piece as ``(translated_text, detected_source)``.
 
-    ``source`` is what the caller believes the language to be, but the request
-    is always sent as ``Autodetect`` rather than pinned to it. Pinning a source
-    that came from a local guess is what made an Igbo post come back untranslated:
-    the detector said Vietnamese, the service was told "Vietnamese", and it
-    dutifully returned the Igbo text almost unchanged. Letting the service detect
-    removes that failure mode, and its answer — ``detectedLanguage`` — is
-    reported back so the label can be corrected from it.
+    The request is tried as ``Autodetect`` first, so the service's own answer
+    governs and a wrong local guess cannot make it echo the text back. Pinning a
+    source that came from a local guess is exactly what made an Igbo post come
+    back untranslated: the detector said Vietnamese, the service was told
+    "Vietnamese", and it returned the Igbo text almost unchanged.
 
-    Returns ``(None, None)`` when the service could not answer.
+    The free service refuses ``Autodetect`` for some callers, though — a
+    deployment behind a shared egress address is turned away where a laptop is
+    not — so a rejected autodetect falls back to the source the caller named.
+    That is the path that always worked, and by now the source is usually right:
+    the languages the local detector gets wrong are read from their own letters
+    before this call. The label follows the service when it names a language, and
+    the caller's source otherwise.
+
+    Returns ``(None, None)`` when neither attempt could answer.
     """
-    del source  # Kept in the signature so callers read the same; never pinned.
-    pair = f"Autodetect|{target}"
-    try:
-        response = client.get(
-            settings.translate_endpoint,
-            params={"q": chunk, "langpair": pair},
-        )
-        response.raise_for_status()
-        payload: dict[str, Any] = response.json()
-    except Exception:  # noqa: BLE001 - translation is best-effort
-        logger.warning("translation request failed", exc_info=True)
-        return (None, None)
-
-    if payload.get("responseStatus") not in (200, "200"):
-        logger.info("translation service refused: %s", payload.get("responseDetails"))
+    payload = _request_translation(client, chunk, f"Autodetect|{target}")
+    if payload is None and source and source.lower() != "autodetect":
+        payload = _request_translation(client, chunk, f"{source}|{target}")
+    if payload is None:
         return (None, None)
 
     data = payload.get("responseData") or {}
@@ -313,7 +308,28 @@ def _translate_chunk(
 
     detected = data.get("detectedLanguage")
     detected = detected.lower() if isinstance(detected, str) and detected else None
-    return (translated, detected)
+    return (translated, detected or source)
+
+
+def _request_translation(
+    client: httpx.Client, chunk: str, pair: str
+) -> dict[str, Any] | None:
+    """One call to the translation service, or None if it did not answer."""
+    try:
+        response = client.get(
+            settings.translate_endpoint,
+            params={"q": chunk, "langpair": pair},
+        )
+        response.raise_for_status()
+        payload: dict[str, Any] = response.json()
+    except Exception:  # noqa: BLE001 - translation is best-effort
+        logger.warning("translation request failed", exc_info=True)
+        return None
+
+    if payload.get("responseStatus") not in (200, "200"):
+        logger.info("translation service refused: %s", payload.get("responseDetails"))
+        return None
+    return payload
 
 
 def translate_with_detection(text: str, source: str | None = None) -> tuple[str | None, str | None]:
