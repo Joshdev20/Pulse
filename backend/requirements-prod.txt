@@ -33,3 +33,11 @@ pillow==13.0.0
 # no network cost, imported lazily by app.translate, so the app boots without it
 # and simply offers no translate affordance.
 langdetect==1.0.9
+
+# Video preview frames. There is no pure-Python H.264 decoder, so the server
+# needs ffmpeg to produce a poster for a video whose browser capture did not
+# happen. This wheel bundles the binary (the host has none), which is what makes
+# the server-side fallback real rather than a hoped-for `ffmpeg` on PATH.
+# Imported lazily by app.video, so a deployment without it still boots and
+# simply falls back to the client-side capture.
+imageio-ffmpeg==0.8.1

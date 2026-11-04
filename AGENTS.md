@@ -216,10 +216,18 @@ the public URL returns 502 until the dev server is bound to 12000.
   `MediaGallery` primes the clip only on hover for a video that has a poster, so the
   lightbox still opens onto bytes already in memory.
 - A poster is optional at every step. `capturePoster` returns null on any failure and the
-  upload proceeds; the server stores a poster only when one arrives and sniffs as an
-  image. A video with no poster (`poster_url is None`) is the pre-poster case, and
+  upload proceeds; a poster sent with the request is stored only when it sniffs as an
+  image, and a video that arrives without one gets a server-made poster instead (below). A
+  video with no poster at all (`poster_url is None`) is the pre-poster case, and
   `useVideoPoster` decodes a frame in the browser for it, so old uploads need no backfill.
   Any change here must keep that fallback working: it is what makes the migration safe.
+- When no poster arrives with a video upload, the server makes one itself
+  (`extract_poster` in `backend/app/video.py`), so a clip uploaded by a browser that could
+  not decode it, or by any client that skips the capture, still gets a preview. It shells
+  out to ffmpeg — the binary `imageio-ffmpeg` ships is preferred over `PATH`, because the
+  free instance has none and a silently missing poster is the bug this exists to fix. The
+  call runs in a worker thread (it is a subprocess) and returns None on any failure, so an
+  undecodable clip is stored without a poster rather than failing the upload.
 - `duration_ms` travels with the upload too, so the tile's duration badge needs no video
   fetch either. The measured duration stays the fallback when it is absent.
 - When testing the recorder in a browser harness, pass Chromium
