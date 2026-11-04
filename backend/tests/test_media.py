@@ -153,6 +153,45 @@ def test_media_becomes_public_once_attached_to_a_post(client, make_user, tmp_pat
     assert client.get(f"/api/media/{media['id']}", headers=other).status_code == 200
 
 
+def test_direct_message_attachment_stays_private(client, make_user, tmp_path, monkeypatch):
+    """The one boundary that must not move.
+
+    A direct-message attachment is readable only by the two participants, and it
+    must never be handed to a shared cache. Both are decided by the same
+    combined access check the download route now uses, so this pins them
+    together.
+    """
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    linus, _ = make_user("linus")
+
+    conversation = client.post(
+        "/api/conversations", headers=ada, json={"username": "grace"}
+    ).json()
+    media = upload(client, ada, PNG, alt="private").json()
+
+    sent = client.post(
+        f"/api/conversations/{conversation['id']}/messages",
+        headers=ada,
+        json={"body": "just for you", "media_ids": [media["id"]]},
+    )
+    assert sent.status_code == 201, sent.text
+
+    # Both participants can read it.
+    assert client.get(f"/api/media/{media['id']}", headers=ada).status_code == 200
+    assert client.get(f"/api/media/{media['id']}", headers=grace).status_code == 200
+
+    # A third party cannot, and neither can an anonymous caller.
+    assert client.get(f"/api/media/{media['id']}", headers=linus).status_code == 404
+    assert client.get(f"/api/media/{media['id']}").status_code == 404
+
+    # And it must not be offered to a shared cache, or a CDN could serve one
+    # participant's private picture to another viewer.
+    participant = client.get(f"/api/media/{media['id']}", headers=grace)
+    assert participant.headers["cache-control"].startswith("private")
+
+
 def test_cannot_attach_another_users_upload(client, make_user, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     ada, _ = make_user("ada")

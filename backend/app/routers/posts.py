@@ -101,6 +101,54 @@ async def _notify(db: DbSession, notification: Notification, recipient_id: int) 
     push_notification(recipient_id, event)
 
 
+async def _notify_followers(
+    db: DbSession, author: User, post: Post, *, exclude: set[int] | None = None
+) -> int:
+    """Tell an author's followers that they have posted. Returns the count.
+
+    This is the fan-out that makes the feed feel live rather than something you
+    have to open and refresh. One row per follower, each delivered on the
+    socket for an open tab and by Web Push for a closed one.
+
+    ``exclude`` drops recipients who already received a more specific alert for
+    the same event -- a share notifies the original author as ``repost``, and
+    they should not also get the generic ``post`` alert if they happen to
+    follow the sharer.
+
+    A large account can have many followers, so this is deliberately the last
+    thing a publish does and its failures are contained: the post is already
+    committed by the time it runs, and a push that cannot be sent must never
+    undo a successful post.
+    """
+    follower_ids = list(
+        db.scalars(select(Follow.follower_id).where(Follow.following_id == author.id)).all()
+    )
+    if not follower_ids:
+        return 0
+
+    skip = exclude or set()
+    delivered = 0
+    # One frame per follower is unavoidable: `notification_event` embeds the
+    # recipient-specific notification id, and the push payload is keyed by it.
+    for follower_id in follower_ids:
+        # A follower can be the author only through a self-follow, which the
+        # follow endpoint rejects; the guard keeps that invariant explicit.
+        if follower_id == author.id or follower_id in skip:
+            continue
+        await _notify(
+            db,
+            Notification(
+                user_id=follower_id,
+                actor_id=author.id,
+                kind="post",
+                post_id=post.id,
+            ),
+            follower_id,
+        )
+        delivered += 1
+    return delivered
+
+
 def _paginate(db: DbSession, query, page: int, page_size: int, viewer: User | None) -> Page:
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     posts = db.scalars(query.offset((page - 1) * page_size).limit(page_size)).all()
@@ -302,8 +350,12 @@ async def create_post(payload: PostCreate, db: DbSession, user: CurrentUser) -> 
     db.flush()
     for item in attachments:
         item.post_id = post.id
+    # Commit before fan-out so followers are notified about a post that is
+    # already durable, and so a slow push service cannot roll it back.
     db.commit()
     db.refresh(post)
+    await _notify_followers(db, user, post)
+    db.commit()
     invalidate_post_reads()
     return serialize_posts(db, [post], user)[0]
 
@@ -608,7 +660,8 @@ async def repost(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
         select(Post).where(Post.author_id == user.id, Post.repost_of_id == post.id)
     )
     if existing is None:
-        db.add(Post(author_id=user.id, body="", repost_of_id=post.id))
+        share = Post(author_id=user.id, body="", repost_of_id=post.id)
+        db.add(share)
         await _notify(
             db,
             Notification(user_id=post.author_id, actor_id=user.id, kind="repost", post_id=post.id),
@@ -616,6 +669,12 @@ async def repost(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
         )
         db.commit()
         db.refresh(post)
+        # A share is new content for the sharer's own followers, the same as an
+        # original post is. The frame points at the original so an alert opens
+        # the post itself rather than the empty repost row. The original author
+        # already got the `repost` alert above.
+        await _notify_followers(db, user, post, exclude={post.author_id})
+        db.commit()
         invalidate_post_reads()
     return serialize_posts(db, [post], user)[0]
 

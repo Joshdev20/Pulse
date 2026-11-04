@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { ApiError, api, setToken, getToken } from '../lib/api'
 import { clearMediaCache } from '../lib/mediaCache'
 import { clearCachedPushState } from '../lib/push'
+import { clearLastUser, loadLastUser, saveLastUser } from '../lib/lastUser'
 import {
   getActiveId,
   listAccounts,
@@ -52,8 +53,15 @@ interface AuthValue {
 const AuthContext = createContext<AuthValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUserState] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
+  // A returning visitor is rendered from the cached profile of their last
+  // session, so the app appears at once while `/auth/me` confirms the token in
+  // the background. This is only a display copy of the viewer's own profile —
+  // nothing is authorised from it, and a token the server rejects clears it.
+  const [user, setUserState] = useState<User | null>(() => (getToken() ? loadLastUser() : null))
+  // The loader is skipped only when there is a cached profile to show. A token
+  // with no cached profile still waits for the check, otherwise `RequireAuth`
+  // would see a null user and bounce a valid session to the sign-in screen.
+  const [loading, setLoading] = useState(() => !(getToken() && loadLastUser()))
   const [accounts, setAccounts] = useState<SavedAccount[]>(() => listAccounts())
   const [activeAccountId, setActiveAccountIdState] = useState<number | null>(() => getActiveId())
   // Bumped on every session change. The realtime provider keys its socket on
@@ -68,12 +76,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     if (!getToken()) {
+      clearLastUser()
       setUserState(null)
       return
     }
     for (let attempt = 0; ; attempt++) {
       try {
-        setUserState(await api.me())
+        const me = await api.me()
+        saveLastUser(me)
+        setUserState(me)
         return
       } catch (error) {
         // Only a rejected token ends the session. A rate limit, a dropped
@@ -82,12 +93,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error instanceof ApiError && error.status === 401) {
           clearMediaCache()
           clearCachedPushState()
+          clearLastUser()
           setToken(null)
           setUserState(null)
           return
         }
         if (attempt >= AUTH_RETRY_LIMIT) {
-          setUserState(null)
+          // Out of retries on a transient failure. Whatever profile is already
+          // on screen stays: the token is still held, so this is a blip rather
+          // than a sign-out, and blanking the user here would bounce a valid
+          // session to the login page over a momentary error.
           return
         }
         await delay(AUTH_RETRY_BASE_MS * 2 ** attempt)
@@ -115,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearCachedPushState()
       setToken(access_token)
       const me = await api.me()
+      saveLastUser(me)
       setUserState(me)
       remember({
         id: me.id,
@@ -136,6 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearCachedPushState()
       setToken(access_token)
       const me = await api.me()
+      saveLastUser(me)
       setUserState(me)
       remember({
         id: me.id,
@@ -163,6 +180,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (activeAccountId !== null) removeAccount(activeAccountId)
     syncAccounts()
     setToken(null)
+    clearLastUser()
     setUserState(null)
     setSessionEpoch((value) => value + 1)
   }, [activeAccountId, syncAccounts])
@@ -207,6 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearCachedPushState()
       setToken(account.token)
       setActiveId(id)
+      saveLastUser(me)
       setUserState(me)
       syncAccounts()
       setSessionEpoch((value) => value + 1)
@@ -222,12 +241,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (wasActive) {
         clearMediaCache()
         clearCachedPushState()
+        clearLastUser()
         setUserState(null)
         setSessionEpoch((value) => value + 1)
       }
     },
     [activeAccountId, syncAccounts],
   )
+
+  /**
+   * Adopt a profile the caller already fetched (a settings save, say).
+   *
+   * The cached boot copy is refreshed here too, so the next load shows the
+   * edit rather than the profile as it was before it.
+   */
+  const setUser = useCallback((next: User) => {
+    saveLastUser(next)
+    setUserState(next)
+  }, [])
 
   const value = useMemo<AuthValue>(
     () => ({
@@ -237,7 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       register,
       logout,
       refresh,
-      setUser: setUserState,
+      setUser,
       accounts,
       activeAccountId,
       switchAccount,

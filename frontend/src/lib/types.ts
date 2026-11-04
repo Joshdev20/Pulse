@@ -118,7 +118,7 @@ export interface Conversation {
 }
 
 /** A notification the API can produce. `repost` is someone sharing your post. */
-export type NotificationKind = 'like' | 'comment' | 'follow' | 'repost'
+export type NotificationKind = 'like' | 'comment' | 'follow' | 'repost' | 'post'
 
 export interface RealtimeNotification {
   id: number

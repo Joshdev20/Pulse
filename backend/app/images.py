@@ -67,6 +67,8 @@ def optimize_image(
     if content_type in PASSTHROUGH or content_type not in SUPPORTED:
         return data, content_type
 
+    original_type = content_type
+
     try:
         from PIL import Image
     except ImportError:  # pragma: no cover - Pillow is a declared dependency
@@ -120,5 +122,5 @@ def optimize_image(
     # dimensions were under the limit). Keeping the smaller of the two means the
     # optimization can never cost storage.
     if len(optimized) >= len(data):
-        return data, content_type
+        return data, original_type
     return optimized, content_type

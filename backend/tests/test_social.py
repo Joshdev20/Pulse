@@ -113,3 +113,86 @@ def test_user_likes_tab(client, make_user):
 
 def test_health(client):
     assert client.get("/api/health").json()["status"] == "ok"
+
+
+def test_new_post_notifies_followers(client, make_user):
+    """Publishing alerts every follower, with the author as the actor."""
+    ada_headers, _ = make_user("ada")
+    grace_headers, _ = make_user("grace")
+    linus_headers, _ = make_user("linus")
+
+    client.post("/api/users/ada/follow", headers=grace_headers)
+    client.post("/api/users/ada/follow", headers=linus_headers)
+
+    post = client.post("/api/posts", headers=ada_headers, json={"body": "hello world"}).json()
+
+    for headers in (grace_headers, linus_headers):
+        notifications = client.get("/api/notifications", headers=headers).json()
+        assert len(notifications) == 1, notifications
+        assert notifications[0]["kind"] == "post"
+        assert notifications[0]["post_id"] == post["id"]
+        assert notifications[0]["read"] is False
+        assert notifications[0]["actor"]["username"] == "ada"
+        assert client.get("/api/notifications/unread-count", headers=headers).json() == {"count": 1}
+
+
+def test_author_is_not_notified_of_their_own_post(client, make_user):
+    ada_headers, _ = make_user("ada")
+    client.post("/api/posts", headers=ada_headers, json={"body": "just me here"})
+    assert client.get("/api/notifications", headers=ada_headers).json() == []
+
+
+def test_posting_without_followers_is_safe(client, make_user):
+    """The fan-out must be a no-op, not an error, when nobody follows."""
+    ada_headers, _ = make_user("ada")
+    response = client.post("/api/posts", headers=ada_headers, json={"body": "nobody is listening"})
+    assert response.status_code == 201
+    assert client.get("/api/notifications/unread-count", headers=ada_headers).json() == {"count": 0}
+
+
+def test_non_followers_are_not_notified(client, make_user):
+    """Only followers of the author get the alert."""
+    ada_headers, _ = make_user("ada")
+    stranger_headers, _ = make_user("stranger")
+    client.post("/api/posts", headers=ada_headers, json={"body": "hello"})
+    assert client.get("/api/notifications", headers=stranger_headers).json() == []
+
+
+def test_repost_notifies_sharers_followers(client, make_user):
+    """A share is new content for the sharer's followers, not just the author."""
+    ada_headers, _ = make_user("ada")
+    grace_headers, _ = make_user("grace")
+    linus_headers, _ = make_user("linus")
+
+    # linus follows grace, so a share by grace should reach them.
+    client.post("/api/users/grace/follow", headers=linus_headers)
+    original = client.post("/api/posts", headers=ada_headers, json={"body": "share me"}).json()
+
+    client.post(f"/api/posts/{original['id']}/repost", headers=grace_headers)
+
+    # The original author gets the specific `repost` alert.
+    ada_notifications = client.get("/api/notifications", headers=ada_headers).json()
+    assert [n["kind"] for n in ada_notifications] == ["repost"]
+    assert ada_notifications[0]["actor"]["username"] == "grace"
+
+    # The sharer's follower gets the generic `post` alert, pointing at the
+    # original so tapping it opens the post rather than an empty repost row.
+    linus_notifications = client.get("/api/notifications", headers=linus_headers).json()
+    assert [n["kind"] for n in linus_notifications] == ["post"]
+    assert linus_notifications[0]["post_id"] == original["id"]
+    assert linus_notifications[0]["actor"]["username"] == "grace"
+
+
+def test_repost_does_not_double_notify_the_original_author(client, make_user):
+    """An author who also follows the sharer gets one alert, not two."""
+    ada_headers, _ = make_user("ada")
+    grace_headers, _ = make_user("grace")
+
+    # ada follows grace, and grace shares ada's post.
+    client.post("/api/users/grace/follow", headers=ada_headers)
+    original = client.post("/api/posts", headers=ada_headers, json={"body": "mine"}).json()
+    client.post(f"/api/posts/{original['id']}/repost", headers=grace_headers)
+
+    ada_notifications = client.get("/api/notifications", headers=ada_headers).json()
+    assert [n["kind"] for n in ada_notifications] == ["repost"]
+
