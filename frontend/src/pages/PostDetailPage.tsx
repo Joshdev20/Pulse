@@ -260,14 +260,10 @@ export function PostDetailPage() {
               <span>
                 <strong>{formatCount(post.comment_count)}</strong> replies
               </span>
-              {/* Views sit with the other counts, and read even at zero: the
-                  author's own analytics, so a fresh post shows 0 rather than
-                  nothing. */}
-              {user?.id === post.author.id && (
-                <span>
-                  <strong>{formatCount(post.view_count)}</strong> views
-                </span>
-              )}
+              {/* Views sit with the other counts, and read even at zero. */}
+              <span>
+                <strong>{formatCount(post.view_count)}</strong> views
+              </span>
             </div>
           </article>
 
