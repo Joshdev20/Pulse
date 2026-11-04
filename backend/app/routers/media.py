@@ -4,10 +4,11 @@ import os
 from collections.abc import Iterator
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import or_, select
 
-from .. import images, storage
+from .. import images, storage, video
 from ..deps import CurrentUser, DbSession, OptionalUser, serialize_media
 from ..models import ConversationParticipant, Media, Message, Post, User
 from ..schemas import MediaOut
@@ -104,8 +105,17 @@ async def upload(
         data, content_type = images.optimize_image(data, sniffed.content_type)
 
     stored_name = storage.store(data, storage.ALLOWED_TYPES.get(content_type, sniffed.extension))
-    # Only a video carries a preview frame; an image is its own preview.
+    # Only a video carries a preview frame; an image is its own preview. The
+    # client captures a frame at upload and sends it here, which is the fast
+    # path. When that did not happen — an old client, or a browser that could not
+    # decode the file — the server produces one instead, so a tile never has to
+    # download the whole clip to show a preview.
     poster_data = _poster_from(await poster.read()) if (poster and sniffed.kind == "video") else None
+    if poster_data is None and sniffed.kind == "video":
+        # ffmpeg is a subprocess and can take seconds on a large clip. Run it in
+        # a worker thread so a fallback decode cannot stall every other request
+        # on this event loop.
+        poster_data = _poster_from(await run_in_threadpool(video.extract_poster, data))
     media = Media(
         owner_id=user.id,
         stored_name=stored_name,

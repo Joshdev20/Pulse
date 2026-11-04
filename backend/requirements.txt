@@ -23,3 +23,9 @@ pillow==13.0.0
 # no network cost, imported lazily by app.translate, so the app boots without it
 # and simply offers no translate affordance.
 langdetect==1.0.9
+
+# Video preview frames. There is no pure-Python H.264 decoder, so a server-made
+# poster needs ffmpeg; this wheel bundles the binary, so the behaviour does not
+# depend on the host having one. Imported lazily by app.video, so an install
+# without it still boots and falls back to the client-side capture.
+imageio-ffmpeg==0.8.1

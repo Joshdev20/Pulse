@@ -1,5 +1,6 @@
 """Tests for media upload, validation and authenticated delivery."""
 
+import base64
 import io
 import json
 import os
@@ -53,6 +54,48 @@ MP4 = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 32
 # asserts a poster is the smaller of the two. A real clip is megabytes; the
 # fixture above is 44 bytes, which no preview image could undercut.
 BIG_MP4 = MP4 + b"\x00" * 64_000
+
+# A real, decodable MP4: one second of a 64x64 test pattern, H.264. The
+# fixtures above are enough to exercise sniffing, but the server-side poster
+# fallback actually has to decode a frame, and a header followed by zeroes is
+# not a video any decoder will read. Small enough (2KB) to keep in the file.
+REAL_MP4 = base64.b64decode(
+    "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAN1bW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAA"
+    "AAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAqB0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAAB"
+    "AAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAA"
+    "AEAAAABAAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAQAAABAAAAAAIYbWRpYQAAACBtZGhk"
+    "AAAAAAAAAAAAAAAAAAAoAAAAKABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRl"
+    "b0hhbmRsZXIAAAABw21pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAA"
+    "AQAAAAx1cmwgAAAAAQAAAYNzdGJsAAAAv3N0c2QAAAAAAAAAAQAAAK9hdmMxAAAAAAAAAAEAAAAAAAAA"
+    "AAAAAAAAAAAAAEAAQABIAAAASAAAAAAAAAABFExhdmM2My4xLjEwMiBsaWJ4MjY0AAAAAAAAAAAAAAAA"
+    "GP//AAAANWF2Y0MBZAAK/+EAGGdkAAqs2UQmwEQAAAMABAAAAwAoPEiWWAEABmjr4OSyLP34+AAAAAAQ"
+    "cGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAAjAAAAAAAAAAAYc3R0cwAAAAAAAAABAAAABQAACAAAAAAU"
+    "c3RzcwAAAAAAAAABAAAAAQAAADhjdHRzAAAAAAAAAAUAAAABAAAQAAAAAAEAACgAAAAAAQAAEAAAAAAB"
+    "AAAAAAAAAAEAAAgAAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAAFAAAAAQAAAChzdHN6AAAAAAAAAAAAAAAF"
+    "AAAD9gAAADMAAAAZAAAADwAAAA8AAAAUc3RjbwAAAAAAAAABAAADpQAAAGF1ZHRhAAAAWW1ldGEAAAAA"
+    "AAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAA"
+    "AQAAAABMYXZmNjMuMS4xMDIAAAAIZnJlZQAABGhtZGF0AAACnwYF//+b3EXpvebZSLeWLNgg2SPu73gy"
+    "NjQgLSBjb3JlIDE2NSAtIEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjUg"
+    "LSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0xIHJlZj0z"
+    "IGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDM6MHgxMTMgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3Jk"
+    "PTEuMDA6MC4wMCBtaXhlZF9yZWY9MSBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4"
+    "ZGN0PTEgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9xcF9vZmZzZXQ9LTIg"
+    "dGhyZWFkcz0yIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRl"
+    "PTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9"
+    "MyBiX3B5cmFtaWQ9MiBiX2FkYXB0PTEgYl9iaWFzPTAgZGlyZWN0PTEgd2VpZ2h0Yj0xIG9wZW5fZ29w"
+    "PTAgd2VpZ2h0cD0yIGtleWludD0yNTAga2V5aW50X21pbj01IHNjZW5lY3V0PTQwIGludHJhX3JlZnJl"
+    "c2g9MCByY19sb29rYWhlYWQ9NDAgcmM9Y3JmIG1idHJlZT0xIGNyZj00MC4wIHFjb21wPTAuNjAgcXBt"
+    "aW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAABT2WIhACf0kjI"
+    "ETw/4RcH5PwbhzH6ADqkeWRrd/0GXUEpgyA32gsKltQHwwtbgwnTi19VFGc2HvcO7DshMQLGdGbClrR2"
+    "jH3lzhpf9W/E/03NpWD/ZKKNnjmvv9x3abUwYXJTBssHJENOkrzzsW9vg4XhKMfD3DHqsFHH7Ur5+TDH"
+    "kOxrlpbVmmZ2NJwKc+alE3FJWrgWsldusQAC3U0k9t9p2EMDMWYAekzUG0EyfsoNX+12xL98k1X3pLkM"
+    "T/Z9P16p8scvTvuZNcHQmAdsF3MZ/+AHIXa9tCp0pbQJCCc3TLAXtc/Jn9rxgum0TF+4AtY9Mwy33ZOr"
+    "aA4OmlI6EB0wJAnY57yoaRmX0qPIjvMP9vwpMiBie0vT/2kAlB/h1PccsEbDhtMBh7OBP2PQ5Nze/U5H"
+    "gFwLUASbtin1y7i3vNI/1NBQvvmI13YBNlRhAAAAL0GaJGxGf3hP2i27HKpV769Z2Q1C4lt0WftwavoF"
+    "ie0V/IP+S4TW00nWu3EzOBcwAAAAFUGeQniI/7UOaSjnpY7uvmJvw3+GgQAAAAsBnmF0Rn+61IZ4oAAA"
+    "AAsBnmNqRn+7nesVYQ=="
+)
 
 
 def upload_video(client, headers, poster=None, body=MP4, **form):
@@ -769,3 +812,81 @@ def test_a_video_is_stored_untouched(client, make_user, tmp_path, monkeypatch):
     assert response.status_code == 201, response.text
     response.json()
     assert os.path.getsize(os.path.join(tmp_path, os.listdir(tmp_path)[0])) == len(MP4)
+
+
+# --- Server-side poster fallback ---------------------------------------------
+#
+# The client captures a frame at upload, but that path cannot cover a video
+# uploaded before posters existed, or a browser that will not decode the file.
+# When no poster arrives, the server produces one from the video itself, so a
+# tile is never left downloading the whole clip for a preview.
+
+
+def test_a_video_uploaded_without_a_poster_gets_one_from_the_server(
+    client, make_user, tmp_path, monkeypatch
+):
+    """No poster in the request is not the same as no poster on the media."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    body = upload_video(client, headers, body=REAL_MP4).json()
+
+    assert body["poster_url"] == f"/api/media/{body['id']}/poster"
+    poster = client.get(body["poster_url"], headers=headers)
+    assert poster.status_code == 200
+    assert poster.headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(poster.content)) as image:
+        image.load()
+
+
+def test_a_supplied_poster_is_kept_rather_than_regenerated(
+    client, make_user, tmp_path, monkeypatch
+):
+    """The client's own frame is the fast path and must win over a server decode."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    body = upload_video(client, headers, poster=JPEG, body=REAL_MP4).json()
+    poster = client.get(body["poster_url"], headers=headers)
+
+    # The uploaded JPEG is 8x8 and re-encoded as-is; a regenerated frame from the
+    # 64x64 clip would be larger. Size tells the two apart without guessing.
+    with Image.open(io.BytesIO(poster.content)) as image:
+        assert image.size == (8, 8)
+
+
+def test_a_video_that_cannot_be_decoded_is_still_uploaded(
+    client, make_user, tmp_path, monkeypatch
+):
+    """A poster is an enhancement: a clip ffmpeg cannot read must not 500."""
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    headers, _ = make_user("ada")
+
+    # A valid container header with no readable video stream — sniffing accepts
+    # it, decoding cannot.
+    response = upload_video(client, headers, body=MP4)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["poster_url"] is None
+
+
+def test_extract_poster_returns_none_without_ffmpeg(monkeypatch):
+    """No ffmpeg on the host is a missing poster, never an exception."""
+    from app import video
+
+    monkeypatch.setattr(video, "_ffmpeg", lambda: None)
+    assert video.extract_poster(REAL_MP4) is None
+
+
+def test_extract_poster_reads_a_real_frame():
+    """The fallback decodes an actual clip, so the module is not a no-op."""
+    from app import video
+
+    if not video.ffmpeg_available():
+        pytest.skip("no ffmpeg available to decode a frame")
+
+    poster = video.extract_poster(REAL_MP4)
+    assert poster is not None
+    with Image.open(io.BytesIO(poster)) as image:
+        image.load()
+        assert max(image.size) <= video.POSTER_MAX_EDGE
