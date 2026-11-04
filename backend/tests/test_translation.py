@@ -237,6 +237,35 @@ def test_the_request_never_pins_the_local_guess(monkeypatch):
     assert pairs == ["Autodetect|en"]
 
 
+def test_the_request_falls_back_to_the_named_source_when_autodetect_is_refused(monkeypatch):
+    """The free service turns away some callers; the pinned path still works."""
+    pairs: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, body): self._body = body
+        def raise_for_status(self): pass
+        def json(self): return self._body
+
+    class FakeClient:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, params=None):
+            pairs.append(params["langpair"])
+            if params["langpair"] == "Autodetect|en":
+                return FakeResponse({"responseStatus": 403, "responseDetails": "REFUSED"})
+            return FakeResponse({
+                "responseStatus": 200,
+                "responseData": {"translatedText": "I want money that comes daily"},
+            })
+
+    monkeypatch.setattr(translate_module.httpx, "Client", lambda **kw: FakeClient())
+
+    translated, detected = translate_with_detection("Ndewo, kedu ka ị mere?", "ig")
+    assert pairs == ["Autodetect|en", "ig|en"]
+    assert translated == "I want money that comes daily"
+    assert detected == "ig"
+
+
 def test_the_service_detection_is_reported_when_it_knows_the_language(monkeypatch):
     """The label follows the service, which has actually seen the text."""
     monkeypatch.setattr(
