@@ -15,15 +15,21 @@ so no arbitrary media id can be reached through them.
 import html
 import io
 import json
-import os
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import func, select
 
-from .. import storage
+from .. import branding
+from ..branding import (
+    circular_avatar,
+    hex_to_rgb,
+    initials,
+    load_font,
+    shade,
+)
 from ..deps import DbSession, public_base
-from ..models import Media, Post, User
+from ..models import Post, User
 
 router = APIRouter(prefix="/api/preview", tags=["preview"])
 
@@ -46,47 +52,13 @@ DESCRIPTION_LIMIT = 160
 RECENT_POSTS = 20
 
 
-def _load_font(size: int):
-    """A font at ``size``, preferring a real face and always returning one.
-
-    The container that builds this app does not guarantee a font package, so the
-    scalable default is the fallback rather than the first choice: DejaVu gives
-    better metrics when it is present, and `load_default(size=...)` (Pillow
-    >= 10.1) keeps the card legible when it is not.
-    """
-    from PIL import ImageFont
-
-    for path in (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ):
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except OSError:
-                continue
-    return ImageFont.load_default(size=size)
-
-
-def _shade(rgb: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
-    return tuple(max(0, min(255, channel + amount)) for channel in rgb)
-
-
-def _hex_to_rgb(value: str) -> tuple[int, int, int]:
-    """Parse ``#rrggbb``, falling back to the app's accent rather than raising."""
-    text = (value or "").lstrip("#")
-    if len(text) != 6:
-        return (99, 102, 241)
-    try:
-        return tuple(int(text[index : index + 2], 16) for index in (0, 2, 4))  # type: ignore[return-value]
-    except ValueError:
-        return (99, 102, 241)
-
-
-def _initials(name: str) -> str:
-    parts = name.split()[:2]
-    letters = "".join(part[0].upper() for part in parts if part)
-    return letters or "?"
+# The drawing helpers live in ``app.branding`` because the notification icon
+# needs the same avatar, palette and initials tile. Aliased here with their old
+# private names so the card code below keeps reading naturally.
+_load_font = load_font
+_shade = shade
+_hex_to_rgb = hex_to_rgb
+_initials = initials
 
 
 def _break_long_word(draw, word: str, font, max_width: int) -> list[str]:
@@ -163,74 +135,11 @@ def _fit_font(draw, text: str, max_width: int, sizes: tuple[int, ...]):
 
 
 def _avatar_bytes(db: DbSession, user: User) -> bytes | None:
-    """The user's uploaded picture, from the row or the file it was written to."""
-    if user.avatar_media_id is None:
-        return None
-    media = db.get(Media, user.avatar_media_id)
-    if media is None:
-        return None
-    if media.blob is not None:
-        return media.blob
-    try:
-        path = storage.resolve(media.stored_name)
-    except ValueError:
-        return None
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "rb") as handle:
-            return handle.read()
-    except OSError:
-        return None
+    return branding.avatar_bytes(db, user)
 
 
 def _circular_avatar(db: DbSession, user: User, size: int):
-    """A round avatar: the uploaded picture, or the same initials tile the app shows."""
-    from PIL import Image, ImageDraw
-
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
-
-    raw = _avatar_bytes(db, user)
-    tile = None
-    if raw:
-        try:
-            tile = Image.open(io.BytesIO(raw)).convert("RGB")
-        except Exception:  # noqa: BLE001 - a corrupt upload must not break the card
-            tile = None
-
-    if tile is None:
-        # Reproduce the initials tile rather than leaving a blank disc, so a user
-        # with no upload still gets a recognisable preview.
-        base = _hex_to_rgb(user.avatar_color)
-        tile = Image.new("RGB", (size, size), base)
-        draw = ImageDraw.Draw(tile)
-        for offset in range(size):
-            ratio = offset / max(size - 1, 1)
-            draw.line(
-                [(0, offset), (size, offset)],
-                fill=_shade(base, int(-40 * ratio)),
-            )
-        font = _load_font(int(size * 0.42))
-        label = _initials(user.display_name)
-        box = draw.textbbox((0, 0), label, font=font)
-        draw.text(
-            ((size - (box[2] - box[0])) / 2 - box[0], (size - (box[3] - box[1])) / 2 - box[1]),
-            label,
-            font=font,
-            fill=(255, 255, 255),
-        )
-    else:
-        # Cover-crop to a square so a landscape upload is not stretched.
-        width, height = tile.size
-        edge = min(width, height)
-        tile = tile.crop(
-            ((width - edge) // 2, (height - edge) // 2, (width + edge) // 2, (height + edge) // 2)
-        ).resize((size, size), Image.LANCZOS)
-
-    canvas.paste(tile, (0, 0), mask)
-    return canvas
+    return circular_avatar(db, user, size)
 
 
 def _render_card(db: DbSession, user: User) -> bytes:

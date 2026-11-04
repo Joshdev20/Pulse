@@ -18,6 +18,8 @@ from app import push as push_module
 from app.config import Settings, settings
 from app.models import PushSubscription
 
+from .test_media import PNG
+
 
 def b64key(length: int = 65, seed: int = 0) -> str:
     """A syntactically valid subscription key (base64url of `length` bytes)."""
@@ -1148,4 +1150,139 @@ def test_the_blueprint_pins_a_subject_the_app_would_accept():
     entry = entries["VAPID_SUBJECT"]
     assert "value" in entry, "the value must be pinned, not left to the dashboard"
     assert Settings(vapid_subject=entry["value"]).push_subject_valid
+
+
+# --------------------------------------------------------------------------
+# Branded notification icons
+#
+# An alert that shows only a logo loses who it is about; one that shows only a
+# face loses where it came from. These cover the composed icon that carries
+# both, the payload fields that point at it, and the service worker that reads
+# them.
+# --------------------------------------------------------------------------
+
+
+def test_the_payload_names_the_branded_icon_for_the_actor(client, make_user, vapid, monkeypatch):
+    """A like must point its icon at the liker's branded avatar, not the logo."""
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        push_module,
+        "schedule_notify",
+        lambda user_id, payload: calls.append((user_id, payload)),
+    )
+
+    author, author_user = make_user("author")
+    fan, fan_user = make_user("fan")
+    post_id = client.post("/api/posts", headers=author, json={"body": "hello"}).json()["id"]
+    client.post(f"/api/posts/{post_id}/like", headers=fan)
+
+    payload = next(p for uid, p in calls if uid == author_user["id"])
+    assert payload["icon"] == f"/api/push/icon/{fan_user['id']}.png"
+    assert payload["badge"] == "/badge-96.png"
+
+
+def test_a_direct_message_names_the_senders_icon(client, make_user, vapid, monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.routers.messages.push.notify_user",
+        lambda db, user_id, payload: calls.append((user_id, payload)) or 1,
+    )
+
+    ada, ada_user = make_user("ada")
+    make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+    client.post(f"/api/conversations/{cid}/messages", headers=ada, json={"body": "hi"})
+
+    wait_for_calls(calls)
+    _, payload = calls[0]
+    assert payload["icon"] == f"/api/push/icon/{ada_user['id']}.png"
+
+
+def test_the_icon_is_a_png_of_the_senders_avatar(client, make_user):
+    """The route composes the sender's picture with the mark, and is public.
+
+    Public because the OS fetches it with no session, which is the only way an
+    alert for a closed browser can carry a picture at all.
+    """
+    import io
+
+    from PIL import Image
+
+    _, me = make_user("ada")
+    # No avatar set: the initials tile is still a valid icon, so the route must
+    # answer rather than 404 or serve nothing.
+    response = client.get(f"/api/push/icon/{me['id']}.png")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"].startswith("public")
+    image = Image.open(io.BytesIO(response.content))
+    assert image.size == (192, 192)
+
+
+def test_the_icon_uses_the_uploaded_picture_when_there_is_one(client, make_user):
+    """A real avatar is composited, not replaced by initials."""
+    import io
+
+    from PIL import Image
+
+    headers, me = make_user("ada")
+    client.post(
+        "/api/users/me/avatar",
+        headers=headers,
+        files={"file": ("me.png", io.BytesIO(PNG), "image/png")},
+    )
+
+    response = client.get(f"/api/push/icon/{me['id']}.png")
+    assert response.status_code == 200
+    image = Image.open(io.BytesIO(response.content)).convert("RGBA")
+    assert image.size == (192, 192)
+    # The middle is the avatar and the badge disc sits inset in the corner;
+    # both must be opaque for the icon to be more than a bare avatar.
+    assert image.getpixel((96, 96))[3] == 255
+    assert image.getpixel((141, 141))[3] == 255
+
+
+def test_the_icon_is_404_for_an_unknown_user(client):
+    assert client.get("/api/push/icon/999999.png").status_code == 404
+
+
+def test_the_icon_needs_no_authentication(client, make_user):
+    """The OS draws the notification; it holds no bearer token."""
+    _, me = make_user("ada")
+    assert client.get(f"/api/push/icon/{me['id']}.png").status_code == 200
+
+
+def test_the_service_worker_reads_the_icon_and_badge_from_the_payload():
+    """The worker must forward the payload's icon, not a hard-coded logo.
+
+    The payload is built by the API and read by the worker; a rename on one side
+    silently reverts every alert to the generic logo, which no server test can
+    catch. This reads the shipped worker source.
+    """
+    from pathlib import Path
+
+    worker = Path(__file__).resolve().parents[2] / "frontend" / "public" / "sw.js"
+    source = worker.read_text()
+    assert "payload.icon" in source, "the worker must use the payload's icon"
+    assert "payload.badge" in source, "the worker must use the payload's badge"
+    # Relative paths must be resolved against the worker's origin, because the
+    # OS has no page to resolve them against and drops an unfetchable icon.
+    assert "self.location.origin" in source
+
+
+def test_the_notification_badge_asset_is_monochrome():
+    """Android tints the badge a single colour, so it must be a white silhouette."""
+    import io
+    from pathlib import Path
+
+    from PIL import Image
+
+    badge = Path(__file__).resolve().parents[2] / "frontend" / "public" / "badge-96.png"
+    assert badge.exists(), "the badge asset must ship with the frontend"
+    image = Image.open(io.BytesIO(badge.read_bytes())).convert("RGBA")
+    assert image.size == (96, 96)
+    opaque = [p for p in image.get_flattened_data() if p[3] > 0]
+    assert opaque, "the badge must draw something"
+    assert all(p[:3] == (255, 255, 255) for p in opaque), "the badge must be pure white"
+
 
