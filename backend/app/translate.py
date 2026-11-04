@@ -86,8 +86,10 @@ LANGUAGE_NAMES = {
     "he": "Hebrew",
     "hi": "Hindi",
     "hr": "Croatian",
+    "ha": "Hausa",
     "hu": "Hungarian",
     "id": "Indonesian",
+    "ig": "Igbo",
     "it": "Italian",
     "ja": "Japanese",
     "kn": "Kannada",
@@ -119,10 +121,28 @@ LANGUAGE_NAMES = {
     "uk": "Ukrainian",
     "ur": "Urdu",
     "vi": "Vietnamese",
+    "yo": "Yoruba",
     "zh-cn": "Chinese",
     "zh-tw": "Chinese",
     **_CJK_AND_OTHER,
 }
+
+# Languages the statistical detector cannot do at all, recognised instead by
+# letters that belong to them and to nothing else in this app's traffic. Igbo,
+# Yoruba and Hausa are all absent from `langdetect`'s model, which does not
+# return "unknown" for them — it returns a confident wrong answer. Igbo in
+# particular is reported as Vietnamese with probability 1.0, because the two
+# orthographies share the dotted vowels ị, ọ and ụ, so neither the confidence
+# guard nor the length guard catches it.
+#
+# Hausa and Yoruba carry a letter no other language here uses, so one of them is
+# decisive on its own. Igbo does not: ị/ọ/ụ are Igbo *unless* the text also
+# contains a Vietnamese-only letter (ă â đ ê ô ơ ư), which is what tells a
+# Vietnamese post using the same vowels apart from an Igbo one.
+_HAUSA_LETTERS = frozenset("ɓɗƙƴƁƊƘƳ")
+_YORUBA_LETTERS = frozenset("ṣṢ")
+_IGBO_LETTERS = frozenset("ịọụṅỊỌỤṄ")
+_VIETNAMESE_LETTERS = frozenset("ăâđêôơưĂÂĐÊÔƠƯ")
 
 # Below this many characters a Latin-script guess is not trustworthy: "ok" and
 # "nice one" are confidently reported as Slovak and Polish. A post that short is
@@ -145,6 +165,25 @@ def language_name(code: str | None) -> str | None:
     return LANGUAGE_NAMES.get(code.lower())
 
 
+def _script_language(body: str) -> str | None:
+    """The language a distinctive letter proves, or None if no letter does.
+
+    Only for languages the statistical detector gets wrong or does not know.
+    Checked before it, because a confident wrong answer is worse than none: an
+    Igbo post labelled Vietnamese both mislabels the post and pins the wrong
+    source on the translation request, which makes the service echo the text
+    back untranslated.
+    """
+    letters = set(body)
+    if letters & _HAUSA_LETTERS:
+        return "ha"
+    if letters & _YORUBA_LETTERS:
+        return "yo"
+    if letters & _IGBO_LETTERS and not letters & _VIETNAMESE_LETTERS:
+        return "ig"
+    return None
+
+
 @lru_cache(maxsize=512)
 def detect_language(text: str) -> tuple[str | None, float]:
     """Detect the language of ``text`` as ``(code, confidence)``.
@@ -159,6 +198,13 @@ def detect_language(text: str) -> tuple[str | None, float]:
     body = text.strip()
     if len(body) < 3:
         return (None, 0.0)
+
+    # A letter that belongs to exactly one language settles it outright, and for
+    # Igbo, Yoruba and Hausa it is the only thing that can: the statistical
+    # detector has no model for any of the three.
+    script = _script_language(body)
+    if script is not None:
+        return (script, 1.0)
 
     try:
         from langdetect import DetectorFactory, LangDetectException, detect_langs
@@ -230,12 +276,21 @@ def _chunks(text: str, limit: int) -> list[str]:
 
 def _translate_chunk(
     client: httpx.Client, chunk: str, source: str | None, target: str
-) -> str | None:
-    """Translate one piece, or None if the service could not."""
-    # The endpoint takes `source|target`; "Autodetect" lets it decide, which
-    # avoids a second detection call and is what the service expects when the
-    # source is not pinned.
-    pair = f"{source or 'Autodetect'}|{target}"
+) -> tuple[str | None, str | None]:
+    """Translate one piece as ``(translated_text, detected_source)``.
+
+    ``source`` is what the caller believes the language to be, but the request
+    is always sent as ``Autodetect`` rather than pinned to it. Pinning a source
+    that came from a local guess is what made an Igbo post come back untranslated:
+    the detector said Vietnamese, the service was told "Vietnamese", and it
+    dutifully returned the Igbo text almost unchanged. Letting the service detect
+    removes that failure mode, and its answer — ``detectedLanguage`` — is
+    reported back so the label can be corrected from it.
+
+    Returns ``(None, None)`` when the service could not answer.
+    """
+    del source  # Kept in the signature so callers read the same; never pinned.
+    pair = f"Autodetect|{target}"
     try:
         response = client.get(
             settings.translate_endpoint,
@@ -245,17 +300,58 @@ def _translate_chunk(
         payload: dict[str, Any] = response.json()
     except Exception:  # noqa: BLE001 - translation is best-effort
         logger.warning("translation request failed", exc_info=True)
-        return None
+        return (None, None)
 
     if payload.get("responseStatus") not in (200, "200"):
         logger.info("translation service refused: %s", payload.get("responseDetails"))
-        return None
+        return (None, None)
 
     data = payload.get("responseData") or {}
     translated = data.get("translatedText")
     if not isinstance(translated, str) or not translated.strip():
-        return None
-    return translated
+        return (None, None)
+
+    detected = data.get("detectedLanguage")
+    detected = detected.lower() if isinstance(detected, str) and detected else None
+    return (translated, detected)
+
+
+def translate_with_detection(text: str, source: str | None = None) -> tuple[str | None, str | None]:
+    """Translate ``text`` and report the language the service detected.
+
+    Returns ``(translated, detected_source)``. Either may be None: no
+    translation when the service failed or the post is already in the target
+    language, and no detected source when the service did not say.
+
+    The detected source is authoritative for labelling — the service sees the
+    text the same way a reader does — while the local ``source`` is only used to
+    skip a post already written in the target language.
+    """
+    if not settings.translate_enabled:
+        return (None, None)
+    body = text.strip()
+    if not body:
+        return (None, None)
+
+    target = settings.translate_target_language
+    if source and source.lower().startswith(target):
+        return (None, None)
+
+    pieces = _chunks(body, settings.translate_max_chars)
+    translated: list[str] = []
+    detected: str | None = None
+    with httpx.Client(timeout=settings.translate_timeout_seconds) as client:
+        for piece in pieces:
+            result, piece_source = _translate_chunk(client, piece, source, target)
+            if result is None:
+                return (None, None)
+            translated.append(result)
+            detected = detected or piece_source
+
+    joined = " ".join(translated).strip()
+    if not joined:
+        return (None, None)
+    return (joined, detected)
 
 
 def translate_text(text: str, source: str | None = None) -> str | None:
@@ -265,24 +361,5 @@ def translate_text(text: str, source: str | None = None) -> str | None:
     could not be translated — a partially translated post would be worse than
     none, so one failure discards the whole result.
     """
-    if not settings.translate_enabled:
-        return None
-    body = text.strip()
-    if not body:
-        return None
-
-    target = settings.translate_target_language
-    if source and source.lower().startswith(target):
-        return None
-
-    pieces = _chunks(body, settings.translate_max_chars)
-    translated: list[str] = []
-    with httpx.Client(timeout=settings.translate_timeout_seconds) as client:
-        for piece in pieces:
-            result = _translate_chunk(client, piece, source, target)
-            if result is None:
-                return None
-            translated.append(result)
-
-    joined = " ".join(translated).strip()
-    return joined or None
+    translated, _ = translate_with_detection(text, source)
+    return translated

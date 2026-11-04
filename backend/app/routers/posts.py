@@ -40,7 +40,7 @@ from ..schemas import (
     UserPublic,
 )
 from ..tagging import extract_tag_names, resolve_tags
-from ..translate import detect_language, language_name, translate_text
+from ..translate import detect_language, language_name, translate_with_detection
 
 router = APIRouter(prefix="/api", tags=["posts"])
 
@@ -434,19 +434,32 @@ def get_post(post_id: int, db: DbSession, viewer: CurrentUser) -> PostOut:
 def translate_post(post_id: int, db: DbSession, viewer: CurrentUser) -> PostTranslation:
     """Translate a post into the UI's language.
 
-    Returns the detected source language and the translation. A post already in
-    the target language, or one whose translation failed, comes back with
-    ``translated`` null rather than an error: the client simply does not offer
-    the toggle, which is the honest outcome when a best-effort service is down.
+    Returns the source language and the translation. A post already in the target
+    language, or one whose translation failed, comes back with ``translated``
+    null rather than an error: the client simply does not offer the toggle, which
+    is the honest outcome when a best-effort service is down.
+
+    The source reported is the one the translation service detects, not the local
+    guess, when the service supplies it. The two disagree on the languages the
+    local detector has no model for — Igbo is read as Vietnamese — and the
+    service is the one that has actually seen the text in order to translate it,
+    so its answer is the more trustworthy label.
     """
     post = _get_post_or_404(db, post_id)
     source, _ = detect_language(post.body)
     if source is None:
         return PostTranslation(source=None, source_name=None, translated=None)
+
+    translated, service_source = translate_with_detection(post.body, source)
+    # Prefer the service's answer, but only when it is one this app can name: an
+    # unknown code would label the post worse than the local guess did.
+    if service_source and language_name(service_source):
+        source = service_source
+
     return PostTranslation(
         source=source,
         source_name=language_name(source),
-        translated=translate_text(post.body, source),
+        translated=translated,
     )
 
 
