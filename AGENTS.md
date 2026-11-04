@@ -671,6 +671,17 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   `GET /api/push/icon/{id}.png`. An alert that shows only the logo loses who it is about;
   one that shows only the face loses where it came from. The route is public because the
   OS's notification daemon fetches it with no session, and may run with the browser closed.
+- **iOS never shows that avatar, and that is not a Pulse bug.** WebKit does not implement
+  the notification `icon` option (MDN browser-compat-data lists Safari `icon` as *not
+  supported* — "the property can be set, but has no effect" — and WebKit bug 280162 is
+  still open), so a Home Screen web app on iOS always draws the *app* icon in an alert.
+  The sender's avatar can only appear on Android, Chrome and desktop. Do not "fix" this by
+  reshuffling the payload. What every platform does render is title and body, so the sender
+  is named in the sentence (`notification_text`) and the alert stays identifiable without
+  the picture.
+- The icon route answers `HEAD` as well as `GET` (`api_route(..., methods=["GET","HEAD"])`).
+  A notification daemon that probes an image's headers before fetching it reads a `405` as
+  a missing icon and drops the picture, leaving the alert with no avatar at all.
 - The icon and badge in a payload are **same-origin paths**, resolved against the service
   worker's origin (`absolute()` in `sw.js`), not the API's host. The OS has no page to
   resolve a relative URL against and silently drops an icon it cannot fetch, so a relative
