@@ -1158,10 +1158,9 @@ h4 {
   background: var(--rose-soft);
 }
 
-/* The view count is a readout, not a control: it sits at the end of the action
-   row and does not react to hover like the buttons beside it. */
+/* The view count is a readout, not a control: it sits in the action row, next
+   after the repost control, and does not react to hover like the buttons. */
 .action.views {
-  margin-left: auto;
   cursor: default;
   color: var(--text-faint);
 }
