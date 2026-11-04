@@ -63,6 +63,28 @@ BAD_JWT_MARKER = "BadJwtToken"
 # fast enough to matter anyway.
 PUSH_TIMEOUT_SECONDS = 5.0
 
+# Where a payload points for its icon and badge, as same-origin paths. The
+# service worker makes them absolute against its own origin before handing them
+# to the OS: a notification is drawn by the operating system, which has no page
+# to resolve a relative URL against, and an icon that cannot be fetched is
+# silently dropped — the alert then shows with no picture at all.
+#
+# The badge is a static file because it never varies; the icon is a route
+# because it is the sender's own avatar.
+BADGE_PATH = "/badge-96.png"
+ICON_PATH = "/api/push/icon/{user_id}.png"
+
+
+def _icon_path(user_id: int | None) -> str | None:
+    """The branded icon for an actor, or None when the actor is unknown.
+
+    None rather than a fallback path because the service worker then omits the
+    option entirely, which lets the browser use the app icon from the manifest
+    rather than pointing it at an id that does not exist.
+    """
+    return ICON_PATH.format(user_id=user_id) if user_id is not None else None
+
+
 # Delivery runs on a small fixed pool of long-lived threads, not one thread per
 # notification. A thread per event is unbounded: a slow or hanging push service
 # makes every send outlive its request, so a burst of notifications — or one
@@ -382,6 +404,8 @@ def message_payload(db: Session, message, conversation_id: int) -> dict[str, Any
         "body": body,
         "tag": f"dm-{conversation_id}",
         "url": f"/messages/{conversation_id}",
+        "icon": _icon_path(sender.id if sender is not None else None),
+        "badge": BADGE_PATH,
         "conversation_id": conversation_id,
         "message_id": message.id,
         "sender": {
@@ -407,6 +431,8 @@ def notification_payload(event: dict[str, Any], text: str, url: str) -> dict[str
         "body": text,
         "tag": f"notification-{notification.get('id')}",
         "url": url,
+        "icon": _icon_path(actor.get("id")),
+        "badge": BADGE_PATH,
         "notification_id": notification.get("id"),
     }
 

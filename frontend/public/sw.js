@@ -83,12 +83,37 @@ self.addEventListener('push', (event) => {
       // notification, so a burst collapses instead of stacking up.
       tag,
       renotify: Boolean(tag),
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
+      // The sender's avatar with the Pulse mark on it, so an alert shows who it
+      // is about and where it came from. Resolved against the worker's origin
+      // because the OS draws the notification and has no page to resolve a
+      // relative path against; an icon it cannot fetch is dropped, leaving the
+      // alert blank.
+      icon: absolute(payload.icon) || '/icon-192.png',
+      // A monochrome mark, tinted by the system. Android shows this in the
+      // status bar, where a full-colour image would be flattened to a smear.
+      badge: absolute(payload.badge) || '/badge-96.png',
       data: { url, accountId: payload.account_id },
     }),
   )
 })
+
+/**
+ * Make a payload path absolute against this worker's origin.
+ *
+ * The service worker is served from the site (Vercel), while the API lives on
+ * another host, so a path the server sent is relative to the *site*, not the
+ * API. Resolving it here is what lets the API name its own icon route without
+ * knowing the public origin. Returns undefined for anything missing, so the
+ * caller's fallback applies rather than passing "undefined" to the OS.
+ */
+function absolute(path) {
+  if (!path) return undefined
+  try {
+    return new URL(path, self.location.origin).href
+  } catch {
+    return undefined
+  }
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()

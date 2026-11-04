@@ -5,7 +5,12 @@ import { CloseIcon, ReplyIcon } from './Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import type { RealtimeEvent } from '../context/RealtimeContext'
 import { playNotificationSound } from '../lib/sound'
-import { isPageHidden, requestDesktopPermission, showDesktopNotification } from '../lib/desktopNotify'
+import {
+  isPageHidden,
+  notificationIconUrl,
+  requestDesktopPermission,
+  showDesktopNotification,
+} from '../lib/desktopNotify'
 import { linkAccountsToPush, syncPushSubscription } from '../lib/push'
 import { useAuth } from '../context/AuthContext'
 import type { RealtimeNotification } from '../lib/types'
@@ -96,6 +101,7 @@ export function NotificationCenter() {
               title: name,
               body,
               tag: `dm-${message.conversation_id}`,
+              icon: notificationIconUrl(message.sender.id),
               onClick: () => navigate(`/messages/${message.conversation_id}`),
             })
           } else {
@@ -124,6 +130,7 @@ export function NotificationCenter() {
               title: 'Pulse',
               body: text,
               tag: `notification-${notification.id}`,
+              icon: notificationIconUrl(event.actor?.id),
               onClick: () => navigate(notificationLink(notification)),
             })
             return

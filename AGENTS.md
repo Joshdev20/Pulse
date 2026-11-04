@@ -666,6 +666,26 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
 - `frontend/public/` is served verbatim and is not bundled, so `sw.js` is plain JavaScript
   and cannot import from `src/`. Check the file mode when adding to it: it was committed
   `600` once, which would not be served.
+- A push notification shows a *branded* icon: the sender's avatar with the Pulse mark set
+  into the corner, composed by `branding.notification_icon` and served from
+  `GET /api/push/icon/{id}.png`. An alert that shows only the logo loses who it is about;
+  one that shows only the face loses where it came from. The route is public because the
+  OS's notification daemon fetches it with no session, and may run with the browser closed.
+- The icon and badge in a payload are **same-origin paths**, resolved against the service
+  worker's origin (`absolute()` in `sw.js`), not the API's host. The OS has no page to
+  resolve a relative URL against and silently drops an icon it cannot fetch, so a relative
+  path would blank every alert. `vercel.json` rewrites `/api/push/icon/*` to the API for the
+  same reason `/api/preview/*` is rewritten; dev works because Vite proxies `/api`.
+- The Android badge (`public/badge-96.png`) must be a **white silhouette on transparency**.
+  Android tints it to one system colour, so the full-colour mark would flatten into an
+  unreadable blob. It is generated, not hand-drawn: `python -m app.branding` writes it and
+  `notification-mark-512.png` from the same `brand_mark` the icon uses, so the favicon
+  gradient, the icon and the badge cannot drift apart. `tests/test_push.py` asserts the
+  badge stays monochrome and that `sw.js` still reads `payload.icon`/`payload.badge`.
+- The avatar, palette and initials-tile drawing live in `app/branding.py` and are shared by
+  the preview card (`routers/preview.py` aliases them back to their old `_`-prefixed names)
+  and the notification icon. Two copies of the initials tile had already drifted once; add
+  new drawing there rather than in a route.
 - When driving the Settings page in a browser, do not select `input.switch-input` by class
   alone: the notification-sound row and the push row both use it, and `querySelector` returns
   the sound toggle first. Select the `.switch-row` whose `.card-title` contains "Push". A
