@@ -294,15 +294,12 @@ export function PostCard({
                 same thing read as a broken control. */}
 
             {/* The view count sits in the action row with the other counts,
-                right after the repost control, and reads even at zero: it is
-                the author's own analytics, so a fresh post shows 0 rather than
-                nothing. */}
-            {isOwn && (
-              <span className="action views" aria-label={`${content.view_count} views`}>
-                <EyeIcon size={17} />
-                <span>{formatCount(content.view_count)}</span>
-              </span>
-            )}
+                right after the repost control, and reads even at zero so a
+                fresh post still shows a number rather than a gap. */}
+            <span className="action views" aria-label={`${content.view_count} views`}>
+              <EyeIcon size={17} />
+              <span>{formatCount(content.view_count)}</span>
+            </span>
           </div>
         </div>
       </div>
