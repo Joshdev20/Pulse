@@ -293,10 +293,11 @@ export function PostCard({
                 overflow menu ("Copy link"), and a second button that only did the
                 same thing read as a broken control. */}
 
-            {/* The view count is shown for the author only. To everyone else it
-                would be a number to compare against, which changes how people
-                post; the author is the one person it is actually feedback for. */}
-            {isOwn && content.view_count > 0 && (
+            {/* The view count sits in the action row with the other counts,
+                right after the repost control, and reads even at zero: it is
+                the author's own analytics, so a fresh post shows 0 rather than
+                nothing. */}
+            {isOwn && (
               <span className="action views" aria-label={`${content.view_count} views`}>
                 <EyeIcon size={17} />
                 <span>{formatCount(content.view_count)}</span>
