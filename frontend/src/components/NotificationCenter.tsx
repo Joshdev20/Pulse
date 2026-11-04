@@ -42,6 +42,8 @@ function notificationText(event: RealtimeEvent): string | null {
       return `${name} started following you`
     case 'repost':
       return `${name} reposted your post`
+    case 'post':
+      return `${name} shared a new post`
     default:
       return null
   }

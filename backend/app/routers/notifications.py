@@ -45,6 +45,9 @@ def notification_text(event: dict) -> str | None:
         "comment": f"{name} replied to your post",
         "follow": f"{name} started following you",
         "repost": f"{name} reposted your post",
+        # Sent to an author's followers, so it reads as news from them rather
+        # than as something done to the recipient.
+        "post": f"{name} shared a new post",
     }.get(kind)
 
 

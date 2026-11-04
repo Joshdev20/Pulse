@@ -9,7 +9,7 @@ from sqlalchemy import or_, select
 
 from .. import images, storage
 from ..deps import CurrentUser, DbSession, OptionalUser, serialize_media
-from ..models import Media, Post, User
+from ..models import ConversationParticipant, Media, Message, Post, User
 from ..schemas import MediaOut
 
 router = APIRouter(prefix="/api/media", tags=["media"])
@@ -127,47 +127,55 @@ async def upload(
     return serialize_media([media])[0]
 
 
-def _visible_to(db, media: Media, viewer: User | None) -> bool:
-    """Media is readable by anyone who can read the post or message it belongs to.
+def _media_access(db, media: Media, viewer: User | None) -> tuple[bool, bool] | None:
+    """Decide visibility and shared-cacheability in one round trip.
 
-    An attachment not yet linked to a post or message is private to its owner,
-    so an upload cannot be probed for by guessing ids.
+    Returns ``(visible, publicly_cacheable)``, or None when the caller may not
+    read the media at all.
 
-    ``viewer`` is None for an anonymous visitor. Post attachments and profile
-    pictures are public, because the posts and profiles they belong to are now
-    publicly readable; anything reached through a direct message is not, and
-    neither is an unattached upload.
+    The two questions are answered together because each is a query, and the
+    database may be in another region: the media route previously issued up to
+    three separate lookups (post, profile image, then post again for the cache
+    header), each paying a full network round trip. Folding them into one SELECT
+    is the difference between one hop and three.
+
+    ``publicly_cacheable`` is true only for a post attachment or a profile
+    picture. A direct-message attachment is neither, so it stays out of a shared
+    cache — the same rule as before, now evaluated server-side.
     """
+    # A post attachment is public the moment the post exists. One existence
+    # check covers both the visibility answer and the cacheable answer here.
     if media.post_id is not None:
-        return db.get(Post, media.post_id) is not None
+        exists = db.scalar(select(Post.id).where(Post.id == media.post_id).limit(1))
+        # A row naming a post that no longer exists is treated as not visible.
+        return (True, True) if exists is not None else None
 
     if media.message_id is not None:
-        # The one boundary that must not move. A direct message is private to
-        # its participants, so an anonymous visitor is refused outright rather
-        # than falling through to a later branch.
         if viewer is None:
-            return False
-        from ..models import ConversationParticipant, Message
-
-        message = db.get(Message, media.message_id)
-        if message is None:
-            return False
-        return (
-            db.scalar(
-                select(ConversationParticipant.id).where(
-                    ConversationParticipant.conversation_id == message.conversation_id,
-                    ConversationParticipant.user_id == viewer.id,
-                )
+            return None
+        # A direct message is private to its participants. Both checks are one
+        # EXISTS over the join rather than a message fetch followed by a
+        # participant lookup.
+        participant = db.scalar(
+            select(ConversationParticipant.id)
+            .join(Message, Message.conversation_id == ConversationParticipant.conversation_id)
+            .where(
+                Message.id == media.message_id,
+                ConversationParticipant.user_id == viewer.id,
             )
-            is not None
+            .limit(1)
         )
+        return (True, False) if participant is not None else None
 
+    # Not attached to anything: it is only readable while it is somebody's
+    # picture or header, and that case is shared-cacheable because it renders
+    # beside every post the account owns.
     if is_public_profile_image(db, media):
-        return True
+        return True, True
 
     if viewer is None:
-        return False
-    return viewer.id == media.owner_id
+        return None
+    return (True, False) if viewer.id == media.owner_id else None
 
 
 def is_public_profile_image(db, media: Media) -> bool:
@@ -251,14 +259,17 @@ def poster(media_id: int, db: DbSession, viewer: OptionalUser, request: Request)
 
     Separate from the video's own route so a feed can ask for a few kilobytes
     instead of the whole file. Visibility is the *same* rule as the video's —
-    ``_visible_to`` is called here rather than a looser check, so a poster can
+    ``_media_access`` is called here rather than a looser check, so a poster can
     never disclose a video the caller may not read.
     """
     media = db.get(Media, media_id)
     if media is None or media.poster_content_type is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
-    if not _visible_to(db, media, viewer):
+
+    decision = _media_access(db, media, viewer)
+    if decision is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
+    _, publicly_cacheable = decision
 
     blob = media.poster_blob
     if not blob:
@@ -272,9 +283,7 @@ def poster(media_id: int, db: DbSession, viewer: OptionalUser, request: Request)
         # Same reasoning as the video: public when the video is public, private
         # otherwise, and `Vary: Authorization` keeps a shared cache honest.
         "Cache-Control": (
-            "public, max-age=86400"
-            if media.post_id is not None or is_public_profile_image(db, media)
-            else "private, max-age=86400"
+            "public, max-age=86400" if publicly_cacheable else "private, max-age=86400"
         ),
         # Distinct from the video's ETag: same id, different bytes.
         "ETag": _poster_etag(media),
@@ -293,14 +302,37 @@ def download(
     media = db.get(Media, media_id)
     if media is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
-    if not _visible_to(db, media, viewer):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
 
-    # Public media (a post attachment or a profile picture) may be cached by a
-    # shared cache; everything else is per-viewer and must not be. Deriving this
-    # rather than assuming keeps a direct-message image out of a CDN even if the
-    # visibility rule above ever changes.
-    publicly_cacheable = media.post_id is not None or is_public_profile_image(db, media)
+    # One round trip answers both "may this be read" and "may a shared cache
+    # keep it". On a database in another region the round trips are what a
+    # request costs, so they are counted.
+    decision = _media_access(db, media, viewer)
+    if decision is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Media not found")
+    _, publicly_cacheable = decision
+
+    cache_control = (
+        "public, max-age=86400" if publicly_cacheable else "private, max-age=86400"
+    )
+
+    # The ETag is derived from `stored_name`, which is already loaded, so a
+    # conditional request can be answered before the blob is read. Serving the
+    # 304 here means a repeat view never touches the bytes at all.
+    etag = _etag(media)
+    if _is_immutable_cache_hit(media, request.headers, etag=etag):
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED,
+            headers={
+                "ETag": etag,
+                "Cache-Control": cache_control,
+                "Vary": "Authorization",
+            },
+        )
+
+    # Read the blob once. `blob` is a deferred column, so the first attribute
+    # access issues its own SELECT; reading it here rather than testing it and
+    # then passing it to the response keeps that to a single round trip.
+    blob = media.blob
 
     # Bytes stored in the row are the durable copy and are preferred. Older
     # rows have no blob, and a local deployment may still hold the file, so the
@@ -310,22 +342,18 @@ def download(
         # else (PDF) and never let the browser sniff a different type.
         "Content-Disposition": _content_disposition(media),
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": (
-            "public, max-age=86400" if publicly_cacheable else "private, max-age=86400"
-        ),
+        "Cache-Control": cache_control,
         # The bytes never change for an id, so a validator makes a repeat load a
         # 304 with no body. `Vary: Authorization` is required because the
         # response can be per-viewer: a shared cache must not hand one account's
         # bytes to another. Do not drop it when adding a shared cache.
-        "ETag": _etag(media),
+        "ETag": etag,
         "Vary": "Authorization",
     }
-    if _is_immutable_cache_hit(media, request.headers):
-        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
 
-    if media.blob is not None:
+    if blob is not None:
         return StreamingResponse(
-            _stream_blob(media.blob),
+            _stream_blob(blob),
             media_type=media.content_type,
             headers=headers,
         )
