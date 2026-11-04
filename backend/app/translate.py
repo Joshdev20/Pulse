@@ -279,32 +279,81 @@ def _translate_chunk(
 ) -> tuple[str | None, str | None]:
     """Translate one piece as ``(translated_text, detected_source)``.
 
-    The request is tried as ``Autodetect`` first, so the service's own answer
-    governs and a wrong local guess cannot make it echo the text back. Pinning a
-    source that came from a local guess is exactly what made an Igbo post come
-    back untranslated: the detector said Vietnamese, the service was told
-    "Vietnamese", and it returned the Igbo text almost unchanged.
+    Providers are tried in order and the first that answers wins. The order is
+    not arbitrary: the first is the one that answers from this deployment's
+    egress address, which is not the one that answers from a laptop. Both are
+    free and keyless, so neither can be dropped, and trying the other after a
+    refusal is what keeps translation working when one is throttled.
 
-    The free service refuses ``Autodetect`` for some callers, though — a
-    deployment behind a shared egress address is turned away where a laptop is
-    not — so a rejected autodetect falls back to the source the caller named.
-    That is the path that always worked, and by now the source is usually right:
-    the languages the local detector gets wrong are read from their own letters
-    before this call. The label follows the service when it names a language, and
-    the caller's source otherwise.
+    ``source`` is used only as a fallback when a provider refuses to autodetect.
+    It is never pinned first: pinning a wrong local guess is exactly what made an
+    Igbo post come back untranslated, because the detector said Vietnamese, the
+    provider was told "Vietnamese", and it returned the Igbo text unchanged.
 
-    Returns ``(None, None)`` when neither attempt could answer.
+    Returns ``(None, None)`` when no provider could answer.
+    """
+    for provider in (_translate_google, _translate_mymemory):
+        result = provider(client, chunk, source, target)
+        if result is not None:
+            return result
+    return (None, None)
+
+
+def _translate_google(
+    client: httpx.Client, chunk: str, source: str | None, target: str
+) -> tuple[str, str | None] | None:
+    """Translate via the endpoint the Chrome dictionary extension uses.
+
+    Answers with ``[[text, detected]]``. It translates Igbo and names it as
+    Igbo, where the other provider has no Igbo at all, so it is tried first.
+    """
+    del source  # Google detects the source itself; nothing to pin.
+    try:
+        response = client.get(
+            settings.translate_google_endpoint,
+            params={"client": "dict-chrome-ex", "sl": "auto", "tl": target, "q": chunk},
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:  # noqa: BLE001 - try the next provider
+        logger.info("google translation unavailable", exc_info=True)
+        return None
+
+    # Shape is a list of segments: [["text", "detected"], ...].
+    if not isinstance(payload, list) or not payload:
+        return None
+    first = payload[0]
+    if not isinstance(first, list) or not first:
+        return None
+    translated = first[0]
+    if not isinstance(translated, str) or not translated.strip():
+        return None
+    detected = first[1] if len(first) > 1 and isinstance(first[1], str) else None
+    return (translated, detected.lower() if detected else None)
+
+
+def _translate_mymemory(
+    client: httpx.Client, chunk: str, source: str | None, target: str
+) -> tuple[str, str | None] | None:
+    """Translate via MyMemory, autodetecting first and pinning only on refusal.
+
+    The free tier turns away some callers for ``Autodetect`` — a deployment
+    behind a shared egress address is refused where a laptop is not — so a
+    rejected autodetect falls back to the source the caller named. The label
+    follows the service when it names a language, and the caller's source
+    otherwise.
     """
     payload = _request_translation(client, chunk, f"Autodetect|{target}")
     if payload is None and source and source.lower() != "autodetect":
         payload = _request_translation(client, chunk, f"{source}|{target}")
     if payload is None:
-        return (None, None)
+        return None
 
     data = payload.get("responseData") or {}
     translated = data.get("translatedText")
     if not isinstance(translated, str) or not translated.strip():
-        return (None, None)
+        return None
 
     detected = data.get("detectedLanguage")
     detected = detected.lower() if isinstance(detected, str) and detected else None
@@ -314,7 +363,7 @@ def _translate_chunk(
 def _request_translation(
     client: httpx.Client, chunk: str, pair: str
 ) -> dict[str, Any] | None:
-    """One call to the translation service, or None if it did not answer."""
+    """One call to MyMemory, or None if it did not answer."""
     try:
         response = client.get(
             settings.translate_endpoint,

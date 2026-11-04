@@ -161,6 +161,11 @@ class Settings(BaseSettings):
     # turns the whole feature off — the UI then shows no translate affordance at
     # all rather than a button that fails.
     translate_enabled: bool = True
+    # Translation is tried against these in order and the first that answers wins.
+    # Both are free and keyless. The Google endpoint is the one the Chrome
+    # dictionary extension uses; it translates Igbo and names it correctly, which
+    # the other does not. MyMemory is the fallback for when Google is throttled.
+    translate_google_endpoint: str = "https://clients5.google.com/translate_a/t"
     translate_endpoint: str = "https://api.mymemory.translated.net/get"
     # The service refuses anything longer than 500 characters per request, so a
     # longer post is split on sentence boundaries and translated in pieces.
