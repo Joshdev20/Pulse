@@ -480,3 +480,73 @@ def test_a_lost_view_race_does_not_fail_the_request(client, make_user):
     assert response.status_code == 200
     # Counted once, not twice.
     assert response.json()["view_count"] == 1
+
+
+def test_reading_a_post_from_a_profile_counts_a_view(client, make_user):
+    """The profile grid is where people browse; it must count views too.
+
+    This path serves the same post as the detail endpoint but did not record a
+    view, so a post read only from a profile could show fewer views than likes.
+    """
+    author, _ = make_user("author")
+    reader, _ = make_user("reader")
+    post_id = client.post("/api/posts", headers=author, json={"body": "hello there"}).json()["id"]
+
+    client.get("/api/users/author/posts", headers=reader)
+
+    assert client.get(f"/api/posts/{post_id}", headers=author).json()["view_count"] == 1
+
+
+def test_reading_a_post_from_search_counts_a_view(client, make_user):
+    author, _ = make_user("author")
+    reader, _ = make_user("reader")
+    post_id = client.post(
+        "/api/posts", headers=author, json={"body": "a uniquely searchable phrase"}
+    ).json()["id"]
+
+    client.get("/api/search/posts", headers=reader, params={"q": "uniquely searchable"})
+
+    assert client.get(f"/api/posts/{post_id}", headers=author).json()["view_count"] == 1
+
+
+def test_liking_a_post_records_a_view(client, make_user):
+    """A like proves a read, so it must never leave likes above views.
+
+    The post is served here by the like response itself, with no prior view, so
+    the liker is counted as a viewer.
+    """
+    author, _ = make_user("author")
+    liker, _ = make_user("liker")
+    post_id = client.post("/api/posts", headers=author, json={"body": "hello there"}).json()["id"]
+
+    liked = client.post(f"/api/posts/{post_id}/like", headers=liker)
+    assert liked.status_code == 200
+    assert liked.json()["like_count"] == 1
+    assert liked.json()["view_count"] == 1
+
+
+def test_a_post_never_shows_more_likes_than_views(client, make_user):
+    author, _ = make_user("author")
+    post_id = client.post("/api/posts", headers=author, json={"body": "hello there"}).json()["id"]
+
+    for name in ("liker1", "liker2", "liker3"):
+        liker, _ = make_user(name)
+        client.post(f"/api/posts/{post_id}/like", headers=liker)
+
+    body = client.get(f"/api/posts/{post_id}", headers=author).json()
+    assert body["view_count"] >= body["like_count"]
+
+
+def test_liking_your_own_post_counts_you_as_a_viewer(client, make_user):
+    """Self-likes are allowed, so they must not push likes above views.
+
+    An author can like their own post, and their own reads are normally not
+    counted, so that like would otherwise sit above the view count forever.
+    """
+    author, _ = make_user("author")
+    post_id = client.post("/api/posts", headers=author, json={"body": "hello there"}).json()["id"]
+
+    liked = client.post(f"/api/posts/{post_id}/like", headers=author)
+    assert liked.status_code == 200
+    assert liked.json()["like_count"] == 1
+    assert liked.json()["view_count"] == 1
