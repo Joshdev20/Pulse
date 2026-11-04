@@ -4,6 +4,11 @@ The browser subscribes against the push service itself; this router only records
 the resulting endpoint so the server can use it later. The public key is exposed
 so a client can subscribe without the key being baked into the bundle — the
 bundle is built once and the key belongs to the deployment, not the build.
+
+A browser can be signed into several accounts at once. The endpoint is stored
+once and *linked* to each account that subscribes on it, so switching accounts in
+the same browser never cuts off the account that is not in front. See
+``PushSubscriptionUser``.
 """
 
 import base64
@@ -15,7 +20,7 @@ from sqlalchemy import delete, select
 
 from ..config import settings
 from ..deps import CurrentUser, DbSession
-from ..models import PushSubscription, utcnow
+from ..models import PushSubscription, PushSubscriptionUser, utcnow
 
 router = APIRouter(prefix="/api/push", tags=["push"])
 
@@ -41,12 +46,12 @@ class PushStatus(BaseModel):
     enabled: bool
     public_key: str | None
     devices: int
-    # Whether the caller's own browser endpoint is still on file. `None` when the
-    # client did not say which endpoint it holds. `False` means the row is gone
-    # (it was pruned after a VAPID key rotation, or it belongs to another account
-    # on this shared browser), so the device is not deliverable and the client
-    # must register again. Without this the settings toggle reads "subscribed"
-    # from the browser's own subscription while the server has nothing to send to.
+    # Whether the caller's own browser endpoint is still linked to this account.
+    # `None` when the client did not say which endpoint it holds. `False` means
+    # the link is gone (it was pruned after a VAPID key rotation, or the account
+    # was signed out on this browser), so the client must register again. Without
+    # this the settings toggle reads "subscribed" from the browser's own
+    # subscription while the server has nothing to send to for this account.
     endpoint_registered: bool | None = None
 
 
@@ -54,6 +59,10 @@ class PushUnsubscribe(BaseModel):
     """Unsubscribing needs only the endpoint: the keys are not used to send."""
 
     endpoint: str = Field(min_length=1, max_length=MAX_ENDPOINT)
+    # When true, the whole endpoint is dropped rather than just this account's
+    # link to it. The push switch turning off means "stop sending this browser
+    # anything", so the endpoint itself goes.
+    all: bool = False
 
 
 def _valid_key(value: str) -> bool:
@@ -85,15 +94,21 @@ def push_status(
     one and re-subscribe.
     """
     devices = len(
-        db.scalars(select(PushSubscription.id).where(PushSubscription.user_id == user.id)).all()
+        db.scalars(
+            select(PushSubscription.id)
+            .join(PushSubscriptionUser, PushSubscriptionUser.subscription_id == PushSubscription.id)
+            .where(PushSubscriptionUser.user_id == user.id)
+        ).all()
     )
     registered: bool | None = None
     if endpoint:
         registered = (
             db.scalar(
-                select(PushSubscription.id).where(
+                select(PushSubscriptionUser.id)
+                .join(PushSubscription, PushSubscription.id == PushSubscriptionUser.subscription_id)
+                .where(
                     PushSubscription.endpoint == endpoint,
-                    PushSubscription.user_id == user.id,
+                    PushSubscriptionUser.user_id == user.id,
                 )
             )
             is not None
@@ -110,7 +125,13 @@ def push_status(
 def subscribe(
     payload: PushSubscribe, request: Request, db: DbSession, user: CurrentUser
 ) -> dict[str, int]:
-    """Record (or refresh) this browser's push endpoint for the current user."""
+    """Link this browser's push endpoint to the current account.
+
+    The endpoint is stored once and *linked* to every account that subscribes on
+    it. Signing into a second account in the same browser therefore adds a link
+    rather than reassigning the endpoint — which is what previously cut the first
+    account off, exactly when its alerts mattered most (you are not looking at it).
+    """
     if not settings.push_configured:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Push notifications are not configured"
@@ -124,35 +145,79 @@ def subscribe(
         select(PushSubscription).where(PushSubscription.endpoint == payload.endpoint)
     )
     if existing is None:
-        existing = PushSubscription(endpoint=payload.endpoint)
+        # `user_id` records the account that first registered this endpoint. It
+        # predates multi-account support and is NOT NULL; the delivery set is the
+        # link table below, which every subscribing account is added to.
+        existing = PushSubscription(endpoint=payload.endpoint, user_id=user.id)
         db.add(existing)
-    # Re-subscribing is the normal path after a key rotation, and a shared
-    # browser can be signed into a different account than last time, so the
-    # owner and keys are always overwritten rather than left stale.
-    existing.user_id = user.id
+    # Re-subscribing is the normal path after a key rotation, so the keys and the
+    # device label are always refreshed. The owner is *not* reassigned: the link
+    # table below records which accounts this endpoint serves.
     existing.p256dh = payload.keys.p256dh
     existing.auth = payload.keys.auth
     existing.user_agent = (request.headers.get("user-agent") or "")[:200]
     existing.last_used_at = utcnow()
+    db.flush()
+
+    link = db.scalar(
+        select(PushSubscriptionUser).where(
+            PushSubscriptionUser.subscription_id == existing.id,
+            PushSubscriptionUser.user_id == user.id,
+        )
+    )
+    if link is None:
+        db.add(PushSubscriptionUser(subscription_id=existing.id, user_id=user.id))
     db.commit()
 
     devices = len(
-        db.scalars(select(PushSubscription.id).where(PushSubscription.user_id == user.id)).all()
+        db.scalars(
+            select(PushSubscription.id)
+            .join(PushSubscriptionUser, PushSubscriptionUser.subscription_id == PushSubscription.id)
+            .where(PushSubscriptionUser.user_id == user.id)
+        ).all()
     )
     return {"devices": devices}
 
 
 @router.post("/unsubscribe")
 def unsubscribe(payload: PushUnsubscribe, db: DbSession, user: CurrentUser) -> dict[str, int]:
-    """Forget an endpoint. Scoped to the caller, so it cannot drop another's."""
-    db.execute(
-        delete(PushSubscription).where(
-            PushSubscription.endpoint == payload.endpoint,
-            PushSubscription.user_id == user.id,
-        )
+    """Stop pushing to an endpoint.
+
+    By default only this account's link is removed, so signing out of one account
+    on a shared browser leaves the other account's alerts intact. With ``all``
+    set — the user switching push off — the endpoint itself is deleted, because
+    that choice means "nothing from this browser".
+    """
+    subscription = db.scalar(
+        select(PushSubscription).where(PushSubscription.endpoint == payload.endpoint)
     )
+    if subscription is not None:
+        if payload.all:
+            # Scoped through the caller's own link, so one account cannot delete
+            # an endpoint that belongs only to somebody else.
+            owned = db.scalar(
+                select(PushSubscriptionUser.id).where(
+                    PushSubscriptionUser.subscription_id == subscription.id,
+                    PushSubscriptionUser.user_id == user.id,
+                )
+            )
+            if owned is not None:
+                db.execute(
+                    delete(PushSubscription).where(PushSubscription.id == subscription.id)
+                )
+        else:
+            db.execute(
+                delete(PushSubscriptionUser).where(
+                    PushSubscriptionUser.subscription_id == subscription.id,
+                    PushSubscriptionUser.user_id == user.id,
+                )
+            )
     db.commit()
     devices = len(
-        db.scalars(select(PushSubscription.id).where(PushSubscription.user_id == user.id)).all()
+        db.scalars(
+            select(PushSubscription.id)
+            .join(PushSubscriptionUser, PushSubscriptionUser.subscription_id == PushSubscription.id)
+            .where(PushSubscriptionUser.user_id == user.id)
+        ).all()
     )
     return {"devices": devices}

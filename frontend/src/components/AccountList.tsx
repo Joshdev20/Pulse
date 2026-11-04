@@ -28,6 +28,12 @@ export function AccountList({ onClose }: { onClose: () => void }) {
    * The menu must stay open on failure: `error` is rendered inside it, so
    * closing first would hide the only explanation the user gets. It closes only
    * once the new session is live.
+   *
+   * On success we send the user to the home feed rather than leaving them where
+   * they were. The route they are on may belong to the previous account — a
+   * profile, a thread, a settings screen — and landing there as somebody else
+   * reads as the switch having failed. The home feed is the one destination that
+   * is correct for every account.
    */
   async function choose(id: number) {
     setError(null)
@@ -35,6 +41,7 @@ export function AccountList({ onClose }: { onClose: () => void }) {
     try {
       await switchAccount(id)
       onClose()
+      navigate('/')
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not switch account')
     } finally {

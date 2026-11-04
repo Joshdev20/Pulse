@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
-import { PostText } from '../components/PostCard'
 import { MediaGallery } from '../components/MediaGallery'
 import { CommentNode } from '../components/CommentThread'
 import { EditPostModal } from '../components/EditPostModal'
@@ -10,11 +9,12 @@ import {
   ArrowLeftIcon,
   CommentIcon,
   HeartIcon,
+  LinkIcon,
   MoreIcon,
-  ShareIcon,
   TrashIcon,
   EditIcon,
 } from '../components/Icons'
+import { TranslatedText } from '../components/TranslatedText'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
@@ -208,7 +208,7 @@ export function PostDetailPage() {
                         void copyLink()
                       }}
                     >
-                      <ShareIcon size={16} /> Copy link
+                      <LinkIcon size={16} /> Copy link
                     </button>
                     {user?.id === post.author.id && (
                       <>
@@ -239,7 +239,7 @@ export function PostDetailPage() {
               </Dropdown>
             </div>
 
-            <PostText body={post.body} className="detail-text" />
+            <TranslatedText post={post} className="detail-text" />
 
             <MediaGallery items={post.media} />
 
@@ -260,6 +260,14 @@ export function PostDetailPage() {
               <span>
                 <strong>{formatCount(post.comment_count)}</strong> replies
               </span>
+              {/* Views are shown to the author only: for everyone else the
+                  number would be a yardstick to post against, and the author is
+                  the one person it is genuine feedback for. */}
+              {user?.id === post.author.id && post.view_count > 0 && (
+                <span>
+                  <strong>{formatCount(post.view_count)}</strong> views
+                </span>
+              )}
             </div>
           </article>
 
@@ -287,9 +295,9 @@ export function PostDetailPage() {
             >
               <CommentIcon size={19} /> Reply
             </button>
-            <button type="button" className="action share" onClick={copyLink}>
-              <ShareIcon size={19} /> Share
-            </button>
+            {/* No share action: the same link is one tap away in the overflow
+                menu ("Copy link"), and a button that only duplicated it read as
+                broken. */}
           </div>
 
           {user ? (

@@ -24,6 +24,7 @@ from ..models import (
     Media,
     Notification,
     Post,
+    PostView,
     User,
     utcnow,
 )
@@ -34,10 +35,12 @@ from ..schemas import (
     Page,
     PostCreate,
     PostOut,
+    PostTranslation,
     PostUpdate,
     UserPublic,
 )
 from ..tagging import extract_tag_names, resolve_tags
+from ..translate import detect_language, language_name, translate_text
 
 router = APIRouter(prefix="/api", tags=["posts"])
 
@@ -65,6 +68,27 @@ def _get_post_or_404(db: DbSession, post_id: int) -> Post:
     if post is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Post not found")
     return post
+
+
+def _record_view(db: DbSession, post: Post, viewer: User) -> None:
+    """Record that ``viewer`` has seen ``post``, at most once.
+
+    The unique constraint on (post_id, user_id) is the dedupe, so a lost race
+    with a second tab is caught here and ignored: "already seen" is the correct
+    outcome, not an error. The author's own views are not counted — the number
+    under a post is meant to say how many *other* people saw it.
+
+    A view is not worth failing a request over, so every failure is swallowed.
+    """
+    if post.author_id == viewer.id:
+        return
+    db.add(PostView(post_id=post.id, user_id=viewer.id))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+    except Exception:  # noqa: BLE001 - a view count must never break a read
+        db.rollback()
 
 
 def _claim_media(db: DbSession, media_ids: list[int], user: User) -> list[Media]:
@@ -278,6 +302,33 @@ def _ordered_feed(
     )
 
 
+def _record_page_views(db: DbSession, page: dict, viewer: User) -> None:
+    """Record a view of every post in a serialized page.
+
+    Runs after the page is produced — cached or fresh — so scrolling the feed
+    counts the posts that were actually shown. One insert per post per account,
+    deduped by the unique constraint, so a refetch or a second scroll is free.
+    """
+    ids = {item["id"] for item in page.get("items", []) if isinstance(item, dict)}
+    if not ids:
+        return
+    # A single query for the authors avoids loading each post; only the author's
+    # own views are skipped, and that is the one field needed.
+    authors = dict(
+        db.execute(select(Post.id, Post.author_id).where(Post.id.in_(ids))).all()
+    )
+    for post_id, author_id in authors.items():
+        if author_id == viewer.id:
+            continue
+        db.add(PostView(post_id=post_id, user_id=viewer.id))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+    except Exception:  # noqa: BLE001 - a view count must never break a read
+        db.rollback()
+
+
 @router.get("/feed", response_model=Page)
 def feed(
     db: DbSession,
@@ -308,12 +359,14 @@ def feed(
 
         return _ordered_feed(db, query, viewer, seed, page, page_size).model_dump(mode="json")
 
-    return cache.get_or_set(
+    result = cache.get_or_set(
         "feed",
         settings.cache_ttl_seconds,
         (viewer.id, page, page_size, scope, seed or ""),
         produce,
     )
+    _record_page_views(db, result, viewer)
+    return result
 
 
 @router.get("/posts", response_model=Page)
@@ -323,7 +376,7 @@ def list_posts(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
 ) -> Page:
-    return cache.get_or_set(
+    result = cache.get_or_set(
         "posts",
         settings.cache_ttl_seconds,
         (viewer.id, page, page_size),
@@ -335,6 +388,8 @@ def list_posts(
             viewer,
         ).model_dump(mode="json"),
     )
+    _record_page_views(db, result, viewer)
+    return result
 
 
 @router.post("/posts", response_model=PostOut, status_code=status.HTTP_201_CREATED)
@@ -362,11 +417,36 @@ async def create_post(payload: PostCreate, db: DbSession, user: CurrentUser) -> 
 
 @router.get("/posts/{post_id}", response_model=PostOut)
 def get_post(post_id: int, db: DbSession, viewer: CurrentUser) -> PostOut:
+    post = _get_post_or_404(db, post_id)
+    # Counted before the read is served so the number the caller sees includes
+    # their own visit. The write is deduped and best-effort; it never fails the
+    # request.
+    _record_view(db, post, viewer)
     return cache.get_or_set(
         "posts",
         settings.cache_ttl_seconds,
         (viewer.id, post_id),
-        lambda: serialize_posts(db, [_get_post_or_404(db, post_id)], viewer)[0].model_dump(mode="json"),
+        lambda: serialize_posts(db, [post], viewer)[0].model_dump(mode="json"),
+    )
+
+
+@router.get("/posts/{post_id}/translation", response_model=PostTranslation)
+def translate_post(post_id: int, db: DbSession, viewer: CurrentUser) -> PostTranslation:
+    """Translate a post into the UI's language.
+
+    Returns the detected source language and the translation. A post already in
+    the target language, or one whose translation failed, comes back with
+    ``translated`` null rather than an error: the client simply does not offer
+    the toggle, which is the honest outcome when a best-effort service is down.
+    """
+    post = _get_post_or_404(db, post_id)
+    source, _ = detect_language(post.body)
+    if source is None:
+        return PostTranslation(source=None, source_name=None, translated=None)
+    return PostTranslation(
+        source=source,
+        source_name=language_name(source),
+        translated=translate_text(post.body, source),
     )
 
 

@@ -1158,6 +1158,64 @@ h4 {
   background: var(--rose-soft);
 }
 
+/* The view count is a readout, not a control: it sits at the end of the action
+   row and does not react to hover like the buttons beside it. */
+.action.views {
+  margin-left: auto;
+  cursor: default;
+  color: var(--text-faint);
+}
+
+.action.views:hover {
+  color: var(--text-faint);
+  background: none;
+}
+
+/* The translate prompt is deliberately quiet. It appears under a post the
+   reader cannot understand, so it should be findable without competing with
+   the post itself. */
+.translate-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.translate-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  margin-left: -8px;
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: color 0.16s ease, background 0.16s ease;
+}
+
+.translate-toggle:hover:not(:disabled) {
+  color: var(--sky);
+  background: var(--sky-soft);
+}
+
+.translate-toggle:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.translate-error {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* A translated body is marked with a left rule so it never reads as the
+   author's own words in the reader's language. */
+.post-translated {
+  border-left: 2px solid var(--sky-soft);
+  padding-left: 10px;
+}
+
 @keyframes pop {
   0% {
     transform: scale(1);

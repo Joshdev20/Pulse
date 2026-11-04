@@ -6,7 +6,7 @@ import { useRealtime } from '../context/RealtimeContext'
 import type { RealtimeEvent } from '../context/RealtimeContext'
 import { playNotificationSound } from '../lib/sound'
 import { isPageHidden, requestDesktopPermission, showDesktopNotification } from '../lib/desktopNotify'
-import { syncPushSubscription } from '../lib/push'
+import { linkAccountsToPush, syncPushSubscription } from '../lib/push'
 import { useAuth } from '../context/AuthContext'
 import type { RealtimeNotification } from '../lib/types'
 
@@ -161,8 +161,14 @@ export function NotificationCenter() {
   // push is discarded; re-sending it on each authenticated load is cheap and
   // self-healing. Only runs when permission is already granted, so it never
   // triggers a prompt.
+  //
+  // After the active account's endpoint is settled, every other account saved on
+  // this browser is linked to the same endpoint. Otherwise switching accounts
+  // would leave the account you are *not* using silent — which is the alert that
+  // matters most, since you are not looking at it.
   useEffect(() => {
-    if (user?.id) void syncPushSubscription(user.id)
+    if (!user?.id) return
+    void syncPushSubscription(user.id).then(() => linkAccountsToPush())
   }, [user?.id])
 
   if (popups.length === 0) return null

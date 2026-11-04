@@ -233,6 +233,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [activeAccountId, syncAccounts],
   )
 
+  /**
+   * Adopt the account named in `?pulse_account=` on load.
+   *
+   * A push notification for an account that is not the one in front links here
+   * with that account's id. The URL alone would land on the right page rendered
+   * for the wrong account, so the switch happens before the caller's navigation
+   * is left in place. The parameter is consumed once and stripped, so a refresh
+   * or a shared link does not keep re-triggering it.
+   *
+   * Runs after the first `refresh()` resolves, so it can rely on `activeAccountId`
+   * being settled. A failed switch is swallowed: the alert still lands the user
+   * on the page, just under the account they already had.
+   */
+  useEffect(() => {
+    if (loading) return
+    const params = new URLSearchParams(window.location.search)
+    const requested = Number(params.get('pulse_account'))
+    if (!Number.isFinite(requested) || requested <= 0) return
+
+    params.delete('pulse_account')
+    const query = params.toString()
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
+    )
+
+    if (requested === activeAccountId) return
+    if (!listAccounts().some((account) => account.id === requested)) return
+    void switchAccount(requested).catch(() => undefined)
+  }, [loading, activeAccountId, switchAccount])
+
   const forgetAccount = useCallback(
     (id: number) => {
       const wasActive = id === activeAccountId

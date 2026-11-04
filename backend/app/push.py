@@ -22,11 +22,11 @@ import threading
 from collections import deque
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import PushSubscription, User, utcnow
+from .models import PushSubscription, PushSubscriptionUser, User, utcnow
 
 logger = logging.getLogger("pulse.push")
 
@@ -284,11 +284,15 @@ def _is_bad_jwt(response: Any) -> bool:
 
 
 def notify_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:
-    """Push ``payload`` to every browser ``user_id`` has subscribed.
+    """Push ``payload`` to every browser linked to ``user_id``.
 
     Returns the number of endpoints the push service accepted. Rows whose
     endpoint is permanently gone are removed here, so the table self-heals
     instead of retrying a dead endpoint on every future event.
+
+    Every browser the account is linked to is delivered to, not just the one in
+    front: a device signed into two accounts must alert for both, and the one
+    not being looked at is the case that matters.
 
     This makes blocking network calls and must not be called from an event
     loop; use ``schedule_notify`` there.
@@ -297,7 +301,11 @@ def notify_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:
         return 0
 
     subscriptions = list(
-        db.scalars(select(PushSubscription).where(PushSubscription.user_id == user_id)).all()
+        db.scalars(
+            select(PushSubscription)
+            .join(PushSubscriptionUser, PushSubscriptionUser.subscription_id == PushSubscription.id)
+            .where(PushSubscriptionUser.user_id == user_id)
+        ).all()
     )
     if not subscriptions:
         return 0
@@ -305,13 +313,40 @@ def notify_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:
     delivered = 0
     for subscription in subscriptions:
         try:
-            if send_to_subscription(subscription, payload):
+            if send_to_subscription(subscription, _for_subscription(db, subscription, user_id, payload)):
                 subscription.last_used_at = utcnow()
                 delivered += 1
         except Exception:  # noqa: BLE001 - the endpoint is gone; prune it
+            # Deleting the endpoint removes its links too (cascade), so every
+            # account that shared it stops being retried against a dead device.
             db.execute(delete(PushSubscription).where(PushSubscription.id == subscription.id))
     db.commit()
     return delivered
+
+
+def _for_subscription(
+    db: Session, subscription: PushSubscription, user_id: int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Label the payload with the account it belongs to when the browser has more
+    than one.
+
+    A single-account browser needs no label: the alert is obviously theirs. A
+    browser serving several accounts must say which one, or a message meant for
+    the account in the background is indistinguishable from one meant for the
+    account in front — and the whole point of reaching a background account is
+    that the user cannot tell them apart by looking at the screen.
+    """
+    links = db.scalar(
+        select(func.count(PushSubscriptionUser.id)).where(
+            PushSubscriptionUser.subscription_id == subscription.id
+        )
+    )
+    if not links or links <= 1:
+        return payload
+
+    account = db.get(User, user_id)
+    label = account.display_name if account is not None else "Account"
+    return {**payload, "account": label, "account_id": user_id}
 
 
 def _deliver(user_id: int, payload: dict[str, Any]) -> None:
