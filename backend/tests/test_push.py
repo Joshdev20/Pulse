@@ -1252,6 +1252,20 @@ def test_the_icon_needs_no_authentication(client, make_user):
     assert client.get(f"/api/push/icon/{me['id']}.png").status_code == 200
 
 
+def test_the_icon_answers_head(client, make_user):
+    """A notification daemon may probe the image with HEAD before fetching it.
+
+    A 405 here is indistinguishable from a missing icon: the daemon drops the
+    picture and the alert shows with no avatar at all. The route must answer
+    HEAD as well as GET, with the same content type and length.
+    """
+    _, me = make_user("ada")
+    head = client.head(f"/api/push/icon/{me['id']}.png")
+    assert head.status_code == 200
+    assert head.headers["content-type"] == "image/png"
+    assert int(head.headers["content-length"]) > 0
+
+
 def test_the_service_worker_reads_the_icon_and_badge_from_the_payload():
     """The worker must forward the payload's icon, not a hard-coded logo.
 

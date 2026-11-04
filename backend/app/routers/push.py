@@ -122,7 +122,7 @@ def push_status(
     )
 
 
-@router.get("/icon/{user_id}.png", include_in_schema=False)
+@router.api_route("/icon/{user_id}.png", methods=["GET", "HEAD"], include_in_schema=False)
 def notification_icon(user_id: int, db: DbSession) -> Response:
     """The branded icon a notification for this actor is shown with.
 
@@ -142,6 +142,10 @@ def notification_icon(user_id: int, db: DbSession) -> Response:
     ``updated_at`` is not part of the URL, so a changed picture can lag by the
     cache lifetime; that is a fair trade for an icon that is otherwise fetched on
     every single alert.
+
+    Answers ``HEAD`` as well as ``GET``. A notification daemon that probes an
+    image's headers before fetching it would otherwise get a ``405`` and drop the
+    icon, leaving the alert with no picture at all.
     """
     user = db.get(User, user_id)
     if user is None:
