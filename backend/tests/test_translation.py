@@ -10,7 +10,13 @@ import pytest
 
 from app import translate as translate_module
 from app.config import settings
-from app.translate import _chunks, detect_language, language_name, translate_text
+from app.translate import (
+    _chunks,
+    detect_language,
+    language_name,
+    translate_text,
+    translate_with_detection,
+)
 
 
 # --------------------------------------------------------------------------
@@ -73,6 +79,43 @@ def test_detection_is_stable_across_calls():
     assert detect_language(body) == detect_language(body)
 
 
+# The statistical detector has no model for Igbo, Yoruba or Hausa, and does not
+# report them as unknown — it returns a confident wrong answer. Igbo in
+# particular is read as Vietnamese, which is what made an Igbo post both mislabel
+# and translate to nothing. These are recognised by their distinctive letters.
+
+
+def test_igbo_is_detected_by_its_dotted_vowels():
+    body = "ACHỌRỌ M EGO NA-ABATA KWA ỤBỌCHỊ NKE GA-EGBO MKPA M, KWADO EBUMNUCHE M"
+    assert detect_language(body) == ("ig", 1.0)
+    assert language_name("ig") == "Igbo"
+
+
+def test_igbo_with_a_nasal_is_still_igbo():
+    assert detect_language("Ọ dị mma ịhụ gị ebe a, gịnị ka ị na-eme ugbua?")[0] == "ig"
+
+
+def test_a_vietnamese_post_is_not_read_as_igbo():
+    """Vietnamese shares ị/ọ/ụ, so its own letters have to win."""
+    body = "Xin chào bạn, hôm nay bạn có khỏe không? Tôi rất vui được gặp bạn ở đây."
+    assert detect_language(body)[0] == "vi"
+
+
+def test_yoruba_is_detected_by_its_s():
+    assert detect_language("Báwo ni, ṣé dáadáa ni? Orúkọ mi ni Adéyẹmí")[0] == "yo"
+    assert language_name("yo") == "Yoruba"
+
+
+def test_hausa_is_detected_by_its_hooked_letters():
+    assert detect_language("Sannu, yaya kake? Sunana Musa, ina zaune a Kano, ɓ ɗ ƙ")[0] == "ha"
+    assert language_name("ha") == "Hausa"
+
+
+def test_english_is_untouched_by_the_script_check():
+    """The script layer must not claim English; the serializer drops `en` later."""
+    assert detect_language("This is a normal English post about the weather and the weekend.")[0] == "en"
+
+
 def test_language_name_maps_known_codes_and_ignores_unknown():
     assert language_name("fr") == "French"
     assert language_name("zh-cn") == "Chinese"
@@ -112,12 +155,15 @@ def test_a_single_oversized_sentence_is_still_split():
 
 @pytest.fixture
 def stub_service(monkeypatch):
-    """Replace the network call with a mapping, and record the chunks asked for."""
+    """Replace the network call with a mapping, and record the chunks asked for.
+
+    The stub returns the shape the real call does: ``(translation, detected)``.
+    """
     seen: list[str] = []
 
     def fake_chunk(client, chunk, source, target):
         seen.append(chunk)
-        return f"[{target}]{chunk}"
+        return (f"[{target}]{chunk}", "fr")
 
     monkeypatch.setattr(translate_module, "_translate_chunk", fake_chunk)
     return seen
@@ -152,12 +198,54 @@ def test_one_failed_chunk_discards_the_whole_translation(monkeypatch):
 
     def flaky(client, chunk, source, target):
         calls["n"] += 1
-        return None if calls["n"] == 2 else "ok"
+        return (None, None) if calls["n"] == 2 else ("ok", "fr")
 
     monkeypatch.setattr(translate_module, "_translate_chunk", flaky)
     text = " ".join(["Ceci est une phrase assez longue."] * 40)
 
     assert translate_text(text, "fr") is None
+
+
+def test_the_request_never_pins_the_local_guess(monkeypatch):
+    """A wrong pinned source is what made Igbo come back untranslated.
+
+    The service is always asked to autodetect, so its own answer governs and a
+    bad local guess cannot make it echo the text back.
+    """
+    pairs: list[str] = []
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {
+                "responseStatus": 200,
+                "responseData": {"translatedText": "hello", "detectedLanguage": "ig"},
+            }
+
+    class FakeClient:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, params=None):
+            pairs.append(params["langpair"])
+            return FakeResponse()
+
+    monkeypatch.setattr(translate_module.httpx, "Client", lambda **kw: FakeClient())
+
+    translated, detected = translate_with_detection("Ndewo, kedu ka ị mere?", "vi")
+    assert translated == "hello"
+    assert detected == "ig"
+    assert pairs == ["Autodetect|en"]
+
+
+def test_the_service_detection_is_reported_when_it_knows_the_language(monkeypatch):
+    """The label follows the service, which has actually seen the text."""
+    monkeypatch.setattr(
+        translate_module, "_translate_chunk",
+        lambda client, chunk, source, target: ("hello", "ig"),
+    )
+    translated, detected = translate_with_detection("Ndewo, kedu ka ị mere?", "ig")
+    assert translated == "hello"
+    assert detected == "ig"
 
 
 # --------------------------------------------------------------------------
@@ -189,6 +277,28 @@ def test_translation_endpoint_reports_no_translation_for_english(client, make_us
 
     body = client.get(f"/api/posts/{post['id']}/translation", headers=headers).json()
     assert body["translated"] is None
+
+
+def test_translation_endpoint_labels_an_igbo_post_as_igbo(client, make_user, monkeypatch):
+    """Igbo was labelled Vietnamese and translated to nothing; it is Igbo now."""
+    monkeypatch.setattr(
+        translate_module, "_translate_chunk",
+        lambda client, chunk, source, target: ("I want money that comes in daily", "ig"),
+    )
+    headers, _ = make_user("ada")
+    post = client.post(
+        "/api/posts",
+        headers=headers,
+        json={"body": "ACHỌRỌ M EGO NA-ABATA KWA ỤBỌCHỊ NKE GA-EGBO MKPA M"},
+    ).json()
+
+    assert post["language"] == "ig"
+    assert post["language_name"] == "Igbo"
+
+    body = client.get(f"/api/posts/{post['id']}/translation", headers=headers).json()
+    assert body["source"] == "ig"
+    assert body["source_name"] == "Igbo"
+    assert body["translated"] == "I want money that comes in daily"
 
 
 def test_translation_endpoint_requires_authentication(client, make_user):
