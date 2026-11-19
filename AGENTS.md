@@ -120,6 +120,13 @@ the public URL returns 502 until the dev server is bound to 12000.
   `localStorage` directly in components.
 - Paginated post lists use `usePostFeed`, and single async values use `useAsync`.
   Both ignore stale responses, so prefer them over hand-rolled `useEffect` fetches.
+- Pass a `cacheKey` to `useAsync` for anything a user returns to, or it refetches on every
+  mount. A key must include whatever makes the payload viewer-specific — a profile carries
+  `is_following`, so its key carries the viewer's id. Cached values are mutable records, so
+  every mutation that changes one must invalidate it: `setData` writes through to the cache,
+  `setUser` writes the server's user, and follow, post create, edit and delete drop the
+  affected `user:` and `profile:` entries. Missing invalidation shows as stale content on
+  the next visit rather than an obvious bug.
 - Optimistic updates are the norm for likes and follows: update local state first, then
   reconcile with the server response and roll back on error.
 - The theme lives in a module-level store in `lib/useTheme.ts` read through
