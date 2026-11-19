@@ -401,13 +401,29 @@ first paint" complaint:
    returning visitor (and an installed PWA is always one) sees it on every boot rather than
    jumping straight into the app.
 
-`main.tsx` removes the `.boot-splash` element a frame after React mounts, which is the
-handover between the two. Removing that line leaves the splash on top of the app forever;
-removing the splash itself puts the blank window back. Both were verified by screenshot:
-the splash matches the light (`#f6f7fb`) and dark (`#08090d`) page background exactly.
+`main.tsx` removes the `.boot-splash` element once React has committed a child into
+`#root`, which is the handover between the two. Do not go back to removing it on a fixed
+frame: `createRoot().render` schedules its work, so a single `requestAnimationFrame` can
+fire while the container is still empty and take the splash away exactly when a slow
+installed-PWA launch needs it. Removing the handover entirely leaves the splash on top of
+the app forever; removing the splash itself puts the blank window back. Both were verified
+by screenshot: the splash matches the light (`#f6f7fb`) and dark (`#08090d`) page
+background exactly.
 
 Do not gate the splash on a cached profile. That is exactly the regression that made the
 installed PWA open with no animation.
+
+### One shell for every route
+
+`App.tsx` renders `AppShell` through a single `<Shell>` route element, with `RequireAuth`
+nested *inside* it. The public `/u/:username` route sits in that shell but outside the
+auth gate, so a shared profile link still answers for a visitor and a crawler.
+
+Do not declare a second `<Layout>` for a route group. Two of them meant opening a profile
+from the feed unmounted the whole shell — realtime socket, notification centre and every
+cached page — and rebuilt it on the way back, which is what made navigation feel slow. If
+a new route needs different chrome, put the condition inside `AppShell`, not in a
+duplicate element.
 
 ## Announcing changes on the official account
 
