@@ -5,6 +5,7 @@ import { SparkIcon } from './Icons'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 import type { Media, Post } from '../lib/types'
 
 const MAX_LENGTH = 2000
@@ -47,6 +48,11 @@ export function Composer({
         trimmed,
         attachments.map((item) => item.id),
       )
+      // A new post moves the author's post count and belongs in the author's own
+      // profile feed. Both are cached, so drop them or the profile shows the
+      // count without the post that earned it.
+      queryCache.invalidate('user:')
+      queryCache.invalidate('profile:')
       onPosted(post)
       setBody('')
       setAttachments([])

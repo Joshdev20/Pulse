@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import type { User } from '../lib/types'
@@ -33,6 +34,11 @@ export function FollowButton({
     setBusy(true)
     try {
       const updated = user.is_following ? await api.unfollow(user.username) : await api.follow(user.username)
+      // A follow moves this account's follower count and both accounts' follow
+      // counts as other viewers see them, so the cached profile for either side
+      // is now wrong. The caller applies `updated` to what is on screen; this
+      // covers the copies behind it.
+      queryCache.invalidate('user:')
       onChange?.(updated)
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Could not update follow', 'error')

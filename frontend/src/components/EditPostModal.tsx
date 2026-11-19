@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Modal } from './UI'
 import { api } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 import { useToast } from '../context/ToastContext'
 import type { Post } from '../lib/types'
 
@@ -31,6 +32,9 @@ export function EditPostModal({
     setError(null)
     try {
       const updated = await api.updatePost(post.id, body.trim())
+      // The edited body is cached in the author's profile feed as well as the
+      // list this modal was opened from. `onSaved` refreshes the latter.
+      queryCache.invalidate('profile:')
       notify('Post updated')
       onSaved(updated)
     } catch (caught) {

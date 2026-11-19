@@ -93,7 +93,15 @@ export function ProfilePage() {
   // and lists that would need an account are hidden rather than shown broken.
   const signedOut = !sessionLoading && !me
 
-  const profile = useAsync(() => api.user(username), [username, me?.id])
+  // Keyed by viewer: the payload carries `is_following` and the follow counts,
+  // so one account's copy is not another's. Without a key this page refetched
+  // the header on every return, which was the last section still doing so —
+  // the feed below it already restores from cache.
+  const profile = useAsync(
+    () => api.user(username),
+    [username, me?.id],
+    `user:${username.toLowerCase()}:${me?.id ?? 'anon'}`,
+  )
   const person = profile.data
   const isMe = !!me && me.username.toLowerCase() === username.toLowerCase()
 

@@ -6,6 +6,7 @@ import { MediaGallery } from './MediaGallery'
 import { TranslatedText } from './TranslatedText'
 import { Dropdown, RelativeTime } from './UI'
 import { api } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 import { formatCount, segmentBody } from '../lib/format'
 import type { Post } from '../lib/types'
 
@@ -137,6 +138,10 @@ export function PostCard({
 
   async function remove() {
     await api.deletePost(post.id)
+    // A delete lowers the author's post count and removes the post from their
+    // profile feed, both of which are cached.
+    queryCache.invalidate('user:')
+    queryCache.invalidate('profile:')
     onDeleted?.(post.id)
   }
 

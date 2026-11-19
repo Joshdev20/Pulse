@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import * as queryCache from '../lib/queryCache'
@@ -16,6 +16,21 @@ import * as queryCache from '../lib/queryCache'
 export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = [], cacheKey?: string) {
   const [data, setData] = useState<T | null>(() =>
     cacheKey ? (queryCache.read<T>(cacheKey) ?? null) : null,
+  )
+  // Callers use `setData` to apply a server response locally (a follow toggling
+  // its own counts, an edit returning the updated record), and some pass an
+  // updater rather than a value. Writing the result through to the cache keeps
+  // the two in step; without it the component would show the new value while the
+  // cache kept the old one, and the next mount would bring the old value back.
+  const applyData = useCallback(
+    (next: T | null | ((current: T | null) => T | null)) => {
+      setData((current) => {
+        const value = typeof next === 'function' ? (next as (c: T | null) => T | null)(current) : next
+        if (cacheKey && value !== null) queryCache.write(cacheKey, value)
+        return value
+      })
+    },
+    [cacheKey],
   )
   // Only a cold cache shows a skeleton. A warm one paints at once, and the
   // revalidation that follows must not replace the content with a spinner.
@@ -52,7 +67,7 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = [], cach
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce, cacheKey])
 
-  return { data, setData, loading, error, refresh: () => setNonce((value) => value + 1) }
+  return { data, setData: applyData, loading, error, refresh: () => setNonce((value) => value + 1) }
 }
 
 /** Suggestions for the sidebar-ish "who to follow" card. */

@@ -175,6 +175,8 @@ export function PostDetailPage() {
       queryCache.invalidate(`post:${post.id}`)
       queryCache.invalidate(`comments:${post.id}`)
       queryCache.invalidate('feed:')
+      queryCache.invalidate('user:')
+      queryCache.invalidate('profile:')
       notify('Post deleted')
       navigate('/')
     } catch (caught) {

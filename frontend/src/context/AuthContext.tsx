@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { ApiError, api, setToken, getToken } from '../lib/api'
 import { clearMediaCache } from '../lib/mediaCache'
-import { clear as clearQueryCache } from '../lib/queryCache'
+import { clear as clearQueryCache, write as writeQueryCache } from '../lib/queryCache'
 import { clearCachedPushState } from '../lib/push'
 import { clearLastUser, loadLastUser, saveLastUser } from '../lib/lastUser'
 import {
@@ -305,6 +305,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setUser = useCallback((next: User) => {
     saveLastUser(next)
     setUserState(next)
+    // Every caller passes the record the server just returned (profile edit,
+    // avatar, cover, a follow that moved the counts). Writing it into the cached
+    // profile for that account keeps the page's own copy in step, so returning
+    // to your profile shows the edit instead of the state from before it.
+    writeQueryCache(`user:${next.username.toLowerCase()}:${next.id}`, next)
   }, [])
 
   const value = useMemo<AuthValue>(
