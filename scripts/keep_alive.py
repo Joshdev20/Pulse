@@ -100,9 +100,10 @@ def _hold(url: str, seconds: int) -> None:
     every 4-9 hours. A single ping therefore left the free instance asleep for
     most of the day, and every visit in between paid the 30-60s cold start.
 
-    Holding the ping inside one run covers the gap the schedule cannot: each
-    run stays alive for its budget, so the instance is never idle long enough to
-    sleep between the runs that do arrive.
+    Holding the ping inside one run covers as much of that gap as a job is
+    allowed to run (six hours). It cannot cover the whole gap on its own, so the
+    workflow dispatches the next run as this one ends — see the "Hand the hold
+    to the next run" step. Together the two make the coverage continuous.
     """
     interval = 60
     deadline = time.monotonic() + seconds

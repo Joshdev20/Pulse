@@ -347,11 +347,14 @@ re-deriving rather than re-litigating from scratch:
 - The slow path is the **free Render instance being asleep**. A cold wake is 30-60s, and it
   dominates everything the application does. No amount of query tuning moves it.
 - The keep-alive workflow asked GitHub for a run every 5 minutes, but GitHub throttles that
-  cron on a free plan: measured gaps between runs were **4-9 hours** against a ~15 minute
-  idle timeout, so the instance slept for most of every day. `scripts/keep_alive.py` now
-  *holds* the ping for `PULSE_HOLD_SECONDS` (55 min in the workflow) after a successful
-  wake, so one run covers the gap until the next one actually arrives. If slowness is
-  reported again, check the run gap in Actions before touching application code.
+  cron on a free plan: measured gaps between runs are **3.5-9.7 hours** against a ~15 minute
+  idle timeout, so the instance slept for most of every day. A single job cannot cover that
+  gap either — GitHub kills a job at six hours — so `scripts/keep_alive.py` holds the ping
+  for `PULSE_HOLD_SECONDS` (5h20m in the workflow) and the workflow then dispatches the next
+  run as it ends. The dispatched run starts seconds later, well inside the idle timeout, so
+  coverage is continuous. If slowness is reported again, check the run history in Actions
+  for a broken chain before touching application code. To stop the chain, disable the
+  workflow; that blocks the dispatched run too.
 
 Two boot-path costs were worth removing anyway, because each one is a round trip against a
 database that is not next to the app:

@@ -8,43 +8,72 @@
 # have to live on the same sleeping service, and an external scheduler is the
 # point. This repository is public, so Actions minutes are not billed.
 #
-# GitHub does not honour a 5-minute cron on a free plan. Observed gaps between
-# runs are 4-9 hours, which is far longer than the ~15 minute idle timeout, so a
-# single ping per run left the instance asleep for most of the day and every
-# visitor in between paid the 30-60s cold start. Each run therefore holds the
-# ping for most of an hour, so the instance is never idle long enough to sleep
-# even when the next scheduled run is hours away.
+# GitHub does not honour a 5-minute cron on a free plan. Measured gaps between
+# scheduled runs are 3.5-9.7 hours, far longer than the ~15 minute idle
+# timeout, so one ping per run left the instance asleep for most of the day.
+#
+# A single job cannot cover a 9.7 hour gap either: GitHub cancels a job at six
+# hours, and `timeout-minutes` above 350 is unreliable. So each run holds for
+# 5h20m and then dispatches the next run as it ends. That dispatched run starts
+# within seconds of the hold finishing, which is far inside the ~15 minute idle
+# timeout, so the instance never gets a chance to sleep. The schedule stays as a
+# backstop in case a dispatch is ever lost.
 name: Keep API warm
 
 on:
   schedule:
-    # Every 5 minutes, comfortably inside the ~15 minute idle timeout. GitHub
-    # may delay a scheduled run under load, which is why the run itself also
-    # holds the instance warm (see PULSE_HOLD_SECONDS below).
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
-# A run that overruns must not stack up behind the next one.
+# One hold at a time. `cancel-in-progress: false` matters: a scheduled run that
+# arrives mid-hold must queue behind it, not kill the hold that is keeping the
+# instance awake. A queued run is harmless — it waits its turn and then holds in
+# turn — and the queue cannot grow, because a run is only queued while another
+# is holding and each hold ends after 5h20m.
 concurrency:
   group: keep-alive
   cancel-in-progress: false
 
-permissions: {}
+permissions:
+  # `gh workflow run` in the hand-off step needs this. Everything else stays
+  # off: the job only reads the checkout and pings a URL.
+  actions: write
+  contents: read
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    # Long enough for the hold to span the gap between scheduled runs.
-    timeout-minutes: 70
+    # Six hours is GitHub's hard ceiling for a job, and it kills the job at the
+    # limit rather than letting it finish. The hold stops well short of that so
+    # the hand-off dispatch always gets to run.
+    timeout-minutes: 340
     env:
       # Override with a repository variable to point at a different deploy;
       # the fallback is the production API.
       PULSE_API_URL: ${{ vars.PULSE_API_URL || 'https://pulse-api-y16m.onrender.com' }}
-      # Keep pinging for 55 minutes after the first success. Comfortably under
-      # the job timeout, and longer than the observed gap between runs.
-      PULSE_HOLD_SECONDS: "3300"
+      # 5h20m, leaving a 20 minute margin under the job timeout.
+      PULSE_HOLD_SECONDS: "19200"
     steps:
       # The script is standard-library only, so the runner's python3 is enough.
       - uses: actions/checkout@v5
       - name: Ping the health endpoint
         run: python3 scripts/keep_alive.py
+
+      # A schedule GitHub throttles to hours cannot keep the instance warm, and
+      # no single job may run longer than six hours. Chaining the runs is what
+      # closes the gap: this dispatch starts the next hold as the current one
+      # ends, so the instance is never idle long enough to sleep. `if: always()`
+      # so a failed hold still hands over rather than leaving the instance to
+      # sleep until the next scheduled run hours from now.
+      #
+      # To stop the chain, disable this workflow in the Actions tab. Disabling it
+      # blocks the dispatched run as well as the cron, so nothing restarts.
+      - name: Hand the hold to the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh workflow run keep-alive.yml --ref "$GITHUB_REF_NAME" --repo "$REPO" \
+            && echo "dispatched the next hold" \
+            || echo "dispatch failed; the scheduled run is the backstop"
