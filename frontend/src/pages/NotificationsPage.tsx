@@ -5,7 +5,10 @@ import { EmptyState, ErrorState, FeedSkeleton, RelativeTime } from '../component
 import { BellIcon, CommentIcon, ComposeIcon, HeartIcon, RepostIcon, ReplyIcon, UserIcon } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import { api } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 import type { Notification } from '../lib/types'
+
+const CACHE_KEY = 'notifications'
 
 const ICONS = {
   like: HeartIcon,
@@ -30,16 +33,23 @@ const VERB = {
 } as const
 
 export function NotificationsPage() {
-  const [items, setItems] = useState<Notification[]>([])
-  const [loading, setLoading] = useState(true)
+  // Painted from cache on a return visit: a reader coming back to this screen
+  // has not asked for a reload, and on this deployment a cold read costs
+  // seconds. Only a genuinely empty cache shows the skeleton.
+  const [items, setItems] = useState<Notification[]>(
+    () => queryCache.read<Notification[]>(CACHE_KEY) ?? [],
+  )
+  const [loading, setLoading] = useState(
+    () => queryCache.read<Notification[]>(CACHE_KEY) === undefined,
+  )
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
   const { subscribe } = useRealtime()
 
   useEffect(() => {
     let active = true
-    api
-      .notifications()
+    queryCache
+      .load(CACHE_KEY, () => api.notifications())
       .then((data) => {
         if (active) setItems(data)
       })
@@ -61,7 +71,10 @@ export function NotificationsPage() {
         if (event.type !== 'notification') return
         api
           .notifications()
-          .then(setItems)
+          .then((data) => {
+            queryCache.write(CACHE_KEY, data)
+            setItems(data)
+          })
           .catch(() => undefined)
       }),
     [subscribe],
@@ -71,7 +84,11 @@ export function NotificationsPage() {
 
   async function open(item: Notification) {
     if (!item.read) {
-      setItems((current) => current.map((entry) => (entry.id === item.id ? { ...entry, read: true } : entry)))
+      setItems((current) => {
+        const next = current.map((entry) => (entry.id === item.id ? { ...entry, read: true } : entry))
+        queryCache.write(CACHE_KEY, next)
+        return next
+      })
       void api.markRead(item.id).catch(() => undefined)
     }
     if (item.post_id) navigate(`/p/${item.post_id}`)
@@ -79,7 +96,11 @@ export function NotificationsPage() {
   }
 
   async function markAll() {
-    setItems((current) => current.map((entry) => ({ ...entry, read: true })))
+    setItems((current) => {
+      const next = current.map((entry) => ({ ...entry, read: true }))
+      queryCache.write(CACHE_KEY, next)
+      return next
+    })
     try {
       await api.markAllRead()
     } catch {

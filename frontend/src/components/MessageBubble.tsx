@@ -3,7 +3,25 @@ import { Avatar } from './Avatar'
 import { MediaGallery } from './MediaGallery'
 import { HeartIcon, ReplyIcon } from './Icons'
 import { RelativeTime } from './UI'
+import { STICKER_EMOJI } from '../lib/stickers'
 import type { Message } from '../lib/types'
+
+/**
+ * One sticker, drawn large and without a bubble background.
+ *
+ * The emoji is rendered by the reader's own font rather than fetched as an
+ * image, so it needs no network round trip and stays sharp at any size. The
+ * label is exposed to assistive technology because an emoji alone reads as a
+ * character name, not as the intent.
+ */
+function StickerView({ stickerId }: { stickerId: string }) {
+  const entry = STICKER_EMOJI[stickerId]
+  return (
+    <span className="bubble-sticker" role="img" aria-label={entry?.label ?? 'Sticker'}>
+      {entry?.emoji ?? '\u2728'}
+    </span>
+  )
+}
 
 /** How far right a bubble must travel before releasing sends it to reply. */
 const REPLY_THRESHOLD = 64
@@ -149,6 +167,7 @@ export function MessageBubble({ message, onReply, onToggleLike }: BubbleProps) {
               </span>
             </div>
           )}
+          {message.sticker && <StickerView stickerId={message.sticker} />}
           {message.body && <p>{message.body}</p>}
           <MediaGallery items={message.media} />
           <div className="bubble-foot">

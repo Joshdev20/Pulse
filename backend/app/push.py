@@ -26,6 +26,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .config import settings
+from . import stickers
 from .models import PushSubscription, PushSubscriptionUser, User, utcnow
 
 logger = logging.getLogger("pulse.push")
@@ -398,7 +399,9 @@ def message_payload(db: Session, message, conversation_id: int) -> dict[str, Any
     """
     sender = db.get(User, message.sender_id)
     name = sender.display_name if sender is not None else "Someone"
-    body = message.body or "Sent an attachment"
+    # A sticker has no body, so it is named rather than falling through to the
+    # attachment wording: "Sent a sticker" tells the reader what arrived.
+    body = message.body or stickers.preview_text(message.sticker) or "Sent an attachment"
     return {
         "type": "message",
         "title": name,

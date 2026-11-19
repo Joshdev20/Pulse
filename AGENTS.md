@@ -243,6 +243,23 @@ the public URL returns 502 until the dev server is bound to 12000.
   duration and `paused: true` again, so sample playback shortly after pressing play rather
   than waiting — the fixture clips are about a second long.
 
+### Stickers
+
+- `backend/app/stickers.py` holds the single source of truth: `STICKERS` (id, emoji, label,
+  pack), `is_known()` for validation and `preview_text()` for the one-line inbox and push
+  wording. A sticker is an emoji plus a caption, not an upload — a message stores a short
+  id in `Message.sticker`, so the artwork stays crisp at any size and a new pack ships with
+  a deploy rather than a media migration.
+- `GET /api/conversations/stickers` publishes that catalogue, so the picker offers exactly
+  the ids the send route accepts. The send route validates a client-supplied id against
+  `is_known()`; an unknown id would render as an empty bubble for every reader.
+- `frontend/src/lib/stickers.ts` holds `STICKER_EMOJI`, **generated** from
+  `backend/app/stickers.py`. Do not hand-edit it: the map once drifted from the server and
+  the inbox showed a literal `U0001f389 Sticker` instead of the emoji. Re-run the
+  generator after changing the catalogue.
+- `Message.sticker` is nullable and the column is added by `ensure_schema`, so every
+  message written before stickers existed stays a plain message.
+
 ### Profile link previews
 
 - `app/routers/preview.py` is the only router with **no** authentication, and that is
@@ -424,6 +441,14 @@ from the feed unmounted the whole shell — realtime socket, notification centre
 cached page — and rebuilt it on the way back, which is what made navigation feel slow. If
 a new route needs different chrome, put the condition inside `AppShell`, not in a
 duplicate element.
+
+The right rail follows the same rule. `AppShell` passes `withRail` per route, and `Rail`
+stays mounted on every one of them — the flag only sets the `hidden` attribute. Rendering
+it as `{withRail && <Rail />}` dropped the trending tags, people and stats it had already
+fetched, so every arrival at Home, Explore, Search or Notifications re-ran three requests
+that had just been answered. Measured across Messages → Profile → Home: four rail requests
+before, zero after. `.rail[hidden] { display: none }` in `styles.css` is required, because
+`.rail { display: flex }` otherwise wins over the user-agent rule for `hidden`.
 
 ## Announcing changes on the official account
 

@@ -231,7 +231,7 @@ export function MobileNav() {
   )
 }
 
-export function Rail() {
+export function Rail({ hidden = false }: { hidden?: boolean }) {
   const { user } = useAuth()
   const [tags, setTags] = useState<TrendingTag[]>([])
   const [people, setPeople] = useState<User[]>([])
@@ -257,7 +257,7 @@ export function Rail() {
   }, [user?.id])
 
   return (
-    <aside className="rail">
+    <aside className="rail" hidden={hidden}>
       {stats && (
         <section className="card">
           <div className="rail-stats">
@@ -342,7 +342,13 @@ export function AppShell({
       <div className={`shell${withRail ? ' shell-with-rail' : ''}`}>
         <Sidebar onCompose={onCompose} />
         <main className="main">{children}</main>
-        {withRail && <Rail />}
+        {/* Mounted on every route and hidden with CSS where there is no room.
+            Unmounting it dropped the trending tags, people and stats it had
+            already fetched, so leaving Messages for Home re-ran three requests
+            against the API — the cost was paid on each section change. The
+            `hidden` attribute takes it out of the grid and the accessibility
+            tree without tearing down the component. */}
+        <Rail hidden={!withRail} />
       </div>
       {!inThread && (
         <button

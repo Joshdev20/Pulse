@@ -4,14 +4,28 @@ import { Avatar, DisplayName } from '../components/Avatar'
 import { MediaPicker } from '../components/MediaPicker'
 import { VoiceRecorderButton, voiceNoteFilename } from '../components/VoiceRecorderButton'
 import { MessageBubble } from '../components/MessageBubble'
+import { StickerPicker } from '../components/StickerPicker'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime, Spinner } from '../components/UI'
-import { ChevronLeftIcon, CloseIcon, MailIcon, PaperclipIcon, ReplyIcon, SendIcon } from '../components/Icons'
+import {
+  ChevronLeftIcon,
+  CloseIcon,
+  MailIcon,
+  PaperclipIcon,
+  ReplyIcon,
+  SendIcon,
+  StickerIcon,
+} from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import { api, ApiError } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 import { formatPresence } from '../lib/format'
+import { previewOf } from '../lib/stickers'
 import { useNow } from '../lib/useNow'
 import type { VoiceNote } from '../lib/useVoiceRecorder'
-import type { Conversation, Media, Message } from '../lib/types'
+import type { Conversation, Media, Message, Sticker } from '../lib/types'
+
+/** Cache key for the inbox list. */
+const INBOX_KEY = 'conversations'
 
 /** How long after opening a thread to keep it pinned to the newest message. */
 const PIN_WINDOW_MS = 2500
@@ -68,9 +82,7 @@ function Inbox({
               </div>
               <div className="inbox-preview">
                 {conversation.last_message
-                  ? conversation.last_message.mine
-                    ? `You: ${conversation.last_message.body || 'Attachment'}`
-                    : conversation.last_message.body || 'Attachment'
+                  ? `${conversation.last_message.mine ? 'You: ' : ''}${previewOf(conversation.last_message)}`
                   : 'Say hello'}
               </div>
             </div>
@@ -88,14 +100,19 @@ function Inbox({
 function Thread({ conversation, onSent }: { conversation: Conversation; onSent: () => void }) {
 
   const { subscribe, sendTyping } = useRealtime()
-  const [messages, setMessages] = useState<Message[]>([])
-  const [loading, setLoading] = useState(true)
+  const [messages, setMessages] = useState<Message[]>(
+    () => queryCache.read<Message[]>(`messages:${conversation.id}`) ?? [],
+  )
+  const [loading, setLoading] = useState(
+    () => queryCache.read<Message[]>(`messages:${conversation.id}`) === undefined,
+  )
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<Media[]>([])
   const [sending, setSending] = useState(false)
   const [partnerTyping, setPartnerTyping] = useState(false)
   const [replyTo, setReplyTo] = useState<Message | null>(null)
+  const [stickersOpen, setStickersOpen] = useState(false)
   // Live presence for the partner, seeded from the conversation payload and
   // then updated by `presence` frames without refetching the inbox.
   const [partner, setPartner] = useState(conversation.partner)
@@ -112,16 +129,24 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
   // about that often rather than on every tick.
   const now = useNow(30_000)
 
+  // A thread reopened in this session paints its history at once. Re-reading 50
+  // messages costs seconds here, and a reader who steps back into a thread has
+  // not asked for anything new: the socket already delivers anything that
+  // arrived while they were away.
+  const historyKey = `messages:${conversation.id}`
   const load = useCallback(() => {
     setLoading(true)
-    api
-      .messages(conversation.id, 50)
-      .then(setMessages)
+    queryCache
+      .load(historyKey, () => api.messages(conversation.id, 50), 30_000)
+      .then((data) => {
+        setMessages(data)
+        setError(null)
+      })
       .catch((caught) =>
         setError(caught instanceof ApiError ? caught.message : 'Could not load messages'),
       )
       .finally(() => setLoading(false))
-  }, [conversation.id])
+  }, [conversation.id, historyKey])
 
   useEffect(() => {
     load()
@@ -134,21 +159,24 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     () =>
       subscribe((event) => {
         if (event.type === 'message' && event.message?.conversation_id === conversation.id) {
-          setMessages((current) =>
-            current.some((item) => item.id === event.message!.id)
-              ? current
-              : [...current, event.message!],
-          )
+          setMessages((current) => {
+            if (current.some((item) => item.id === event.message!.id)) return current
+            const next = [...current, event.message!]
+            queryCache.write(historyKey, next)
+            return next
+          })
           void api.markConversationRead(conversation.id).catch(() => undefined)
         }
         if (event.type === 'message_like' && event.conversation_id === conversation.id) {
-          setMessages((current) =>
-            current.map((item) =>
+          setMessages((current) => {
+            const next = current.map((item) =>
               item.id === event.message_id
                 ? { ...item, like_count: event.like_count ?? item.like_count }
                 : item,
-            ),
-          )
+            )
+            queryCache.write(historyKey, next)
+            return next
+          })
         }
         if (event.type === 'presence' && event.user_id === conversation.partner.id) {
           setPartner((current) => ({
@@ -267,6 +295,22 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     }
   }, [conversation.id, messages, partnerTyping, replyTo, armPin])
 
+  /**
+   * Add a message the server has confirmed, keeping the cached history in step.
+   *
+   * Every send path goes through here. Updating only React state would leave
+   * the cache holding the pre-send thread, so stepping out and straight back in
+   * would drop the message that was just sent.
+   */
+  function appendMessage(message: Message) {
+    setMessages((current) => {
+      if (current.some((item) => item.id === message.id)) return current
+      const next = [...current, message]
+      queryCache.write(historyKey, next)
+      return next
+    })
+  }
+
   function startReply(message: Message) {
     setReplyTo(message)
     // Focus the composer so the swipe lands the user where they expect.
@@ -286,20 +330,20 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
       liked_by_me: next,
       like_count: Math.max(0, message.like_count + (next ? 1 : -1)),
     }
-    setMessages((current) => current.map((item) => (item.id === message.id ? optimistic : item)))
+    const applyLike = (patch: Partial<Message>) =>
+      setMessages((current) => {
+        const next = current.map((item) => (item.id === message.id ? { ...item, ...patch } : item))
+        queryCache.write(historyKey, next)
+        return next
+      })
+    applyLike({ liked_by_me: optimistic.liked_by_me, like_count: optimistic.like_count })
     try {
       const result = next
         ? await api.likeMessage(conversation.id, message.id)
         : await api.unlikeMessage(conversation.id, message.id)
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === message.id
-            ? { ...item, liked_by_me: result.liked_by_me, like_count: result.like_count }
-            : item,
-        ),
-      )
+      applyLike({ liked_by_me: result.liked_by_me, like_count: result.like_count })
     } catch {
-      setMessages((current) => current.map((item) => (item.id === message.id ? message : item)))
+      applyLike({ liked_by_me: message.liked_by_me, like_count: message.like_count })
     }
   }
 
@@ -327,15 +371,36 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
         attachments.map((item) => item.id),
         replyTo?.id ?? null,
       )
-      setMessages((current) =>
-        current.some((item) => item.id === sent.id) ? current : [...current, sent],
-      )
+      appendMessage(sent)
       setDraft('')
       setAttachments([])
       setReplyTo(null)
       onSent()
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Message not sent')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  /**
+   * Send one sticker as its own message.
+   *
+   * Sent immediately rather than staged in the composer: a sticker is a
+   * complete message on its own, and every chat app the reader has used
+   * behaves this way. The tray stays open so several can follow in a row.
+   */
+  async function sendSticker(sticker: Sticker) {
+    if (sending) return
+    setSending(true)
+    setError(null)
+    try {
+      const sent = await api.sendMessage(conversation.id, '', [], replyTo?.id ?? null, sticker.id)
+      appendMessage(sent)
+      setReplyTo(null)
+      onSent()
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Sticker not sent')
     } finally {
       setSending(false)
     }
@@ -366,9 +431,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
         [media.id],
         replyTo?.id ?? null,
       )
-      setMessages((current) =>
-        current.some((item) => item.id === sent.id) ? current : [...current, sent],
-      )
+      appendMessage(sent)
       setReplyTo(null)
       onSent()
     } catch (caught) {
@@ -455,8 +518,24 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
         </div>
       )}
 
+      <StickerPicker
+        open={stickersOpen}
+        disabled={sending}
+        onPick={sendSticker}
+        onClose={() => setStickersOpen(false)}
+      />
+
       <form className="composer-inline thread-composer" onSubmit={submit}>
         <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} />
+        <button
+          type="button"
+          className={`icon-btn sticker-toggle${stickersOpen ? ' active' : ''}`}
+          aria-label={stickersOpen ? 'Hide stickers' : 'Show stickers'}
+          aria-expanded={stickersOpen}
+          onClick={() => setStickersOpen((open) => !open)}
+        >
+          <StickerIcon size={19} />
+        </button>
         <VoiceRecorderButton
           disabled={sending}
           onRecorded={sendVoiceNote}
@@ -496,16 +575,22 @@ export function MessagesPage() {
 
   const { subscribe } = useRealtime()
 
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [loading, setLoading] = useState(true)
+  const [conversations, setConversations] = useState<Conversation[]>(
+    () => queryCache.read<Conversation[]>(INBOX_KEY) ?? [],
+  )
+  const [loading, setLoading] = useState(
+    () => queryCache.read<Conversation[]>(INBOX_KEY) === undefined,
+  )
   const [error, setError] = useState<string | null>(null)
 
   const activeId = conversationId ? Number(conversationId) : undefined
 
-  const load = useCallback(() => {
-    setLoading(true)
-    api
-      .conversations()
+  const load = useCallback((force = false) => {
+    // No spinner once there is something to look at: a live message reorders
+    // this list, and blanking it to refetch would flash the inbox away.
+    if (queryCache.read<Conversation[]>(INBOX_KEY) === undefined) setLoading(true)
+    queryCache
+      .load(INBOX_KEY, () => api.conversations(), 30_000, force)
       .then(setConversations)
       .catch((caught) =>
         setError(caught instanceof ApiError ? caught.message : 'Could not load conversations'),
@@ -516,6 +601,11 @@ export function MessagesPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Stable identity: `Thread` calls this from a mount effect, so a new function
+  // per render would re-run that effect on every render and refetch the inbox
+  // in a loop.
+  const refreshInbox = useCallback(() => load(true), [load])
 
   // Any incoming message reorders the inbox.
   useEffect(
@@ -570,7 +660,7 @@ export function MessagesPage() {
         </div>
         <div className="messages-thread">
           {active ? (
-            <Thread conversation={active} onSent={load} />
+            <Thread conversation={active} onSent={refreshInbox} />
           ) : (
             activeId && (
               <div className="state">

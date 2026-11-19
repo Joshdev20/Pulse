@@ -867,3 +867,100 @@ def test_second_socket_does_not_reannounce_presence(client, make_user, monkeypat
     # One online for the first tab, one offline when the last tab closed. The
     # second tab opening and closing added nothing.
     assert grace_events == [True, False], grace_events
+
+
+def send_sticker(client, headers, conversation_id: int, sticker: str, **extra):
+    return client.post(
+        f"/api/conversations/{conversation_id}/messages",
+        headers=headers,
+        json={"sticker": sticker, **extra},
+    )
+
+
+def test_sticker_catalogue_is_served_to_signed_in_users(client, make_user):
+    ada, _ = make_user("ada")
+    response = client.get("/api/conversations/stickers", headers=ada)
+    assert response.status_code == 200, response.text
+    catalogue = response.json()
+    assert len(catalogue) >= 20
+    ids = [item["id"] for item in catalogue]
+    assert len(ids) == len(set(ids)), "sticker ids must be unique"
+    assert "heart" in ids
+    assert all(item["emoji"] and item["label"] and item["pack"] for item in catalogue)
+
+
+def test_sticker_catalogue_requires_authentication(client):
+    assert client.get("/api/conversations/stickers").status_code == 401
+
+
+def test_send_sticker_without_body(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    response = send_sticker(client, ada, cid, "heart")
+    assert response.status_code == 201, response.text
+    message = response.json()
+    assert message["sticker"] == "heart"
+    assert message["body"] == ""
+    assert message["mine"] is True
+
+    # The recipient sees the same sticker.
+    history = client.get(f"/api/conversations/{cid}/messages", headers=grace).json()
+    assert history[-1]["sticker"] == "heart"
+
+
+def test_sticker_shows_in_inbox_preview(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    send_sticker(client, ada, cid, "party")
+
+    inbox = client.get("/api/conversations", headers=ada).json()
+    assert inbox[0]["last_message"]["sticker"] == "party"
+
+
+def test_unknown_sticker_is_rejected(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    response = send_sticker(client, ada, cid, "not-a-real-sticker")
+    assert response.status_code == 400
+    assert "sticker" in response.json()["detail"].lower()
+
+
+def test_sticker_with_caption_keeps_both(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    response = send_sticker(client, ada, cid, "rocket", body="shipping today")
+    assert response.status_code == 201, response.text
+    message = response.json()
+    assert message["sticker"] == "rocket"
+    assert message["body"] == "shipping today"
+
+
+def test_plain_message_has_no_sticker(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    response = send(client, ada, cid, "just text")
+    assert response.status_code == 201, response.text
+    assert response.json()["sticker"] is None
+
+
+def test_sticker_is_broadcast_over_the_socket(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect("/api/ws") as socket:
+        socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        recv_frame(socket, "ready")
+        send_sticker(client, ada, cid, "fire")
+        frame = recv_frame(socket, "message")
+        assert frame["message"]["sticker"] == "fire"

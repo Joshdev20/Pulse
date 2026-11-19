@@ -51,6 +51,14 @@ function BrandLoader() {
  * page — and rebuilt them, which is what made navigation feel slow.
  */
 function Shell() {
+  const { loading } = useAuth()
+  // The shell is not mounted until the session is settled. Mounting it first
+  // painted the sidebar and the feed behind the boot loader (the reader could
+  // see their timeline while the screen still said "Loading Pulse…"), and it
+  // started the unread counts, the trending rail and the realtime socket before
+  // `/auth/me` had even answered, so every one of those competed with the one
+  // request that actually gates the first paint.
+  if (loading) return <BrandLoader />
   return (
     <RealtimeProvider>
       <Layout />

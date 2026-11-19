@@ -21,7 +21,7 @@ from ..models import (
     User,
     utcnow,
 )
-from .. import push
+from .. import push, stickers
 from ..realtime import manager
 from ..schemas import (
     ConversationOut,
@@ -120,6 +120,7 @@ def serialize_messages(db: Session, messages: list[Message], viewer: User | None
             sender=authors[m.sender_id],
             media=serialize_media(m.media),
             mine=viewer is not None and m.sender_id == viewer.id,
+            sticker=m.sticker,
             reply_to=quotes.get(m.id),
             like_count=like_counts.get(m.id, 0),
             liked_by_me=m.id in liked_ids,
@@ -195,6 +196,7 @@ def _summarize(db: Session, user: User) -> list[ConversationOut]:
                 sender=senders[last.sender_id],
                 media=serialize_media(last.media),
                 mine=last.sender_id == user.id,
+                sticker=last.sticker,
             )
         out.append(
             ConversationOut(
@@ -258,6 +260,20 @@ def unread_total(db: DbSession, user: CurrentUser) -> dict[str, int]:
         )
     )
     return {"count": int(total or 0)}
+
+
+@router.get("/stickers")
+def sticker_catalogue(_user: CurrentUser) -> list[dict[str, str]]:
+    """Every sticker the composer can send.
+
+    Served from the server rather than hardcoded in the bundle so the catalogue
+    has one definition: the ids this returns are exactly the ids the send route
+    accepts, and a stale client cannot offer a sticker that would be rejected.
+    """
+    return [
+        {"id": sticker.id, "emoji": sticker.emoji, "label": sticker.label, "pack": sticker.pack}
+        for sticker in stickers.STICKERS
+    ]
 
 
 @router.post("", response_model=ConversationOut, status_code=status.HTTP_201_CREATED)
@@ -343,7 +359,13 @@ async def send_message(
 
     body = payload.body.strip()
     attachments = _claim_media(db, payload.media_ids, user)
-    if not body and not attachments:
+    # A sticker id is client input, so it is checked against the shipped
+    # catalogue instead of being stored on trust: an unknown id would render as
+    # an empty bubble for every reader.
+    sticker = payload.sticker or None
+    if sticker is not None and not stickers.is_known(sticker):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown sticker")
+    if not body and not attachments and sticker is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Message cannot be empty")
 
     reply_to_id = _validate_reply_target(db, conversation_id, payload.reply_to_id)
@@ -352,6 +374,7 @@ async def send_message(
         conversation_id=conversation_id,
         sender_id=user.id,
         body=body,
+        sticker=sticker,
         reply_to_id=reply_to_id,
     )
     db.add(message)

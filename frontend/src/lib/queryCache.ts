@@ -55,14 +55,19 @@ export function write<T>(key: string, value: T): void {
  * when a page and a widget both want the same data. A failed fetch leaves any
  * older value in place rather than deleting it: stale data that the user can
  * still read beats an error screen over a network blip.
+ *
+ * Pass `force` after an action that changes the data behind the key. The write
+ * that just happened makes the cached copy provably wrong, so serving it would
+ * show the reader the state from before their own action.
  */
 export async function load<T>(
   key: string,
   fetcher: () => Promise<T>,
   ttlMs: number = DEFAULT_TTL_MS,
+  force = false,
 ): Promise<T> {
   const entry = entries.get(key)
-  if (entry) {
+  if (entry && !force) {
     if (entry.inFlight) return entry.inFlight as Promise<T>
     if (Date.now() - entry.at < ttlMs) return entry.value as T
   }

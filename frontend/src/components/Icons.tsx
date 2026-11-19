@@ -394,3 +394,13 @@ export const KeyIcon = (p: IconProps) => (
     <path d="m16.4 7.3 1.9 1.9M18.9 4.8l1.9 1.9" />
   </Base>
 )
+
+/** Sticker / emoji tray toggle: a smiling face with a lift at the corner. */
+export const StickerIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M21 12a9 9 0 1 1-9-9" />
+    <path d="M21 12a9 9 0 0 1-9 9c0-4.97 4.03-9 9-9Z" />
+    <path d="M8.5 14.5s1.2 1.5 3.5 1.5 3.5-1.5 3.5-1.5" />
+    <path d="M9 9.5h.01M15 9.5h.01" />
+  </Base>
+)

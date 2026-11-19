@@ -15,6 +15,7 @@ import type {
   PushStatus,
   PushSubscriptionBody,
   Stats,
+  Sticker,
   SuggestedUser,
   TrendingTag,
   User,
@@ -335,11 +336,24 @@ export const api = {
       `/api/conversations/${conversationId}/messages${query({ limit, before_id: beforeId })}`,
     ),
 
-  sendMessage: (conversationId: number, body: string, mediaIds: number[] = [], replyToId?: number | null) =>
+  sendMessage: (
+    conversationId: number,
+    body: string,
+    mediaIds: number[] = [],
+    replyToId?: number | null,
+    sticker?: string | null,
+  ) =>
     request<Message>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ body, media_ids: mediaIds, reply_to_id: replyToId ?? null }),
+      body: JSON.stringify({
+        body,
+        media_ids: mediaIds,
+        reply_to_id: replyToId ?? null,
+        sticker: sticker ?? null,
+      }),
     }),
+
+  stickers: () => request<Sticker[]>('/api/conversations/stickers'),
 
   likeMessage: (conversationId: number, messageId: number) =>
     request<{ liked_by_me: boolean; like_count: number }>(

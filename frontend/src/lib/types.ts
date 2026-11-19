@@ -111,10 +111,20 @@ export interface Message {
   sender: User
   media: Media[]
   mine: boolean
+  /** A sticker id from the shipped catalogue, when this message is one. */
+  sticker: string | null
   /** Set when this message was a swipe-to-reply to another one. */
   reply_to: MessageQuote | null
   like_count: number
   liked_by_me: boolean
+}
+
+/** One entry in the sticker catalogue the server publishes. */
+export interface Sticker {
+  id: string
+  emoji: string
+  label: string
+  pack: string
 }
 
 /** The one-line quote shown above a reply. */

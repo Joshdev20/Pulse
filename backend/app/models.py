@@ -408,6 +408,12 @@ class Message(Base):
     )
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     body: Mapped[str] = mapped_column(Text, default="")
+    # The id of a sticker from the shipped catalogue, or NULL for an ordinary
+    # message. Stored as the catalogue id rather than an image so a sticker
+    # costs a few bytes instead of a media upload, and so the artwork can be
+    # redrawn without rewriting history. Nullable: every message written before
+    # stickers existed is a plain message.
+    sticker: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Set when this message answers another one in the same thread (swipe-to-
     # reply). SET NULL rather than CASCADE: deleting the quoted message should
     # leave the reply standing with its quote cleared, not delete a branch of

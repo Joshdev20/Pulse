@@ -235,6 +235,9 @@ class MessageCreate(BaseModel):
     # Set by a swipe-to-reply. Must reference another message in the same
     # conversation; the route rejects anything else rather than trusting it.
     reply_to_id: int | None = None
+    # A sticker id from the shipped catalogue. Validated against it by the
+    # route, because a client-supplied id is untrusted input.
+    sticker: str | None = Field(default=None, max_length=64)
 
 
 class MessageQuote(BaseModel):
@@ -261,6 +264,8 @@ class MessageOut(BaseModel):
     sender: UserPublic
     media: list[MediaOut] = []
     mine: bool = False
+    # A sticker id from the shipped catalogue, when this message is one.
+    sticker: str | None = None
     # The quoted message, when this is a reply and the target still exists.
     reply_to: MessageQuote | None = None
     like_count: int = 0
