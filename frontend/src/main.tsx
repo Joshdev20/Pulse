@@ -38,9 +38,19 @@ createRoot(container).render(
 // Drop the document-level splash once React owns the screen. `App` renders its
 // own BrandLoader in the same spot, so removing this only hands the animation
 // over; without it the splash would sit on top of the app forever.
+//
+// The removal waits for a real child of `#root` rather than for a frame:
+// `render` schedules its work, so a single `requestAnimationFrame` can fire
+// while the container is still empty — on a slow installed-PWA launch that
+// takes the splash away and leaves the blank window it exists to prevent.
 const splash = document.querySelector('.boot-splash')
 if (splash) {
-  // Deferred a frame so React's first commit is already painted underneath,
-  // which keeps the handover from flashing the page background.
-  requestAnimationFrame(() => splash.remove())
+  const handOver = () => {
+    if (container.firstElementChild) {
+      splash.remove()
+      return
+    }
+    requestAnimationFrame(handOver)
+  }
+  requestAnimationFrame(handOver)
 }

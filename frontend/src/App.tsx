@@ -43,7 +43,21 @@ function BrandLoader() {
  *
  * The feed is no longer public: an unauthenticated visitor is redirected to
  * sign in and returned to the page they asked for afterwards.
+ *
+ * A profile is readable without a session, so the shell it renders is shared
+ * with the signed-in tree rather than declared a second time. Two separate
+ * `<Layout>` elements meant moving between a profile and the feed unmounted the
+ * whole shell — its realtime socket, its notification centre and every cached
+ * page — and rebuilt them, which is what made navigation feel slow.
  */
+function Shell() {
+  return (
+    <RealtimeProvider>
+      <Layout />
+    </RealtimeProvider>
+  )
+}
+
 function RequireAuth() {
   const { user, loading } = useAuth()
   const location = useLocation()
@@ -148,25 +162,12 @@ export function App() {
           sees. Deliberately outside RequireAuth for that reason, and not
           server-rendered differently for bots — serving a crawler more than a
           human is cloaking. */}
-      <Route
-        element={
-          <RealtimeProvider>
-            <Layout />
-          </RealtimeProvider>
-        }
-      >
+      <Route element={<Shell />}>
         <Route path="/u/:username" element={<ProfilePage />} />
-      </Route>
 
-      {/* Everything below requires a session. */}
-      <Route element={<RequireAuth />}>
-        <Route
-          element={
-            <RealtimeProvider>
-              <Layout />
-            </RealtimeProvider>
-          }
-        >
+        {/* Everything below requires a session, nested inside the same shell so
+            moving between a profile and these pages keeps it mounted. */}
+        <Route element={<RequireAuth />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/explore" element={<ExplorePage />} />
           <Route path="/search" element={<SearchPage />} />
