@@ -590,6 +590,68 @@ def delete_comment(comment_id: int, db: DbSession, _admin: CurrentAdmin) -> None
     _invalidate()
 
 
+@router.get("/translation/candidates")
+def probe_translation_candidates(
+    _viewer: CurrentUser, text: str = "ACHỌRỌ M EGO NA-ABATA KWA ỤBỌCHỊ NKE GA-EGBO MKPA M"
+) -> dict:
+    """Try a list of keyless translation endpoints from this deployment.
+
+    Both configured providers are refused here — Google redirects to its abuse
+    page and MyMemory reports the day's free quota spent, because this runs on a
+    shared datacenter address rather than a home connection. Which alternatives
+    survive that is not something to guess at, so this asks them all and reports
+    what came back.
+    """
+    import httpx
+
+    from urllib.parse import quote
+
+    attempts = [
+        (
+            "google-gtx-single",
+            "https://translate.googleapis.com/translate_a/single",
+            {"client": "gtx", "sl": "auto", "tl": "en", "dt": "t", "q": text},
+        ),
+        (
+            "mymemory-with-email",
+            "https://api.mymemory.translated.net/get",
+            {"q": text, "langpair": "Autodetect|en", "de": settings.translate_contact_email},
+        ),
+        ("lingva-ml", f"https://lingva.ml/api/v1/auto/en/{quote(text)}", None),
+        (
+            "lingva-garudalinux",
+            f"https://lingva.garudalinux.org/api/v1/auto/en/{quote(text)}",
+            None,
+        ),
+        (
+            "simplytranslate",
+            "https://simplytranslate.org/api/translate/",
+            {"engine": "google", "from": "auto", "to": "en", "text": text},
+        ),
+        (
+            "libretranslate-com",
+            "https://libretranslate.com/translate",
+            {"q": text, "source": "auto", "target": "en", "format": "text"},
+        ),
+    ]
+
+    report: dict = {}
+    with httpx.Client(timeout=settings.translate_timeout_seconds, follow_redirects=True) as client:
+        for name, url, params in attempts:
+            try:
+                if name == "libretranslate-com":
+                    response = client.post(url, json=params)
+                else:
+                    response = client.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
+                report[name] = {
+                    "status": response.status_code,
+                    "body": response.text[:220],
+                }
+            except Exception as caught:  # noqa: BLE001 - the report is the point
+                report[name] = {"exception": f"{type(caught).__name__}: {caught}"}
+    return report
+
+
 @router.get("/translation/probe")
 def probe_translation(_viewer: CurrentUser, text: str = "I need a steady daily income") -> dict:
     """Ask each translation provider from the server and report what it said.

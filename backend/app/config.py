@@ -174,6 +174,10 @@ class Settings(BaseSettings):
     # The language the UI is written in. A post detected as this is never offered
     # a translation.
     translate_target_language: str = "en"
+    # MyMemory grants a larger daily allowance to callers that identify a contact
+    # address, and raises the cap further when a request is refused. Empty means
+    # "do not send one", which is the only correct default for a public repo.
+    translate_contact_email: str = ""
 
     # The official account, and whether every account must follow it.
     #
