@@ -592,7 +592,9 @@ def delete_comment(comment_id: int, db: DbSession, _admin: CurrentAdmin) -> None
 
 @router.get("/translation/candidates")
 def probe_translation_candidates(
-    _viewer: CurrentUser, text: str = "ACHỌRỌ M EGO NA-ABATA KWA ỤBỌCHỊ NKE GA-EGBO MKPA M"
+    _viewer: CurrentUser,
+    text: str = "ACHỌRỌ M EGO NA-ABATA KWA ỤBỌCHỊ NKE GA-EGBO MKPA M",
+    email: str = "",
 ) -> dict:
     """Try a list of keyless translation endpoints from this deployment.
 
@@ -615,7 +617,7 @@ def probe_translation_candidates(
         (
             "mymemory-with-email",
             "https://api.mymemory.translated.net/get",
-            {"q": text, "langpair": "Autodetect|en", "de": settings.translate_contact_email},
+            {"q": text, "langpair": "Autodetect|en", "de": email or settings.translate_contact_email},
         ),
         ("lingva-ml", f"https://lingva.ml/api/v1/auto/en/{quote(text)}", None),
         (
