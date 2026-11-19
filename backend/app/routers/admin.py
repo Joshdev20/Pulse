@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
 from .. import cache, storage
+from ..config import settings
 from ..deps import CurrentAdmin, DbSession, avatar_url_for, cover_url_for
 from ..models import (
     Comment,
@@ -587,3 +588,38 @@ def delete_comment(comment_id: int, db: DbSession, _admin: CurrentAdmin) -> None
     db.delete(comment)
     db.commit()
     _invalidate()
+
+
+@router.get("/translation/probe")
+def probe_translation(_admin: CurrentAdmin, text: str = "I need a steady daily income") -> dict:
+    """Ask each translation provider from the server and report what it said.
+
+    Translation is best-effort and fails silently by design, which makes "the
+    translate button does nothing" impossible to diagnose from the outside: the
+    endpoint returns 200 with `translated: null` whether the text was already
+    English, the language was unknown, or every provider refused this
+    deployment's egress address. This reports the raw status and error for each
+    provider so the difference is visible.
+    """
+    import httpx
+
+    from .. import translate
+
+    target = settings.translate_target_language
+    report: dict = {"target": target, "enabled": settings.translate_enabled, "providers": {}}
+    with httpx.Client(timeout=settings.translate_timeout_seconds) as client:
+        for name, provider in (
+            ("google", translate._translate_google),
+            ("mymemory", translate._translate_mymemory),
+        ):
+            try:
+                result = provider(client, text, None, target)
+            except Exception as caught:  # noqa: BLE001 - the report is the point
+                report["providers"][name] = {"error": f"{type(caught).__name__}: {caught}"}
+                continue
+            report["providers"][name] = (
+                {"translated": result[0], "detected": result[1]}
+                if result
+                else {"error": "provider returned nothing"}
+            )
+    return report
