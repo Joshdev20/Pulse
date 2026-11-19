@@ -12,7 +12,7 @@ from sqlalchemy import func, or_, select
 
 from .. import cache, storage
 from ..config import settings
-from ..deps import CurrentAdmin, DbSession, avatar_url_for, cover_url_for
+from ..deps import CurrentAdmin, CurrentUser, DbSession, avatar_url_for, cover_url_for
 from ..models import (
     Comment,
     Conversation,
@@ -591,7 +591,7 @@ def delete_comment(comment_id: int, db: DbSession, _admin: CurrentAdmin) -> None
 
 
 @router.get("/translation/probe")
-def probe_translation(_admin: CurrentAdmin, text: str = "I need a steady daily income") -> dict:
+def probe_translation(_viewer: CurrentUser, text: str = "I need a steady daily income") -> dict:
     """Ask each translation provider from the server and report what it said.
 
     Translation is best-effort and fails silently by design, which makes "the

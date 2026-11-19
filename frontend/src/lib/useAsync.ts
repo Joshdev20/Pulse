@@ -1,22 +1,42 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 
 /**
  * Async data loader that ignores stale responses and supports manual refresh.
  * `deps` controls when the request re-runs.
+ *
+ * Pass a `cacheKey` to paint the previous result immediately when the component
+ * mounts again — navigating away and back should show what was already there,
+ * not a skeleton. A cached value is served for `queryCache.DEFAULT_TTL_MS`; past
+ * that it is still shown while a fresh copy is fetched behind it, so the screen
+ * never goes blank on a revalidation.
  */
-export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = []) {
-  const [data, setData] = useState<T | null>(null)
-  const [loading, setLoading] = useState(true)
+export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = [], cacheKey?: string) {
+  const [data, setData] = useState<T | null>(() =>
+    cacheKey ? (queryCache.read<T>(cacheKey) ?? null) : null,
+  )
+  // Only a cold cache shows a skeleton. A warm one paints at once, and the
+  // revalidation that follows must not replace the content with a spinner.
+  const [loading, setLoading] = useState(() => !(cacheKey && queryCache.read(cacheKey) !== undefined))
   const [error, setError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
+  const loaderRef = useRef(loader)
+  loaderRef.current = loader
 
   useEffect(() => {
     let active = true
-    setLoading(true)
+    const cached = cacheKey ? queryCache.read(cacheKey) : undefined
+    if (cached !== undefined) setData(cached as T)
+    setLoading(cached === undefined)
     setError(null)
-    loader()
+
+    const request = cacheKey
+      ? queryCache.load(cacheKey, () => loaderRef.current())
+      : loaderRef.current()
+
+    request
       .then((result) => {
         if (active) setData(result)
       })
@@ -30,7 +50,7 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = []) {
       active = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, nonce])
+  }, [...deps, nonce, cacheKey])
 
   return { data, setData, loading, error, refresh: () => setNonce((value) => value + 1) }
 }
@@ -38,5 +58,5 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = []) {
 /** Suggestions for the sidebar-ish "who to follow" card. */
 export function useSuggested(limit = 3) {
   const { user } = useAuth()
-  return useAsync(() => api.suggested(limit), [user?.id, limit])
+  return useAsync(() => api.suggested(limit), [user?.id, limit], `suggested:${user?.id}:${limit}`)
 }

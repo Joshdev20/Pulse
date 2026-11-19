@@ -19,9 +19,9 @@ export function ExplorePage() {
   const [editing, setEditing] = useState<Post | null>(null)
   const [tab, setTab] = useState<'posts' | 'people' | 'tags'>('posts')
 
-  const feed = usePostFeed((page) => api.posts(page, 20), [])
-  const suggestions = useAsync(() => api.suggested(8), [user?.id])
-  const tags = useAsync(() => api.trendingTags(20), [])
+  const feed = usePostFeed((page) => api.posts(page, 20), [], `explore:${user?.id}`)
+  const suggestions = useAsync(() => api.suggested(8), [user?.id], `suggested:${user?.id}:8`)
+  const tags = useAsync(() => api.trendingTags(20), [], 'trendingTags')
 
   const suggested = suggestions.data ?? []
 

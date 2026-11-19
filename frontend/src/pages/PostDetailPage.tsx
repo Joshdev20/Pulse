@@ -18,6 +18,7 @@ import { TranslatedText } from '../components/TranslatedText'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
+import * as queryCache from '../lib/queryCache'
 import { formatCount, formatFullDate } from '../lib/format'
 import type { Comment, Post } from '../lib/types'
 
@@ -46,16 +47,32 @@ export function PostDetailPage() {
       return
     }
     let active = true
-    setLoading(true)
+
+    // Paint what was read last time, then refresh behind it. Reopening a post
+    // is the common case after a back-navigation, and it should not cost a
+    // round trip before anything appears.
+    const cachedPost = queryCache.read<Post>(`post:${id}`)
+    const cachedComments = queryCache.read<Comment[]>(`comments:${id}`)
+    if (cachedPost) setPost(cachedPost)
+    if (cachedComments) setComments(cachedComments)
+    setLoading(!cachedPost)
     setError(null)
-    Promise.all([api.getPost(id), api.comments(id)])
+
+    Promise.all([
+      queryCache.load(`post:${id}`, () => api.getPost(id)),
+      queryCache.load(`comments:${id}`, () => api.comments(id)),
+    ])
       .then(([postData, commentData]) => {
         if (!active) return
         setPost(postData)
         setComments(commentData)
       })
       .catch((caught) => {
-        if (active) setError(caught instanceof Error ? caught.message : 'Could not load this post')
+        // A refresh failure leaves the cached post on screen; only a cold open
+        // has nothing to show.
+        if (active && !cachedPost) {
+          setError(caught instanceof Error ? caught.message : 'Could not load this post')
+        }
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -82,6 +99,9 @@ export function PostDetailPage() {
     try {
       const updated = post.liked_by_me ? await api.unlikePost(post.id) : await api.likePost(post.id)
       setPost(updated)
+      // Feed copies of this post carry the like count too, so both caches go.
+      queryCache.invalidate('post:')
+      queryCache.invalidate('feed:')
     } catch {
       setPost(post)
     } finally {
@@ -96,6 +116,8 @@ export function PostDetailPage() {
     setSending(true)
     try {
       const created = await api.addComment(post.id, draft.trim())
+      queryCache.invalidate(`comments:${post.id}`)
+      queryCache.invalidate(`post:${post.id}`)
       setComments((current) => [...current, created])
       setPost((current) => (current ? { ...current, comment_count: current.comment_count + 1 } : current))
       setDraft('')
@@ -150,6 +172,9 @@ export function PostDetailPage() {
     if (!post) return
     try {
       await api.deletePost(post.id)
+      queryCache.invalidate(`post:${post.id}`)
+      queryCache.invalidate(`comments:${post.id}`)
+      queryCache.invalidate('feed:')
       notify('Post deleted')
       navigate('/')
     } catch (caught) {
@@ -359,6 +384,8 @@ export function PostDetailPage() {
           onClose={() => setEditing(false)}
           onSaved={(updated) => {
             setPost(updated)
+            queryCache.write(`post:${updated.id}`, updated)
+            queryCache.invalidate('feed:')
             setEditing(false)
           }}
         />

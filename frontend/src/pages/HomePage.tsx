@@ -55,6 +55,10 @@ export function HomePage() {
   const feed = usePostFeed(
     (page) => api.feed(scope, page, 20, seed),
     [scope, user?.id, seed],
+    // Keyed by the ordering, not the seed alone: a restored feed must be the
+    // same arrangement the reader left. `chooseScope` draws a new seed, so a
+    // deliberate reshuffle still lands on a different key.
+    `feed:${user?.id}:${scope}:${seed}`,
   )
 
   const chooseScope = (next: 'following' | 'all') => {

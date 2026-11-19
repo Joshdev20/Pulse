@@ -119,6 +119,7 @@ export function ProfilePage() {
     // The tab is pinned to 'posts' while signed out, so the dependency cannot
     // change under a visitor and fire a request the API would refuse.
     [username, tab, me?.id],
+    `profile:${username}:${tab}:${me?.id}`,
   )
 
   const lists = useAsync(

@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { ApiError, api, setToken, getToken } from '../lib/api'
 import { clearMediaCache } from '../lib/mediaCache'
+import { clear as clearQueryCache } from '../lib/queryCache'
 import { clearCachedPushState } from '../lib/push'
 import { clearLastUser, loadLastUser, saveLastUser } from '../lib/lastUser'
 import {
@@ -20,6 +21,19 @@ const AUTH_RETRY_LIMIT = 3
 const AUTH_RETRY_BASE_MS = 400
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Drop everything cached for the session that is ending.
+ *
+ * Called at every session boundary — sign in, sign out, switch, a rejected
+ * token — because both caches hold data that belongs to the account that just
+ * left. Doing it in one place is the point: a boundary that forgets one of them
+ * shows the next account the previous one's feed.
+ */
+function clearSessionCaches() {
+  clearMediaCache()
+  clearQueryCache()
+}
 
 interface AuthValue {
   user: User | null
@@ -92,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // connection or a 5xx is transient, so retry with backoff instead of
         // discarding credentials the server never invalidated.
         if (error instanceof ApiError && error.status === 401) {
-          clearMediaCache()
+          clearSessionCaches()
           clearCachedPushState()
           clearLastUser()
           setToken(null)
@@ -127,7 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { access_token } = await api.login(username, password)
       // The previous session's media is keyed only by path, so it has to go
       // before the new account renders anything.
-      clearMediaCache()
+      clearSessionCaches()
       clearCachedPushState()
       setToken(access_token)
       const me = await api.me()
@@ -149,7 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     async (data: { username: string; email: string; display_name: string; password: string }) => {
       const { access_token } = await api.register(data)
-      clearMediaCache()
+      clearSessionCaches()
       clearCachedPushState()
       setToken(access_token)
       const me = await api.me()
@@ -176,7 +190,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * `forgetAccount` on each, or signing out of the last one.
    */
   const logout = useCallback(() => {
-    clearMediaCache()
+    clearSessionCaches()
     clearCachedPushState()
     if (activeAccountId !== null) removeAccount(activeAccountId)
     syncAccounts()
@@ -222,7 +236,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // The token is good, so adopt it. Everything below is local bookkeeping
       // that cannot fail, which is what keeps the current session safe.
-      clearMediaCache()
+      clearSessionCaches()
       clearCachedPushState()
       setToken(account.token)
       setActiveId(id)
@@ -272,7 +286,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       removeAccount(id)
       syncAccounts()
       if (wasActive) {
-        clearMediaCache()
+        clearSessionCaches()
         clearCachedPushState()
         clearLastUser()
         setUserState(null)

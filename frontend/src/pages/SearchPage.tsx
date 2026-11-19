@@ -41,6 +41,7 @@ export function SearchPage() {
         ? Promise.all([api.searchPosts(debounced, 25), api.searchUsers(debounced, 25)])
         : Promise.resolve<[Post[], User[]]>([[], []]),
     [debounced],
+    debounced ? `search:${debounced}` : undefined,
   )
 
   const [posts, people] = results.data ?? [[], []]

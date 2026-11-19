@@ -23,6 +23,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { MessagesPage } from './pages/MessagesPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { DYNAMIC_TITLE_ROUTES, titleRouteKey, usePageTitle } from './lib/usePageTitle'
+import { useScrollRestoration } from './lib/useScrollRestoration'
 
 /** Routes with room for the right-hand rail on wide screens. */
 const RAIL_ROUTES = ['/', '/explore', '/search', '/notifications']
@@ -76,6 +77,9 @@ function Layout() {
   // A page that sets its own title (the profile) opts the shell out, so the
   // shell's generic label cannot land after the child's and overwrite it.
   usePageTitle(pathname, undefined, !DYNAMIC_TITLE_ROUTES.has(titleRouteKey(pathname)))
+  // Restores the scroll position when the reader comes back to a page, so a
+  // post opened from halfway down the feed returns to that spot.
+  useScrollRestoration()
 
   const openComposer = useCallback(() => setComposeOpen(true), [])
 

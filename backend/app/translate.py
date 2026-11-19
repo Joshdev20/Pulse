@@ -304,8 +304,9 @@ def _translate_google(
 ) -> tuple[str, str | None] | None:
     """Translate via the endpoint the Chrome dictionary extension uses.
 
-    Answers with ``[[text, detected]]``. It translates Igbo and names it as
-    Igbo, where the other provider has no Igbo at all, so it is tried first.
+    Answers with ``[[text, detected]]``, covering every sentence of the request
+    in one string. It translates Igbo and names it as Igbo, where the other
+    provider has no Igbo at all, so it is tried first.
     """
     del source  # Google detects the source itself; nothing to pin.
     try:
