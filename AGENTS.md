@@ -51,7 +51,7 @@ harmless to the app but breaks byte-for-byte bundle comparison, so leave it off.
 served `immutable` for a year; without this Vercel answered every asset with
 `max-age=0, must-revalidate`, so each launch of the installed PWA revalidated the whole
 JS/CSS bundle before it could paint. `sw.js` and `manifest.webmanifest` are unhashed and
-are how a new deploy is discovered, so they stay `must-revalidate` — do not let the asset
+are how a new deploy is discovered, so they stay `must-revalidate` â€” do not let the asset
 rule swallow them, or an installed app would never pick up an update.
 
 ## Commands
@@ -146,13 +146,13 @@ the public URL returns 502 until the dev server is bound to 12000.
   authenticated, so a cached feed would be served to the next person on a shared device.
 - It nevertheless registers a `fetch` listener with an empty body, because Chrome's
   documented install criteria call for a worker with a fetch handler. The listener
-  deliberately does **not** call `respondWith` — an empty listener leaves the browser to
+  deliberately does **not** call `respondWith` â€” an empty listener leaves the browser to
   make the request as if no worker existed, so nothing is cached and no response is
   synthesised. Do not "fix" it into `respondWith(fetch(...))`, and do not add caching to it.
   A test Chromium fired `beforeinstallprompt` with and without this listener, so treat the
   criteria as documented behaviour to satisfy rather than something a local run proves.
 - `main.tsx` registers the worker on every load. It used to be registered only from
-  `lib/push.ts`, so a user who never enabled push had no worker at all — and the criteria
+  `lib/push.ts`, so a user who never enabled push had no worker at all â€” and the criteria
   above then went unmet. Keep the startup registration; `push.ts` still registers for
   itself because it needs the result, and registration is idempotent.
 - `lib/installPrompt.ts` holds platform detection and the deferred event. The event is
@@ -160,11 +160,11 @@ the public URL returns 502 until the dev server is bound to 12000.
   mounts. It is single-use: `triggerInstall` drops it once spent.
 - Android gets a button that replays the native prompt. iOS cannot be triggered from the
   page at all, so it gets Share > Add to Home Screen instructions instead, and only in
-  Safari — Chrome and Firefox on iOS have no such option, which `isIOSSafari` encodes.
+  Safari â€” Chrome and Firefox on iOS have no such option, which `isIOSSafari` encodes.
 - The card is shown only to someone still using the site in a browser tab: `isStandalone`
   excludes an installed app, `platform === 'other'` excludes desktop, and it waits for a
   visible, non-hidden tab. A dismissal is remembered for 30 days.
-- A dismissal of Chrome's own dialog is not recorded as a refusal — that is a decision
+- A dismissal of Chrome's own dialog is not recorded as a refusal â€” that is a decision
   about the prompt, not the app, so the card stays and the button works again.
 
 ### Realtime
@@ -219,7 +219,7 @@ the public URL returns 502 until the dev server is bound to 12000.
   ignores range requests and answers with the whole blob, so a tile that waits on the
   video pays the full size for one frame. The poster is captured in the browser at upload
   (`capturePoster` in `frontend/src/lib/videoPoster.ts`), sent in the same multipart
-  request, and served from `GET /api/media/{id}/poster` — a few KB, cached, ETagged.
+  request, and served from `GET /api/media/{id}/poster` â€” a few KB, cached, ETagged.
   `MediaGallery` primes the clip only on hover for a video that has a poster, so the
   lightbox still opens onto bytes already in memory.
 - A poster is optional at every step. `capturePoster` returns null on any failure and the
@@ -231,7 +231,7 @@ the public URL returns 502 until the dev server is bound to 12000.
 - When no poster arrives with a video upload, the server makes one itself
   (`extract_poster` in `backend/app/video.py`), so a clip uploaded by a browser that could
   not decode it, or by any client that skips the capture, still gets a preview. It shells
-  out to ffmpeg — the binary `imageio-ffmpeg` ships is preferred over `PATH`, because the
+  out to ffmpeg â€” the binary `imageio-ffmpeg` ships is preferred over `PATH`, because the
   free instance has none and a silently missing poster is the bug this exists to fix. The
   call runs in a worker thread (it is a subprocess) and returns None on any failure, so an
   undecodable clip is stored without a poster rather than failing the upload.
@@ -241,7 +241,7 @@ the public URL returns 502 until the dev server is bound to 12000.
   `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream` so `getUserMedia`
   resolves without a permission prompt. A voice note that finishes playing shows its full
   duration and `paused: true` again, so sample playback shortly after pressing play rather
-  than waiting — the fixture clips are about a second long.
+  than waiting â€” the fixture clips are about a second long.
 
 ### Profile link previews
 
@@ -250,11 +250,11 @@ the public URL returns 502 until the dev server is bound to 12000.
   with an HTML page carrying Open Graph tags, and `GET /api/preview/card/{username}` with a
   generated 1200x630 JPEG. Both are `include_in_schema=False` so they stay out of the docs.
 - Keep the exposed surface to display name, username, bio and follower count. Email,
-  ids and media tokens must never reach this page — `tests/test_preview.py` asserts that.
+  ids and media tokens must never reach this page â€” `tests/test_preview.py` asserts that.
   The page is HTML, so every interpolated value goes through `html.escape`.
 - The card composes the avatar server-side because `/api/media/{id}` needs a bearer token.
   It is JPEG rather than PNG because WhatsApp silently drops an `og:image` over roughly
-  300KB, and a photo barely compresses — a test asserts the worst case stays under it.
+  300KB, and a photo barely compresses â€” a test asserts the worst case stays under it.
 - Text is laid out with `_fit_font` / `_wrap`, which shrink and hard-break a long word.
   Display names reach 64 characters and bios 280; at the design size a long name is over
   three times the column width and would otherwise be drawn off the card.
@@ -270,7 +270,7 @@ the public URL returns 502 until the dev server is bound to 12000.
   shell (no `og:` tags). The `og:image` must resolve on the **site** domain, not the API
   host, or the proxy is not forwarding `X-Forwarded-Host`.
 - A production `404` for a seed username is not necessarily a broken route. The deployed
-  database is not the local one — it holds only the accounts real users registered. A
+  database is not the local one â€” it holds only the accounts real users registered. A
   correct route answers an unknown name with the "Profile not found" HTML page, so check
   the body before concluding the route is missing. Likewise `/api/media/{id}` returning
   `404` for every id is data drift on the free instance, not a media bug.
@@ -291,8 +291,8 @@ the public URL returns 502 until the dev server is bound to 12000.
   `loading` as `true` unconditionally; the cached profile from `lastUser.ts` is seeded for
   display only, so a transient `/auth/me` failure keeps the profile on screen instead of
   blanking it, but it does **not** skip the loader. Skipping the loader whenever a cached
-  profile existed was a regression for returning visitors — and an installed PWA is always
-  a returning visitor — which made the app open with no animation and a blank first paint.
+  profile existed was a regression for returning visitors â€” and an installed PWA is always
+  a returning visitor â€” which made the app open with no animation and a blank first paint.
   With no stored token the session check resolves without a request and the loader is only
   up for a frame; seed `pulse.token` in `localStorage` to exercise it in a browser test.
 - `index.html` carries the icon links, Open Graph and Twitter tags. Profile links get a
@@ -321,8 +321,8 @@ the public URL returns 502 until the dev server is bound to 12000.
 ### Where account and appearance controls live
 
 - `/settings` is only the profile *editor* (picture, colour, name, bio, location, website,
-  cover). Everything that is not a profile field — theme, notification sound, push,
-  the account switcher and sign out — lives in the hamburger on your own profile
+  cover). Everything that is not a profile field â€” theme, notification sound, push,
+  the account switcher and sign out â€” lives in the hamburger on your own profile
   (`ProfileMenu.tsx`, rendered by `ProfilePage.tsx` when `isMe`). Keep it that way: a
   settings screen that mixes the two is what this split fixed.
 - That hamburger is the *only* way to reach those controls on a phone, because the sidebar
@@ -356,7 +356,7 @@ re-deriving rather than re-litigating from scratch:
 Two boot-path costs were worth removing anyway, because each one is a round trip against a
 database that is not next to the app:
 
-- `record_post_views` used to `db.add()` one `PostView` per post and commit them in turn —
+- `record_post_views` used to `db.add()` one `PostView` per post and commit them in turn â€”
   a write per post on the read path. It now filters already-seen ids in one query and does a
   single `executemany`. `tests/test_view_recording.py` pins both the statement count and
   the fact that a repeat read writes nothing.
@@ -373,16 +373,16 @@ inline, before the bundle downloads, so the wake-up overlaps the download instea
 starting after React mounts. The URL comes from `%VITE_API_BASE%`, so a build without that
 variable (local dev, same-origin deploy) is a no-op rather than a request to production.
 
-### The boot animation has two halves — keep both
+### The boot animation has two halves â€” keep both
 
 There are two separate loading screens, and removing either one brings back the "blank
 first paint" complaint:
 
-1. **`index.html` `.boot-splash`** — inline CSS and markup, so it paints before the bundle
+1. **`index.html` `.boot-splash`** â€” inline CSS and markup, so it paints before the bundle
    is parsed. This is the only thing on screen during a cold start; on a slow wake the
    bundle lands seconds after the HTML. It is a hand-written copy of the theme tokens, not
    a component, because it has to work before any JS runs.
-2. **`App.tsx` `BrandLoader`** — the animated `PulseLogo` rendered while `AuthProvider`
+2. **`App.tsx` `BrandLoader`** â€” the animated `PulseLogo` rendered while `AuthProvider`
    checks the session. `AuthProvider` starts `loading` as `true` unconditionally, so a
    returning visitor (and an installed PWA is always one) sees it on every boot rather than
    jumping straight into the app.
@@ -400,7 +400,7 @@ installed PWA open with no animation.
 Every fix and new feature gets a post from the official `pulse` account (the account the
 product's own updates are published from). It is a normal account: sign in through
 `POST /api/auth/login` with `{"username": "pulse", ...}` and create the post with
-`POST /api/posts`. There is no separate admin or announcement API, and no service token —
+`POST /api/posts`. There is no separate admin or announcement API, and no service token â€”
 the credential is the account's password, which is not stored in this repo, so ask for it
 rather than guessing.
 
@@ -451,7 +451,7 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
 - Driving the frontend from a headless browser (`.agent_tmp/*.js`, `puppeteer-core` +
   `/usr/bin/chromium`) needs two things the setup above does not give you. Point the dev
   server at the API with `VITE_API_BASE=http://127.0.0.1:8010`, and start the backend with
-  `CORS_ORIGINS` naming the dev origin — the default is Vercel-only, so every request fails
+  `CORS_ORIGINS` naming the dev origin â€” the default is Vercel-only, so every request fails
   CORS preflight and the page silently falls back to the login screen. Run the harness from
   `frontend/` with `NODE_PATH=frontend/node_modules`, since Node resolves modules from the
   script's directory rather than the cwd. Headless chromium also refuses
@@ -653,7 +653,7 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   upload is a much smaller problem than a corrupted one. Animated GIFs are passed through
   untouched (re-encoding drops the animation) and PNG alpha is preserved.
 - `tests/test_media.py::test_video_poster_is_stored_and_served` no longer asserts the poster
-  is byte-identical to what was uploaded — it is re-encoded now. It asserts a valid JPEG of
+  is byte-identical to what was uploaded â€” it is re-encoded now. It asserts a valid JPEG of
   the same picture that is smaller than the video. Any other test that pinned exact upload
   bytes will need the same treatment.
 - On a host without a persistent disk â€” `render.yaml` sets `plan: free`, which cannot attach
@@ -700,7 +700,7 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   Confirmed by probing `web.push.apple.com` directly with a synthetic endpoint: `.local`
   returns 403 BadJwtToken, `localhost`/`a@b` return 403 too, and a real domain returns
   400 BadWebPushToken (JWT accepted, only the fake device token refused). The bar is a public
-  TLD, not a mailbox that exists — Apple does no MX lookup, so `someone@example.com` passes.
+  TLD, not a mailbox that exists â€” Apple does no MX lookup, so `someone@example.com` passes.
   `config.push_subject_valid` enforces this, `main._warn_on_push_misconfiguration` prints a
   warning at boot, and `render.yaml` leaves the value to be set per deployment.
 - A `403 BadJwtToken` must NOT prune the subscription row, unlike the key-mismatch 403.
@@ -709,8 +709,8 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   cause. `push._is_bad_jwt` distinguishes the two 403s by the response body, and both cases
   are pinned in `tests/test_push.py`.
 - iPhone Web Push requires the app to be *installed* to the home screen. A Safari tab on iOS
-  reports `serviceWorker`, `PushManager` and `Notification` — so every capability check
-  passes and the toggle looks usable — but subscribing cannot deliver. `push.needsInstallForPush`
+  reports `serviceWorker`, `PushManager` and `Notification` â€” so every capability check
+  passes and the toggle looks usable â€” but subscribing cannot deliver. `push.needsInstallForPush`
   gates on `installPlatform() === 'ios' && !isStandalone()`, returning the `needs-install`
   state; `enablePush` refuses *before* calling `Notification.requestPermission`, because
   granting permission there leaves the user allowed-but-undeliverable. Android and desktop
@@ -728,8 +728,8 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   triggered it.
 - Delivery runs on a *fixed* pool (`PUSH_WORKERS`), fed by a bounded queue, not one thread
   per notification. A thread per event is unbounded: a slow or hanging push service makes
-  every send outlive its request, so a burst piles up threads — each holding a DB session
-  and a stack — until the process hits its ceiling. This is what caused a Render OOM restart:
+  every send outlive its request, so a burst piles up threads â€” each holding a DB session
+  and a stack â€” until the process hits its ceiling. This is what caused a Render OOM restart:
   400 notifications against a slow endpoint produced 402 live threads and pushed RSS from
   68 MB to 101 MB, and RSS never returned to its baseline. When the queue is full the newest
   event is dropped and counted, because the notification is already committed and visible in
@@ -745,7 +745,7 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
   OS's notification daemon fetches it with no session, and may run with the browser closed.
 - **iOS never shows that avatar, and that is not a Pulse bug.** WebKit does not implement
   the notification `icon` option (MDN browser-compat-data lists Safari `icon` as *not
-  supported* — "the property can be set, but has no effect" — and WebKit bug 280162 is
+  supported* â€” "the property can be set, but has no effect" â€” and WebKit bug 280162 is
   still open), so a Home Screen web app on iOS always draws the *app* icon in an alert.
   The sender's avatar can only appear on Android, Chrome and desktop. Do not "fix" this by
   reshuffling the payload. What every platform does render is title and body, so the sender
@@ -776,7 +776,7 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
 - Verifying push against production: the deployed bundle is only byte-identical to a local
   build when `VITE_API_BASE` matches exactly, trailing slash included (Vercel sets it to
   `https://pulse-api-y16m.onrender.com/`). Hash mismatch alone does not mean the commit did
-  not deploy — compare with the same base before concluding anything.
+  not deploy â€” compare with the same base before concluding anything.
 - The production database is not the local seed: only `ada` exists with the demo password
   and `josh` is the admin, so a harness that assumes `grace`/`linus`/etc. gets a 401. Also
   clean up after any prod probe. Removing a subscription in the browser alone leaves the
@@ -833,13 +833,13 @@ post landed by reading it back from `GET /api/users/pulse/posts`.
 - The Render free tier intermittently answers 502 during a deploy window (health check times out, alert email follows) and recovers on its own. `render.yaml` sets `healthCheckPath: /api/health`. Verify a suspected app failure with a timed request before blaming the code: a real CPU stall shows up as a slow request, an infra flap does not.
 - Web Push: a subscription is bound to the VAPID key that created it. Rotate
   `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` and every stored subscription becomes
-  undeliverable — FCM answers 403 "the VAPID credentials ... do not correspond to
+  undeliverable â€” FCM answers 403 "the VAPID credentials ... do not correspond to
   the credentials used to create the subscriptions". That 403 is permanent, not
   transient, so `push.py` treats it as gone and prunes the row; otherwise the row
   survives, the toggle still reads "subscribed", and every alert is silently
   dropped forever. `GET /api/push/status?endpoint=...` reports
   `endpoint_registered`, and the client replaces a subscription the server no
-  longer has (it must create a NEW subscription — re-sending the old one is
+  longer has (it must create a NEW subscription â€” re-sending the old one is
   useless, the browser keeps handing back the dead one).
 - A browser can only be subscribed once, and `PushSubscription.endpoint` is
   globally unique, so the row is per-browser, not per-user: subscribing the same
