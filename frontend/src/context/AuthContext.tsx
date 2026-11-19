@@ -53,15 +53,16 @@ interface AuthValue {
 const AuthContext = createContext<AuthValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // A returning visitor is rendered from the cached profile of their last
-  // session, so the app appears at once while `/auth/me` confirms the token in
-  // the background. This is only a display copy of the viewer's own profile —
-  // nothing is authorised from it, and a token the server rejects clears it.
+  // The cached profile of the last session is seeded for display only, so a
+  // transient failure of the session check keeps the profile on screen instead
+  // of blanking it. It never authorises anything, and a token the server
+  // rejects clears it.
   const [user, setUserState] = useState<User | null>(() => (getToken() ? loadLastUser() : null))
-  // The loader is skipped only when there is a cached profile to show. A token
-  // with no cached profile still waits for the check, otherwise `RequireAuth`
-  // would see a null user and bounce a valid session to the sign-in screen.
-  const [loading, setLoading] = useState(() => !(getToken() && loadLastUser()))
+  // The first-load screen always shows while the session is confirmed. It used
+  // to be skipped whenever a cached profile existed, which made a returning
+  // visitor — and an installed PWA is always one — open straight into the app
+  // with no loading animation and a blank first paint while `/auth/me` ran.
+  const [loading, setLoading] = useState(true)
   const [accounts, setAccounts] = useState<SavedAccount[]>(() => listAccounts())
   const [activeAccountId, setActiveAccountIdState] = useState<number | null>(() => getActiveId())
   // Bumped on every session change. The realtime provider keys its socket on

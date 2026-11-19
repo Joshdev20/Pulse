@@ -47,6 +47,13 @@ calls its own origin. Preview is the one that gets forgotten: production was con
 first, so a branch preview fails to build while `main` deploys fine. A trailing slash is
 harmless to the app but breaks byte-for-byte bundle comparison, so leave it off.
 
+`frontend/vercel.json` sets a `headers` block. `/assets/*` is content-addressed, so it is
+served `immutable` for a year; without this Vercel answered every asset with
+`max-age=0, must-revalidate`, so each launch of the installed PWA revalidated the whole
+JS/CSS bundle before it could paint. `sw.js` and `manifest.webmanifest` are unhashed and
+are how a new deploy is discovered, so they stay `must-revalidate` — do not let the asset
+rule swallow them, or an installed app would never pick up an update.
+
 ## Commands
 
 ### First-time setup in a fresh sandbox
@@ -279,9 +286,15 @@ the public URL returns 502 until the dev server is bound to 12000.
   takes one image and downscales it, which discards the artwork tuned for 16px; the frames
   must each keep their own rendering. Verify with `Image.open('favicon.ico').info['sizes']`,
   which should list all three.
-- The first-load screen (`BrandLoader` in `App.tsx`) only renders for a returning visitor.
-  With no stored token the session check resolves without a request, so the loader never
-  shows; seed `pulse.token` in `localStorage` to exercise it in a browser test.
+- The first-load screen (`BrandLoader` in `App.tsx`) shows on every boot while the session
+  is confirmed, so the app never paints blank before the feed. `AuthProvider` starts
+  `loading` as `true` unconditionally; the cached profile from `lastUser.ts` is seeded for
+  display only, so a transient `/auth/me` failure keeps the profile on screen instead of
+  blanking it, but it does **not** skip the loader. Skipping the loader whenever a cached
+  profile existed was a regression for returning visitors — and an installed PWA is always
+  a returning visitor — which made the app open with no animation and a blank first paint.
+  With no stored token the session check resolves without a request and the loader is only
+  up for a frame; seed `pulse.token` in `localStorage` to exercise it in a browser test.
 - `index.html` carries the icon links, Open Graph and Twitter tags. Profile links get a
   per-user card from the backend, but every other route relies on these static tags, so a
   new top-level route does not need its own preview work.
