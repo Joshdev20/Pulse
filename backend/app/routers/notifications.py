@@ -12,7 +12,7 @@ from ..schemas import NotificationOut
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 
-def push_notification(recipient_id: int, event: dict) -> None:
+def push_notification(recipient_id: int, event: dict) -> bool:
     """Send a Web Push for a notification event, if the recipient has devices.
 
     Shared by every path that creates a notification, so a new kind of
@@ -22,12 +22,15 @@ def push_notification(recipient_id: int, event: dict) -> None:
 
     The send happens on a worker thread (``push.schedule_notify``) because the
     calling handlers are ``async`` and ``pywebpush`` is synchronous.
+
+    Returns whether a push was queued, so a caller reporting delivery can tell
+    "notified in-app" from "alerted on a device".
     """
     text = notification_text(event)
     if text is None:
-        return
-    url = notification_url(event["notification"])
-    push.schedule_notify(recipient_id, push.notification_payload(event, text, url))
+        return False
+    payload = push.notification_payload(event, text, notification_url(event["notification"]))
+    return push.schedule_notify(recipient_id, payload)
 
 
 def notification_text(event: dict) -> str | None:
@@ -48,6 +51,9 @@ def notification_text(event: dict) -> str | None:
         # Sent to an author's followers, so it reads as news from them rather
         # than as something done to the recipient.
         "post": f"{name} shared a new post",
+        # A platform announcement. Carries no actor, so it must read as coming
+        # from Pulse itself rather than from a person.
+        "announcement": "Pulse posted an announcement",
     }.get(kind)
 
 

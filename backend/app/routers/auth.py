@@ -9,6 +9,7 @@ from .. import mail
 from ..config import settings
 from ..deps import CurrentUser, DbSession, serialize_user
 from ..models import PasswordReset, User, utcnow
+from ..official import ensure_official_follow
 from ..schemas import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -59,6 +60,10 @@ def register(payload: UserCreate, db: DbSession) -> Token:
         password_hash=hash_password(payload.password),
     )
     db.add(user)
+    db.flush()
+    # Same commit as the account, so a new user can never exist without the
+    # follow the product rule requires.
+    ensure_official_follow(db, user)
     db.commit()
     db.refresh(user)
     return Token(access_token=create_access_token(str(user.id)))

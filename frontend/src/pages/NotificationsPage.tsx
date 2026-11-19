@@ -15,6 +15,7 @@ const ICONS = {
   follow: UserIcon,
   repost: RepostIcon,
   post: ComposeIcon,
+  announcement: BellIcon,
 } as const
 
 const VERB = {
@@ -25,6 +26,7 @@ const VERB = {
   follow: 'started following you',
   repost: 'reposted your post',
   post: 'shared a new post',
+  announcement: 'posted an announcement',
 } as const
 
 export function NotificationsPage() {

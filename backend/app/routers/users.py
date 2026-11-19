@@ -16,6 +16,7 @@ from ..deps import (
     serialize_users,
 )
 from ..models import Comment, Follow, Like, Media, Notification, Post, User
+from ..official import is_official
 from ..realtime import manager
 from ..schemas import Page, SuggestedUser, UserPublic, UserUpdate, Stats
 
@@ -404,6 +405,13 @@ async def follow_user(username: str, db: DbSession, user: CurrentUser) -> UserPu
 @router.delete("/{username}/follow", response_model=UserPublic)
 def unfollow_user(username: str, db: DbSession, user: CurrentUser) -> UserPublic:
     target = _get_user_or_404(db, username)
+    # The follow is compulsory, so removing it would just be re-added at the next
+    # boot while the button appeared to work. Refusing is the honest answer.
+    if settings.official_follow_required and is_official(target):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "The official account cannot be unfollowed",
+        )
     existing = db.scalar(
         select(Follow).where(Follow.follower_id == user.id, Follow.following_id == target.id)
     )

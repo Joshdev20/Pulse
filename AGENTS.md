@@ -403,9 +403,8 @@ installed PWA open with no animation.
 Every fix and new feature gets a post from the official `pulse` account (the account the
 product's own updates are published from). It is a normal account: sign in through
 `POST /api/auth/login` with `{"username": "pulse", ...}` and create the post with
-`POST /api/posts`. There is no separate admin or announcement API, and no service token —
-the credential is the account's password, which is not stored in this repo, so ask for it
-rather than guessing.
+`POST /api/posts`. The credential is the account's password, which is not stored in this
+repo, so ask for it rather than guessing.
 
 Write in the account's established voice, matching posts 74-84: a one-line headline with a
 single emoji, a blank line, a short paragraph in the second person saying what changed and
@@ -421,6 +420,27 @@ the hashtags.
 
 Publish only after the change is deployed and verified against production. Confirm the
 post landed by reading it back from `GET /api/users/pulse/posts`.
+
+### Reaching everyone, not just followers
+
+Creating the post only notifies the author's followers (`_notify_followers` in
+`backend/app/routers/posts.py`), which is almost nobody on a young platform. For an
+announcement, follow the post with a broadcast:
+
+```
+POST /api/admin/announcements   {"post_id": 111}     # admin token required
+```
+
+It writes one `announcement` notification per active (non-banned) account in a single
+transaction, then fans out over the socket and Web Push. It returns
+`{"post_id": ..., "notified": N, "pushed": M}`, where `pushed` counts accounts that
+actually had a device to alert. Run it once per post; running it twice creates duplicate
+notifications.
+
+Compulsory following is what makes this unnecessary for routine posts: every account
+follows `pulse`, created at registration and backfilled for existing accounts at startup
+(`backend/app/official.py`). The rule is `settings.official_follow_required`; unfollowing
+the official account returns `400` while it is on.
 
 ## Gotchas
 - `AuthProvider` is mounted once, in `main.tsx`, above the router. Do not mount it again in

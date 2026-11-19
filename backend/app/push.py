@@ -174,18 +174,19 @@ class _PushDispatcher:
 _dispatcher = _PushDispatcher()
 
 
-def schedule_notify(user_id: int, payload: dict[str, Any]) -> None:
+def schedule_notify(user_id: int, payload: dict[str, Any]) -> bool:
     """Deliver ``payload`` to ``user_id`` without blocking the event loop.
 
     ``pywebpush`` uses synchronous ``requests``, so a send costs a few hundred
     milliseconds. Running it inline inside an ``async`` handler would stall the
     event loop and every other request with it, so the send is handed to the
     dispatcher's worker pool. The request returns immediately; the push is
-    best-effort.
+    best-effort. Returns whether the alert was queued — False when push is not
+    configured or the backlog is full.
     """
     if not settings.push_configured:
-        return
-    _dispatcher.submit(user_id, payload)
+        return False
+    return _dispatcher.submit(user_id, payload)
 
 
 def generate_keys() -> tuple[str, str]:

@@ -19,6 +19,7 @@ from ..models import (
     Like,
     Media,
     Message,
+    Notification,
     Post,
     Tag,
     User,
@@ -36,8 +37,11 @@ from ..schemas import (
     AdminUser,
     AdminUserPage,
     AdminVerification,
+    AnnouncementBroadcast,
+    AnnouncementBroadcastResult,
     UserModeration,
 )
+from .notifications import notification_event, push_notification
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -118,6 +122,56 @@ def _serialize_admin_users(db: DbSession, users: list[User]) -> list[AdminUser]:
         )
         for user in users
     ]
+
+
+@router.post("/announcements", response_model=AnnouncementBroadcastResult)
+async def broadcast_announcement(
+    payload: AnnouncementBroadcast, db: DbSession, _admin: CurrentAdmin
+) -> AnnouncementBroadcastResult:
+    """Notify every account about an official post.
+
+    Ordinary posts notify the author's followers, which leaves most of a young
+    platform unreached — the official account had a handful of followers and 43
+    accounts, so an announcement reached almost nobody. This fans out to every
+    active account instead.
+
+    One notification row per account, committed in a single transaction: a
+    broadcast that half-succeeded would be worse than one that failed, because a
+    retry could not tell who had already been reached.
+    """
+    post = db.get(Post, payload.post_id)
+    if post is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Post not found")
+
+    recipients = db.scalars(
+        select(User.id).where(User.id != post.author_id, User.is_banned.is_(False))
+    ).all()
+
+    rows = [
+        Notification(user_id=user_id, actor_id=post.author_id, kind="announcement", post_id=post.id)
+        for user_id in recipients
+    ]
+    db.add_all(rows)
+    # Flush so every row has an id, which the realtime frame and the push tag
+    # both need. Committing first means a send can never announce a row that a
+    # later failure rolled back.
+    db.flush()
+    db.commit()
+
+    pushed = 0
+    for row in rows:
+        # Reuses the same frame builder as every other notification, so the
+        # socket, the list and the push payload cannot drift apart. The actor is
+        # fetched once and served from the identity map for the rest.
+        event = notification_event(db, row)
+        await manager.publish(row.user_id, event)
+        if push_notification(row.user_id, event):
+            pushed += 1
+
+    cache.bump("notifications", "stats")
+    return AnnouncementBroadcastResult(
+        post_id=post.id, notified=len(rows), pushed=pushed
+    )
 
 
 @router.get("/stats", response_model=AdminStats)

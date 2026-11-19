@@ -49,6 +49,8 @@ function notificationText(event: RealtimeEvent): string | null {
       return `${name} reposted your post`
     case 'post':
       return `${name} shared a new post`
+    case 'announcement':
+      return 'Pulse posted an announcement'
     default:
       return null
   }

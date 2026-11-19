@@ -51,6 +51,26 @@ def _backfill_media_blobs() -> None:
         db.close()
 
 
+def _backfill_official_follows() -> None:
+    """Make every existing account follow the official account.
+
+    Accounts created before the follow was compulsory would otherwise miss every
+    announcement. Idempotent, so it adds nothing on the boots after the first.
+    """
+    from .database import SessionLocal
+    from .official import backfill_official_follows
+
+    db = SessionLocal()
+    try:
+        added = backfill_official_follows(db)
+        if added:
+            print(f"Added {added} official-account follow(s).")
+    except Exception as exc:  # noqa: BLE001 - startup must survive a bad row
+        print(f"Official follow backfill skipped: {exc}")
+    finally:
+        db.close()
+
+
 def _backfill_like_views() -> None:
     """Treat a like as proof of a view.
 
@@ -128,6 +148,9 @@ async def lifespan(_app: FastAPI):
         # A database seeded before moderators existed keeps is_admin at its
         # default and would have no route into the admin console.
         ensure_admin()
+    # After seeding, so demo accounts get the compulsory follow too. Ordering
+    # matters: the backfill only covers accounts that already exist.
+    _backfill_official_follows()
     # Resolve the cache backend once at startup so the first request is not the
     # one that discovers Redis is unavailable.
     cache.get_store()

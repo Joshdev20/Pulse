@@ -378,6 +378,20 @@ class AdminCount(BaseModel):
     value: int
 
 
+class AnnouncementBroadcast(BaseModel):
+    """An official post to push to every account."""
+
+    post_id: int
+
+
+class AnnouncementBroadcastResult(BaseModel):
+    """What the broadcast did, so a moderator can see it reached people."""
+
+    post_id: int
+    notified: int
+    pushed: int
+
+
 class AdminStats(BaseModel):
     """Analytics for the admin dashboard."""
 

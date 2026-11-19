@@ -175,6 +175,16 @@ class Settings(BaseSettings):
     # a translation.
     translate_target_language: str = "en"
 
+    # The official account, and whether every account must follow it.
+    #
+    # Compulsory following is a product rule: announcements only reach people who
+    # follow the account, so the follow is created at registration and backfilled
+    # for existing accounts at startup. Set the flag false to make following
+    # optional again; every helper no-ops when the account does not exist, so an
+    # unset or misspelled username cannot break registration or boot.
+    official_account_username: str = "pulse"
+    official_follow_required: bool = True
+
     # Response caching for hot read endpoints. Redis is used when `redis_url`
     # is set and reachable; otherwise an in-process store is used, so the app
     # and its tests run fine without a Redis server.
