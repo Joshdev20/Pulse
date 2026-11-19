@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -73,11 +74,46 @@ def main() -> int:
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         print(f"{stamp}  {url}  attempt {attempt}/{ATTEMPTS}  {detail}", flush=True)
         if ok:
+            hold = _hold_seconds()
+            if hold > 0:
+                _hold(url, hold)
             return 0
         last = detail
 
     print(f"health check failed after {ATTEMPTS} attempts: {last}", file=sys.stderr)
     return 1
+
+
+def _hold_seconds() -> int:
+    """How long this run should keep pinging after the first success."""
+    try:
+        return max(0, int(os.environ.get("PULSE_HOLD_SECONDS", "0")))
+    except ValueError:
+        return 0
+
+
+def _hold(url: str, seconds: int) -> None:
+    """Keep the instance warm for ``seconds`` after a successful wake.
+
+    The scheduled workflow asks GitHub for a run every 5 minutes, but GitHub
+    throttles a cron that frequent on a free plan and in practice delivers a run
+    every 4-9 hours. A single ping therefore left the free instance asleep for
+    most of the day, and every visit in between paid the 30-60s cold start.
+
+    Holding the ping inside one run covers the gap the schedule cannot: each
+    run stays alive for its budget, so the instance is never idle long enough to
+    sleep between the runs that do arrive.
+    """
+    interval = 60
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+        _ok, detail = ping(url)
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        # A failed tick is not a failed run: the next one may well succeed, and
+        # exiting early would let the instance sleep until the next scheduled
+        # run, which may be hours away.
+        print(f"{stamp}  {url}  holding  {detail}", flush=True)
 
 
 if __name__ == "__main__":

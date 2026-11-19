@@ -240,11 +240,25 @@ def _ordered_feed(
     does not grow with the size of the site.
     """
     pool = list(db.scalars(query.limit(FEED_POOL_SIZE)).all())
-    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    # A full COUNT over the candidate query is the most expensive statement on
+    # this route, and it only feeds `total`. When the pool came back short the
+    # query was not truncated, so the pool *is* the whole set and the count is
+    # already known — skip the statement entirely.
+    total = len(pool) if len(pool) < FEED_POOL_SIZE else (
+        db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    )
     if not pool:
         return Page(items=[], total=total, page=page, page_size=page_size, has_more=False)
 
-    ids = [post.id for post in pool]
+    # Count the whole pool plus any repost originals, which can sit outside the
+    # pool window but still need their own totals when serialized.
+    ids = list(
+        {
+            post.id
+            for post in pool
+        }
+        | {post.repost_of.id for post in pool if post.repost_of is not None}
+    )
     like_counts = dict(
         db.execute(
             select(Like.post_id, func.count(Like.id)).where(Like.post_id.in_(ids)).group_by(Like.post_id)
@@ -272,7 +286,12 @@ def _ordered_feed(
     ordered = sorted(pool, key=draw_key)
 
     window = ordered[(page - 1) * page_size : page * page_size]
-    items = serialize_posts(db, window, viewer)
+    # The counts above already cover every pool post, and the window is drawn
+    # from that pool, so hand them over rather than making `serialize_posts`
+    # repeat the same two grouped queries.
+    items = serialize_posts(
+        db, window, viewer, like_counts=like_counts, comment_counts=comment_counts
+    )
     return Page(
         items=items,
         total=total,

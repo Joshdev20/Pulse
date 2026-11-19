@@ -63,9 +63,14 @@ def ensure_schema(engine: Engine) -> list[str]:
 
     Returns the ``table.column`` names that were added, so the caller can log
     them. Safe to run on every startup: existing columns are skipped.
+
+    Reads every column of every table in one statement. ``inspect(...).get_columns``
+    reflects one table per round trip, and this runs on each boot against a
+    database that is often a continent away — the old per-table loop cost ~20
+    round trips before the process could answer its first request.
     """
-    inspector = inspect(engine)
-    existing_tables = set(inspector.get_table_names())
+    existing_tables = set(inspect(engine).get_table_names())
+    columns = _column_map(engine, {table for table, _, _ in _ADDITIONS} & existing_tables)
     applied: list[str] = []
 
     with engine.begin() as connection:
@@ -73,16 +78,48 @@ def ensure_schema(engine: Engine) -> list[str]:
             # A table that does not exist yet is created complete by create_all.
             if table not in existing_tables:
                 continue
-            if column in {col["name"] for col in inspector.get_columns(table)}:
+            if column in columns.get(table, set()):
                 continue
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
             applied.append(f"{table}.{column}")
 
-    applied.extend(_backfill_push_links(engine))
+    applied.extend(_backfill_push_links(engine, existing_tables))
     return applied
 
 
-def _backfill_push_links(engine: Engine) -> list[str]:
+def _column_map(engine: Engine, tables: set[str]) -> dict[str, set[str]]:
+    """Every table's column names, read with a single query where possible.
+
+    Postgres answers from ``information_schema`` in one statement. SQLite has no
+    equivalent, but it is a local file in this project, so a per-table pragma
+    there costs nothing worth optimising.
+    """
+    if not tables:
+        return {}
+    if engine.dialect.name != "sqlite":
+        try:
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        "SELECT table_name, column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = ANY(:names)"
+                    ),
+                    {"names": list(tables)},
+                ).all()
+            found: dict[str, set[str]] = {table: set() for table in tables}
+            for table_name, column_name in rows:
+                found.setdefault(table_name, set()).add(column_name)
+            return found
+        except Exception:  # noqa: BLE001 - fall back rather than fail the boot
+            # A schema read must never be the reason the app cannot start, so any
+            # surprise here degrades to the slow-but-known reflection path.
+            pass
+
+    inspector = inspect(engine)
+    return {table: {col["name"] for col in inspector.get_columns(table)} for table in tables}
+
+
+def _backfill_push_links(engine: Engine, tables: set[str] | None = None) -> list[str]:
     """Give every existing subscription a link to the account it was stored for.
 
     The link table is new, and until a browser re-subscribes its endpoint has no
@@ -94,7 +131,7 @@ def _backfill_push_links(engine: Engine) -> list[str]:
     startup.
     """
     inspector = inspect(engine)
-    tables = set(inspector.get_table_names())
+    tables = tables if tables is not None else set(inspector.get_table_names())
     if "push_subscriptions" not in tables or "push_subscription_users" not in tables:
         return []
 

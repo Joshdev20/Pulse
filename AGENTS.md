@@ -336,6 +336,65 @@ the public URL returns 502 until the dev server is bound to 12000.
   still sitting on the last commit that touched `backend/`. Check
   `git diff --name-only <render-sha> HEAD -- backend/` is empty before investigating.
 
+## Cold start, and why "still slow" was not the code
+
+The owner repeatedly reported that Pulse "is still slow to initialise" even after the feed
+and boot were optimised. The measurements say the code is not the cause, and this is worth
+re-deriving rather than re-litigating from scratch:
+
+- Production paints in ~290 ms unauthenticated (Vercel edge, warm API). The authenticated
+  first screen is gated by `/api/auth/me` plus the feed, which cost ~130 ms warm.
+- The slow path is the **free Render instance being asleep**. A cold wake is 30-60s, and it
+  dominates everything the application does. No amount of query tuning moves it.
+- The keep-alive workflow asked GitHub for a run every 5 minutes, but GitHub throttles that
+  cron on a free plan: measured gaps between runs were **4-9 hours** against a ~15 minute
+  idle timeout, so the instance slept for most of every day. `scripts/keep_alive.py` now
+  *holds* the ping for `PULSE_HOLD_SECONDS` (55 min in the workflow) after a successful
+  wake, so one run covers the gap until the next one actually arrives. If slowness is
+  reported again, check the run gap in Actions before touching application code.
+
+Two boot-path costs were worth removing anyway, because each one is a round trip against a
+database that is not next to the app:
+
+- `record_post_views` used to `db.add()` one `PostView` per post and commit them in turn —
+  a write per post on the read path. It now filters already-seen ids in one query and does a
+  single `executemany`. `tests/test_view_recording.py` pins both the statement count and
+  the fact that a repeat read writes nothing.
+- `serialize_user` counted posts and followers with three separate scalar queries, and
+  `user.follower_count` / `user.following_count` loaded whole `Follow` collections just to
+  take their length. All three counts are one statement now.
+- `ensure_schema` reads the whole column set of the tables it cares about in one query on
+  Postgres (`information_schema`), falling back to per-table reflection on SQLite. It is
+  wrapped so that a failed introspection can never stop the app from booting. Boot is 8
+  statements against the local database.
+
+The frontend side of the same problem: `index.html` fires a `no-cors` `/api/health` request
+inline, before the bundle downloads, so the wake-up overlaps the download instead of
+starting after React mounts. The URL comes from `%VITE_API_BASE%`, so a build without that
+variable (local dev, same-origin deploy) is a no-op rather than a request to production.
+
+### The boot animation has two halves — keep both
+
+There are two separate loading screens, and removing either one brings back the "blank
+first paint" complaint:
+
+1. **`index.html` `.boot-splash`** — inline CSS and markup, so it paints before the bundle
+   is parsed. This is the only thing on screen during a cold start; on a slow wake the
+   bundle lands seconds after the HTML. It is a hand-written copy of the theme tokens, not
+   a component, because it has to work before any JS runs.
+2. **`App.tsx` `BrandLoader`** — the animated `PulseLogo` rendered while `AuthProvider`
+   checks the session. `AuthProvider` starts `loading` as `true` unconditionally, so a
+   returning visitor (and an installed PWA is always one) sees it on every boot rather than
+   jumping straight into the app.
+
+`main.tsx` removes the `.boot-splash` element a frame after React mounts, which is the
+handover between the two. Removing that line leaves the splash on top of the app forever;
+removing the splash itself puts the blank window back. Both were verified by screenshot:
+the splash matches the light (`#f6f7fb`) and dark (`#08090d`) page background exactly.
+
+Do not gate the splash on a cached profile. That is exactly the regression that made the
+installed PWA open with no animation.
+
 ## Announcing changes on the official account
 
 Every fix and new feature gets a post from the official `pulse` account (the account the

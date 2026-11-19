@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -256,7 +256,24 @@ def presence_of(user: User, include: bool) -> dict[str, object]:
 def serialize_user(
     db: Session, user: User, viewer: User | None = None, *, with_presence: bool = False
 ) -> UserPublic:
-    post_count = db.scalar(select(func.count()).select_from(Post).where(Post.author_id == user.id)) or 0
+    # One round trip for all three aggregates. Counting with scalar queries
+    # rather than `len(user.followers)` matters: the relationship loads every
+    # Follow row just to take its length, so a popular account paid for its
+    # whole follower table on every `/auth/me`. The database is across an ocean
+    # from the app, so each avoided statement is ~100 ms off the boot path.
+    post_count, follower_count, following_count = db.execute(
+        select(
+            select(func.count()).select_from(Post).where(Post.author_id == user.id).scalar_subquery(),
+            select(func.count())
+            .select_from(Follow)
+            .where(Follow.following_id == user.id)
+            .scalar_subquery(),
+            select(func.count())
+            .select_from(Follow)
+            .where(Follow.follower_id == user.id)
+            .scalar_subquery(),
+        )
+    ).one()
     is_following = False
     if viewer is not None and viewer.id != user.id:
         is_following = (
@@ -278,8 +295,8 @@ def serialize_user(
         avatar_url=avatar_url_for(user),
         cover_url=cover_url_for(user),
         created_at=user.created_at,
-        follower_count=user.follower_count,
-        following_count=user.following_count,
+        follower_count=follower_count,
+        following_count=following_count,
         post_count=post_count,
         is_following=is_following,
         is_admin=user.is_admin,
@@ -379,13 +396,32 @@ def record_post_views(
         # is the only field this needs.
         authors = dict(db.execute(select(Post.id, Post.author_id).where(Post.id.in_(ids))).all())
         ids = {post_id for post_id, author_id in authors.items() if author_id != viewer.id}
-    pending = False
-    for post_id in ids:
-        db.add(PostView(post_id=post_id, user_id=viewer.id))
-        pending = True
-    if not pending:
+    if not ids:
         return
+
+    # Skip what this account has already seen, then write the rest in one
+    # statement. The previous version added a row per post and committed them
+    # one at a time, which on a hosted database meant a round trip per post on
+    # the read path — the request was already serialized, so that latency came
+    # straight off the time to first byte.
+    seen = {
+        row[0]
+        for row in db.execute(
+            select(PostView.post_id).where(
+                PostView.user_id == viewer.id, PostView.post_id.in_(ids)
+            )
+        ).all()
+    }
+    rows = [{"post_id": post_id, "user_id": viewer.id} for post_id in ids - seen]
+    if not rows:
+        return
+
     try:
+        # One executemany instead of a row-at-a-time add: the rows were already
+        # filtered against `seen`, so this normally inserts nothing that
+        # conflicts. A race with another tab can still trip the unique
+        # constraint, and that is treated as "already seen" below.
+        db.execute(insert(PostView), rows)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -403,13 +439,25 @@ def record_page_views(db: Session, page: dict, viewer: User | None) -> None:
     record_post_views(db, ids, viewer)
 
 
-def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) -> list[PostOut]:
+def serialize_posts(
+    db: Session,
+    posts: list[Post],
+    viewer: User | None = None,
+    *,
+    like_counts: dict[int, int] | None = None,
+    comment_counts: dict[int, int] | None = None,
+) -> list[PostOut]:
     """Serialize posts, batching like/comment/repost counts and viewer state.
 
     A repost row carries no content of its own, so the post it shares is
     serialized alongside it and nested as ``repost_of``. The originals are
     included in every batched count query, so a repost and the original it
     points at agree on their like and comment totals.
+
+    ``like_counts`` and ``comment_counts`` let a caller that has already counted
+    a wider pool — the feed ranks its whole candidate pool before slicing a
+    page — pass those totals in instead of paying for the same two grouped
+    queries twice. They must cover every post being serialized.
     """
     if not posts:
         return []
@@ -423,20 +471,22 @@ def serialize_posts(db: Session, posts: list[Post], viewer: User | None = None) 
             involved[post.repost_of.id] = post.repost_of
     post_ids = list(involved)
 
-    like_counts = dict(
-        db.execute(
-            select(Like.post_id, func.count(Like.id)).where(Like.post_id.in_(post_ids)).group_by(Like.post_id)
-        ).all()
-    )
+    if like_counts is None:
+        like_counts = dict(
+            db.execute(
+                select(Like.post_id, func.count(Like.id)).where(Like.post_id.in_(post_ids)).group_by(Like.post_id)
+            ).all()
+        )
     from .models import Comment  # local import avoids a cycle at module import time
 
-    comment_counts = dict(
-        db.execute(
-            select(Comment.post_id, func.count(Comment.id))
-            .where(Comment.post_id.in_(post_ids))
-            .group_by(Comment.post_id)
-        ).all()
-    )
+    if comment_counts is None:
+        comment_counts = dict(
+            db.execute(
+                select(Comment.post_id, func.count(Comment.id))
+                .where(Comment.post_id.in_(post_ids))
+                .group_by(Comment.post_id)
+            ).all()
+        )
     # How many times each of these posts has been shared.
     repost_counts = dict(
         db.execute(

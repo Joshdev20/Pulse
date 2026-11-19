@@ -34,3 +34,13 @@ createRoot(container).render(
     </BrowserRouter>
   </StrictMode>,
 )
+
+// Drop the document-level splash once React owns the screen. `App` renders its
+// own BrandLoader in the same spot, so removing this only hands the animation
+// over; without it the splash would sit on top of the app forever.
+const splash = document.querySelector('.boot-splash')
+if (splash) {
+  // Deferred a frame so React's first commit is already painted underneath,
+  // which keeps the handover from flashing the page background.
+  requestAnimationFrame(() => splash.remove())
+}

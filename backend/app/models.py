@@ -132,7 +132,10 @@ class Post(Base):
         ForeignKey("posts.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
-    author: Mapped[User] = relationship(back_populates="posts")
+    # `selectin` so a feed page loads its authors in one extra query instead of
+    # one per post. Every read path that serializes a list of posts touches
+    # `author`, so lazy loading here was an N+1 on the hottest route.
+    author: Mapped[User] = relationship(back_populates="posts", lazy="selectin")
     comments: Mapped[list["Comment"]] = relationship(
         back_populates="post", cascade="all, delete-orphan", order_by="Comment.created_at"
     )
