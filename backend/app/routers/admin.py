@@ -607,6 +607,34 @@ def probe_translation(_viewer: CurrentUser, text: str = "I need a steady daily i
 
     target = settings.translate_target_language
     report: dict = {"target": target, "enabled": settings.translate_enabled, "providers": {}}
+
+    # The providers swallow their own errors so a failed translation never
+    # breaks a request. Repeat the same call here without that guard, so the
+    # report shows the status code or exception this deployment actually hit.
+    raw: dict = {}
+    with httpx.Client(timeout=settings.translate_timeout_seconds) as client:
+        for name, url, params in (
+            (
+                "google",
+                settings.translate_google_endpoint,
+                {"client": "dict-chrome-ex", "sl": "auto", "tl": target, "q": text},
+            ),
+            (
+                "mymemory",
+                settings.translate_endpoint,
+                {"q": text, "langpair": f"Autodetect|{target}"},
+            ),
+        ):
+            try:
+                response = client.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
+                raw[name] = {
+                    "status": response.status_code,
+                    "body": response.text[:300],
+                }
+            except Exception as caught:  # noqa: BLE001 - the report is the point
+                raw[name] = {"exception": f"{type(caught).__name__}: {caught}"}
+    report["raw"] = raw
+
     with httpx.Client(timeout=settings.translate_timeout_seconds) as client:
         for name, provider in (
             ("google", translate._translate_google),
