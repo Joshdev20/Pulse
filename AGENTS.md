@@ -376,6 +376,17 @@ inline, before the bundle downloads, so the wake-up overlaps the download instea
 starting after React mounts. The URL comes from `%VITE_API_BASE%`, so a build without that
 variable (local dev, same-origin deploy) is a no-op rather than a request to production.
 
+Check the keep-alive chain before believing a "slow again" report. A run that finishes in
+about a minute instead of holding for 5h20m means the hold never happened, and the instance
+is asleep between the hours-long gaps in the cron. Two things have caused this:
+
+- A run dispatched while another held gets *cancelled* rather than queued. The concurrency
+  group serialises them, so a hand-off that lands early kills the hold it was meant to
+  follow. The dispatch must happen as the hold ends, never at the start.
+- `PULSE_HOLD_SECONDS` unset or non-numeric silently falls back to `0`, which makes every
+  run a single ping. `_hold_seconds` returns 0 on a `ValueError` rather than failing loudly,
+  so the workflow's `env:` block is the only thing keeping it set.
+
 ### The boot animation has two halves — keep both
 
 There are two separate loading screens, and removing either one brings back the "blank
