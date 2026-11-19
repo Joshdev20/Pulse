@@ -39,9 +39,12 @@ from ..schemas import (
     AdminVerification,
     AnnouncementBroadcast,
     AnnouncementBroadcastResult,
+    PostUpdate,
     UserModeration,
 )
+from ..tagging import extract_tag_names, resolve_tags
 from .notifications import notification_event, push_notification
+from .posts import invalidate_post_reads
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -436,6 +439,18 @@ def list_posts(
             .limit(page_size)
         ).all()
     )
+
+    return AdminPostPage(
+        items=_serialize_admin_posts(db, posts),
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=page * page_size < total,
+    )
+
+
+def _serialize_admin_posts(db: DbSession, posts: list[Post]) -> list[AdminPost]:
+    """Attach the engagement counts the queue shows, in three queries total."""
     ids = [post.id for post in posts]
     like_counts: dict[int, int] = {}
     comment_counts: dict[int, int] = {}
@@ -463,26 +478,44 @@ def list_posts(
             ).all()
         )
 
-    return AdminPostPage(
-        items=[
-            AdminPost(
-                id=post.id,
-                body=post.body,
-                created_at=post.created_at,
-                author_id=post.author_id,
-                author_username=post.author.username,
-                author_display_name=post.author.display_name,
-                like_count=like_counts.get(post.id, 0),
-                comment_count=comment_counts.get(post.id, 0),
-                media_count=media_counts.get(post.id, 0),
-            )
-            for post in posts
-        ],
-        total=total,
-        page=page,
-        page_size=page_size,
-        has_more=page * page_size < total,
-    )
+    return [
+        AdminPost(
+            id=post.id,
+            body=post.body,
+            created_at=post.created_at,
+            author_id=post.author_id,
+            author_username=post.author.username,
+            author_display_name=post.author.display_name,
+            like_count=like_counts.get(post.id, 0),
+            comment_count=comment_counts.get(post.id, 0),
+            media_count=media_counts.get(post.id, 0),
+        )
+        for post in posts
+    ]
+
+
+@router.patch("/posts/{post_id}", response_model=AdminPost)
+def update_post(
+    post_id: int, payload: PostUpdate, db: DbSession, _admin: CurrentAdmin
+) -> AdminPost:
+    """Correct a post's text regardless of who wrote it.
+
+    Moderation could delete a post but not fix one, which left an edit to the
+    author even when the text was plainly wrong — a stray machine-translation
+    marker, a leaked address. The author is not told and ``edited_at`` is not
+    stamped: this is a correction by the site, not the author changing their
+    mind, and saying otherwise would misattribute it to them.
+    """
+    post = db.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Post not found")
+
+    post.body = payload.body.strip()
+    post.tags = resolve_tags(db, extract_tag_names(post.body))
+    db.commit()
+    db.refresh(post)
+    invalidate_post_reads()
+    return _serialize_admin_posts(db, [post])[0]
 
 
 @router.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -125,6 +125,16 @@ def test_edit_and_delete_own_post(client, make_user):
     assert client.get(f"/api/posts/{post['id']}", headers=headers).status_code == 404
 
 
+def test_edit_rejects_a_body_that_is_only_whitespace(client, make_user):
+    """A blank edit must not silently erase the post."""
+    headers, _ = make_user("ada")
+    post = client.post("/api/posts", headers=headers, json={"body": "keep me"}).json()
+
+    response = client.patch(f"/api/posts/{post['id']}", headers=headers, json={"body": "   "})
+    assert response.status_code == 422
+    assert client.get(f"/api/posts/{post['id']}", headers=headers).json()["body"] == "keep me"
+
+
 def test_feed_scopes(client, make_user):
     ada_headers, _ = make_user("ada")
     grace_headers, _ = make_user("grace")

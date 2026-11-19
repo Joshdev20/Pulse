@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer, field_validator
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -150,6 +150,18 @@ class PostCreate(BaseModel):
 
 class PostUpdate(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("body")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        """`min_length` counts spaces, so "   " passed and then stripped to nothing.
+
+        Both edit paths write `body.strip()`, so a whitespace-only body used to
+        blank a post while reporting success.
+        """
+        if not value.strip():
+            raise ValueError("A post needs some text")
+        return value
 
 
 class PostTranslation(BaseModel):

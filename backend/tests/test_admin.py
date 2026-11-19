@@ -281,6 +281,88 @@ def test_admin_can_delete_any_post(client, make_admin, make_user):
     assert client.delete(f"/api/admin/posts/{post['id']}", headers=admin_headers).status_code == 404
 
 
+def test_admin_can_edit_any_post(client, make_admin, make_user):
+    admin_headers, _ = make_admin("root")
+    author_headers, _ = make_user("author")
+    post = _post(client, author_headers, "a translated blob\n\nTranslated ↕️\n\nenglish")
+
+    response = client.patch(
+        f"/api/admin/posts/{post['id']}",
+        json={"body": "just the english"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["body"] == "just the english"
+
+    # The author reads the corrected text, not their own.
+    assert client.get(f"/api/posts/{post['id']}", headers=author_headers).json()["body"] == (
+        "just the english"
+    )
+
+
+def test_admin_edit_does_not_mark_the_post_as_edited_by_its_author(
+    client, make_admin, make_user
+):
+    """A correction by the site must not be attributed to the author."""
+    admin_headers, _ = make_admin("root")
+    author_headers, _ = make_user("author")
+    post = _post(client, author_headers, "typo")
+    assert post["edited_at"] is None
+
+    client.patch(
+        f"/api/admin/posts/{post['id']}", json={"body": "fixed"}, headers=admin_headers
+    )
+
+    refreshed = client.get(f"/api/posts/{post['id']}", headers=author_headers).json()
+    assert refreshed["edited_at"] is None
+
+
+def test_admin_edit_retags_the_post(client, make_admin, make_user):
+    admin_headers, _ = make_admin("root")
+    author_headers, _ = make_user("author")
+    post = _post(client, author_headers, "about #old")
+    assert [tag["name"] for tag in post["tags"]] == ["old"]
+
+    client.patch(
+        f"/api/admin/posts/{post['id']}", json={"body": "about #new"}, headers=admin_headers
+    )
+
+    refreshed = client.get(f"/api/posts/{post['id']}", headers=author_headers).json()
+    assert [tag["name"] for tag in refreshed["tags"]] == ["new"]
+
+
+def test_admin_edit_rejects_an_empty_body(client, make_admin, make_user):
+    admin_headers, _ = make_admin("root")
+    author_headers, _ = make_user("author")
+    post = _post(client, author_headers, "keep me")
+
+    response = client.patch(
+        f"/api/admin/posts/{post['id']}", json={"body": "   "}, headers=admin_headers
+    )
+    assert response.status_code == 422
+    assert client.get(f"/api/posts/{post['id']}", headers=author_headers).json()["body"] == "keep me"
+
+
+def test_admin_edit_404s_for_a_missing_post(client, make_admin):
+    admin_headers, _ = make_admin("root")
+    response = client.patch("/api/admin/posts/9999", json={"body": "x"}, headers=admin_headers)
+    assert response.status_code == 404
+
+
+def test_edit_is_admin_only(client, make_admin, make_user):
+    """A non-admin may not edit someone else's post through the admin route."""
+    _admin_headers, _ = make_admin("root")
+    author_headers, _ = make_user("author")
+    other_headers, _ = make_user("other")
+    post = _post(client, author_headers, "mine")
+
+    response = client.patch(
+        f"/api/admin/posts/{post['id']}", json={"body": "hijacked"}, headers=other_headers
+    )
+    assert response.status_code == 403
+    assert client.get(f"/api/posts/{post['id']}", headers=author_headers).json()["body"] == "mine"
+
+
 def test_admin_can_delete_a_comment(client, make_admin, make_user):
     admin_headers, _ = make_admin("root")
     author_headers, _ = make_user("author")
