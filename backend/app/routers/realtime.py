@@ -54,7 +54,22 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
     # Per-socket, so it dies with the connection it describes.
     peer_cache: dict[int, tuple[float, list[int]]] = {}
     try:
+        # Resolved before `ready` is sent: a socket that has announced itself is
+        # idle, and a query still in flight at that moment is a pooled connection
+        # held for a socket the client already believes is up.
+        replay: list[dict] = []
+        try:
+            replay = ringing_call_frames(db, user_id)
+        except Exception:  # noqa: BLE001 - a failed replay must not kill the socket
+            logger.debug("could not replay ringing calls for %s", user_id, exc_info=True)
+        finally:
+            _release(db)
         await socket.send_text(json.dumps({"type": "ready", "user_id": user_id}))
+        # A callee who opened the app from a ring notification missed the offer:
+        # it was relayed while no socket was open. Replaying it now is what lets
+        # that notification lead to an answer rather than a dead call.
+        for frame in replay:
+            await socket.send_text(json.dumps(frame))
         while True:
             raw = await socket.receive_text()
             if len(raw) > MAX_FRAME_BYTES:
@@ -297,7 +312,26 @@ async def _relay_call(
         # frames and none of them changes the logged state, so looking the row up
         # for each one is a round trip spent to learn nothing.
         if call_ref is not None and action != "ice":
-            await _record_call(db, user_id, conversation_id, call_ref, action, mode)
+            await _record_call(
+                db, user_id, conversation_id, call_ref, action, mode, peers
+            )
+        # Held for a callee who has not connected yet, and dropped once the call
+        # is decided: there is nothing left to replay after that. Only the
+        # caller's candidates are held — the callee is the side being replayed
+        # to, so its own candidates travel to a caller who is already listening.
+        if call_ref is not None:
+            if action == "offer":
+                _remember_ringing_call(
+                    call_ref, conversation_id, user_id, mode,
+                    payload if isinstance(payload, str) else None,
+                )
+            elif action == "ice":
+                if _ringing_calls.get(call_ref, {}).get("caller_id") == user_id:
+                    _remember_ringing_ice(
+                        call_ref, payload if isinstance(payload, str) else None
+                    )
+            else:
+                _forget_ringing_call(call_ref)
     except Exception:  # noqa: BLE001 - logging a call must not break signalling
         logger.debug("could not record call for user %s", user_id, exc_info=True)
         try:
@@ -320,6 +354,147 @@ async def _relay_call(
         await manager.publish(peer_id, outgoing)
 
 
+# Signalling for calls that are ringing right now, so a callee who opens the app
+# from a ring notification can still answer.
+#
+# The offer SDP and the caller's ICE candidates are relayed and never stored: a
+# socket that was not connected when they went past never sees them, and the
+# call cannot be completed without them. Keeping the last offer per call for the
+# length of the ring window is what makes the notification actionable rather
+# than a message saying a call is happening that the reader cannot join.
+#
+# Process-local, like presence: the deployment runs one worker, and a restart
+# ends every call anyway. A callee on another worker is pushed to but cannot be
+# replayed to, which is the same limitation presence already has.
+RINGING_CALLS_MAX = 32
+RINGING_ICE_MAX = 48
+_ringing_calls: dict[str, dict] = {}
+
+
+def _remember_ringing_call(
+    call_ref: str, conversation_id: int, caller_id: int, mode: str, payload: str | None
+) -> None:
+    """Hold the offer for a ringing call so it can be replayed on connect."""
+    if len(_ringing_calls) >= RINGING_CALLS_MAX:
+        oldest = min(_ringing_calls, key=lambda key: _ringing_calls[key]["at"])
+        _ringing_calls.pop(oldest, None)
+    _ringing_calls[call_ref] = {
+        "conversation_id": conversation_id,
+        "caller_id": caller_id,
+        "mode": mode,
+        "payload": payload,
+        "ice": [],
+        "at": time.monotonic(),
+    }
+
+
+def _forget_ringing_call(call_ref: str | None) -> None:
+    if call_ref:
+        _ringing_calls.pop(call_ref, None)
+
+
+def _remember_ringing_ice(call_ref: str, payload: str | None) -> None:
+    """Keep a caller's candidates for a call still ringing, so a replay has them.
+
+    A candidate is never re-sent, so one that arrived while the callee had no
+    socket would otherwise be lost and the call could connect with no usable
+    pair.
+    """
+    held = _ringing_calls.get(call_ref)
+    if held is None or payload is None:
+        return
+    if len(held["ice"]) < RINGING_ICE_MAX:
+        held["ice"].append(payload)
+
+
+def ringing_call_frames(db: Session, user_id: int) -> list[dict]:
+    """The frames to replay to ``user_id`` for calls still ringing at them.
+
+    Read from the call log rather than the buffer, so the buffer only supplies
+    the signalling: the row is what decides that a call is live, and a call the
+    sweeper has already finalised is not replayed. Bounded by the same ring
+    window the sweeper uses, so a stale row cannot ring a phone minutes late.
+    """
+    rows = list(
+        db.scalars(
+            select(Message)
+            .where(
+                Message.call_ref.is_not(None),
+                Message.call_state == CALL_RINGING,
+                Message.sender_id != user_id,
+                Message.conversation_id.in_(
+                    select(ConversationParticipant.conversation_id).where(
+                        ConversationParticipant.user_id == user_id
+                    )
+                ),
+            )
+            .order_by(Message.id.desc())
+            .limit(4)
+        ).all()
+    )
+    frames: list[dict] = []
+    for row in rows:
+        held = _ringing_calls.get(row.call_ref)
+        # No signalling held means this process never saw the offer (another
+        # worker, or a restart), and ringing without it would be a call the
+        # callee cannot answer.
+        if held is None:
+            continue
+        if time.monotonic() - held["at"] > CALL_RING_STALE_SECONDS:
+            _ringing_calls.pop(row.call_ref, None)
+            continue
+        frames.append(
+            {
+                "type": "call",
+                "conversation_id": row.conversation_id,
+                "from": row.sender_id,
+                "action": "offer",
+                "call_id": row.call_ref,
+                "mode": row.call_mode or "audio",
+                "payload": held["payload"],
+            }
+        )
+        for candidate in held["ice"]:
+            frames.append(
+                {
+                    "type": "call",
+                    "conversation_id": row.conversation_id,
+                    "from": row.sender_id,
+                    "action": "ice",
+                    "call_id": row.call_ref,
+                    "mode": row.call_mode or "audio",
+                    "payload": candidate,
+                }
+            )
+    return frames
+
+
+def _push_ringing_call(
+    db: Session, row: Message, conversation_id: int, callee_ids: list[int]
+) -> None:
+    """Alert a callee who has no tab open that a call is ringing *now*.
+
+    Until this existed the only call alert was the missed one, written after the
+    caller had given up. Someone with Pulse closed therefore learned about every
+    call too late to answer it, which is the difference between a missed call and
+    an answered one.
+
+    Takes the peer list the relay already resolved rather than querying for it
+    again: this runs on the offer path, and a second participants lookup per
+    call is the round trip the peer cache exists to avoid.
+
+    Skipped when the callee already holds a socket: that tab is being sent the
+    offer frame and rings in-app, and an OS notification on top of a ringing
+    screen is noise. Presence is per-process, so a callee connected to another
+    worker is treated as away and pushed to — the harmless direction, since the
+    in-app ring still happens when the frame arrives.
+    """
+    for callee_id in callee_ids:
+        if callee_id == row.sender_id or manager.is_online(callee_id):
+            continue
+        push.schedule_notify(callee_id, push.incoming_call_payload(db, row, conversation_id))
+
+
 async def _record_call(
     db: DbSession,
     user_id: int,
@@ -327,6 +502,7 @@ async def _record_call(
     call_ref: str,
     action: str,
     mode: str,
+    peers: list[int] | None = None,
 ) -> None:
     """Create or advance the log row for one call.
 
@@ -361,6 +537,7 @@ async def _record_call(
             conversation.last_message_at = row.created_at or utcnow()
         db.commit()
         await _publish_call_entry(db, row, conversation_id)
+        _push_ringing_call(db, row, conversation_id, peers or [])
         return
 
     if row is None:

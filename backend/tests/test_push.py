@@ -1355,3 +1355,282 @@ def test_a_short_call_alert_shows_seconds_only(client, make_user, db_session):
 
     row = _call_row(cid, ada_user["id"], state="answered", call_seconds=42)
     assert push.message_payload(db_session, row, cid)["body"] == "Voice call · 42s"
+
+
+# --------------------------------------------------------------------------
+# A call that is ringing now
+# --------------------------------------------------------------------------
+#
+# The missed-call alert above is written after the caller gave up, so a callee
+# with no tab open learned about every call too late to answer it. These cover
+# the alert sent while the call is still ringing.
+
+
+def test_a_ringing_call_alert_says_it_is_incoming(client, make_user, db_session):
+    from app import push
+
+    ada, ada_user = make_user("ada")
+    make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+
+    row = _call_row(cid, ada_user["id"], state="ringing", mode="video", call_ref="abc")
+    payload = push.incoming_call_payload(db_session, row, cid)
+    assert payload["body"] == "Incoming video call"
+    # The caller is named, because a notification has no page to look it up.
+    assert payload["title"] == "Ada Lovelace" or payload["title"]
+    # The same tag as the missed alert, so that later alert replaces this one
+    # rather than stacking a second notification for one call.
+    assert payload["tag"] == f"dm-{cid}"
+    assert payload["url"] == f"/messages/{cid}"
+    assert payload["call_id"] == "abc"
+
+
+def test_a_ringing_voice_call_is_named_as_voice(client, make_user, db_session):
+    from app import push
+
+    ada, ada_user = make_user("ada")
+    make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+
+    row = _call_row(cid, ada_user["id"], state="ringing", mode="audio", call_ref="abc")
+    assert push.incoming_call_payload(db_session, row, cid)["body"] == "Incoming voice call"
+
+
+
+
+def test_an_offer_pushes_the_callee_who_has_no_tab_open(
+    client, make_user, vapid, monkeypatch
+):
+    """The whole point: a closed browser still learns the call is ringing."""
+    import json
+
+    calls: list[tuple] = []
+
+    def fake_notify_user(db, user_id, payload):
+        calls.append((user_id, payload))
+        return 1
+
+    monkeypatch.setattr("app.routers.realtime.push.notify_user", fake_notify_user)
+
+    ada, _ = make_user("ada")
+    grace, grace_user = make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+
+    # Grace holds no socket, which is exactly the case this alert exists for.
+    with client.websocket_connect("/api/ws") as ada_socket:
+        ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+        ada_socket.receive_text()
+        ada_socket.send_text(
+            json.dumps(
+                {
+                    "type": "call",
+                    "conversation_id": cid,
+                    "action": "offer",
+                    "call_id": "ring1",
+                    "mode": "video",
+                    "payload": "v=0",
+                }
+            )
+        )
+        wait_for_calls(calls)
+
+    recipient, payload = calls[0]
+    assert recipient == grace_user["id"], "the caller must not alert themselves"
+    assert payload["body"] == "Incoming video call"
+    assert payload["call_id"] == "ring1"
+    assert payload["url"] == f"/messages/{cid}"
+
+
+def test_an_offer_does_not_push_a_callee_who_is_already_ringing(
+    client, make_user, vapid, monkeypatch
+):
+    """An open tab rings in-app; an OS alert on top of it is noise."""
+    import json
+    import time
+
+    calls: list[tuple] = []
+
+    def fake_notify_user(db, user_id, payload):
+        calls.append((user_id, payload))
+        return 1
+
+    monkeypatch.setattr("app.routers.realtime.push.notify_user", fake_notify_user)
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    with client.websocket_connect("/api/ws") as grace_socket:
+        grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        grace_socket.receive_text()
+        with client.websocket_connect("/api/ws") as ada_socket:
+            ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+            ada_socket.receive_text()
+            ada_socket.send_text(
+                json.dumps(
+                    {
+                        "type": "call",
+                        "conversation_id": cid,
+                        "action": "offer",
+                        "call_id": "ring2",
+                        "mode": "audio",
+                        "payload": "v=0",
+                    }
+                )
+            )
+            # The offer reaches the open tab, which is the ring.
+            while True:
+                frame = json.loads(grace_socket.receive_text())
+                if frame.get("type") == "call":
+                    break
+            # Give any scheduled push time to be recorded before asserting.
+            time.sleep(0.5)
+
+    assert calls == [], "an online callee must not also get an OS notification"
+
+
+def test_a_ringing_call_is_replayed_when_the_callee_opens_the_app(
+    client, make_user, vapid, monkeypatch
+):
+    """A ring notification is only useful if tapping it can still answer.
+
+    The offer is relayed once, while the callee has no socket. Opening the app
+    from the notification must hand that offer back, or the callee sees a
+    ringing call they cannot join.
+    """
+    import json
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.routers.realtime.push.notify_user",
+        lambda db, user_id, payload: calls.append((user_id, payload)) or 1,
+    )
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    # Ada offers while Grace is away.
+    with client.websocket_connect("/api/ws") as ada_socket:
+        ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+        ada_socket.receive_text()
+        ada_socket.send_text(
+            json.dumps(
+                {
+                    "type": "call",
+                    "conversation_id": cid,
+                    "action": "offer",
+                    "call_id": "replay1",
+                    "mode": "video",
+                    "payload": "v=0 offer-sdp",
+                }
+            )
+        )
+        wait_for_calls(calls)
+
+    # Grace now opens the app: the socket replays the offer she missed.
+    with client.websocket_connect("/api/ws") as grace_socket:
+        grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        assert json.loads(grace_socket.receive_text())["type"] == "ready"
+        frame = json.loads(grace_socket.receive_text())
+        assert frame["type"] == "call"
+        assert frame["action"] == "offer"
+        assert frame["call_id"] == "replay1"
+        assert frame["payload"] == "v=0 offer-sdp"
+        assert frame["mode"] == "video"
+
+
+def test_a_finished_call_is_not_replayed(client, make_user, vapid, monkeypatch):
+    """A call the caller already abandoned must not ring a phone minutes later."""
+    import json
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.routers.realtime.push.notify_user",
+        lambda db, user_id, payload: calls.append((user_id, payload)) or 1,
+    )
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    with client.websocket_connect("/api/ws") as ada_socket:
+        ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+        ada_socket.receive_text()
+        for action in ("offer", "hangup"):
+            ada_socket.send_text(
+                json.dumps(
+                    {
+                        "type": "call",
+                        "conversation_id": cid,
+                        "action": action,
+                        "call_id": "done1",
+                        "mode": "audio",
+                        "payload": "v=0",
+                    }
+                )
+            )
+        wait_for_calls(calls)
+
+    with client.websocket_connect("/api/ws") as grace_socket:
+        grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        assert json.loads(grace_socket.receive_text())["type"] == "ready"
+        # Nothing follows: a call that is over has nothing to replay.
+        grace_socket.send_text(json.dumps({"type": "ping"}))
+        assert json.loads(grace_socket.receive_text())["type"] == "pong"
+
+
+def test_the_callers_own_candidates_are_replayed_not_the_callees(
+    client, make_user, vapid, monkeypatch
+):
+    """Only the caller's ICE belongs in the replay: the callee is the replayed side."""
+    import json
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        "app.routers.realtime.push.notify_user",
+        lambda db, user_id, payload: calls.append((user_id, payload)) or 1,
+    )
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    with client.websocket_connect("/api/ws") as ada_socket:
+        ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+        ada_socket.receive_text()
+        for action, payload in (
+            ("offer", "v=0"),
+            ("ice", '{"candidate":"caller"}'),
+        ):
+            ada_socket.send_text(
+                json.dumps(
+                    {
+                        "type": "call",
+                        "conversation_id": cid,
+                        "action": action,
+                        "call_id": "ice1",
+                        "mode": "audio",
+                        "payload": payload,
+                    }
+                )
+            )
+        wait_for_calls(calls)
+
+    with client.websocket_connect("/api/ws") as grace_socket:
+        grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        assert json.loads(grace_socket.receive_text())["type"] == "ready"
+        offer = json.loads(grace_socket.receive_text())
+        assert offer["action"] == "offer"
+        candidate = json.loads(grace_socket.receive_text())
+        assert candidate["action"] == "ice"
+        assert candidate["payload"] == '{"candidate":"caller"}'

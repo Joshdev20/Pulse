@@ -466,6 +466,43 @@ def message_payload(
     }
 
 
+def incoming_call_payload(
+    db: Session, message, conversation_id: int
+) -> dict[str, Any]:
+    """The payload for a call that is *ringing now*, not one that has ended.
+
+    A missed-call alert is written after the fact, when the caller has already
+    given up: it tells the reader they lost a call they never knew about. This
+    is the other alert, sent the moment the offer is relayed, so a callee with
+    no tab open still finds out while the caller is waiting.
+
+    Deliberately the same shape as ``message_payload`` so the service worker
+    needs no second rendering path, and the same ``dm-`` tag so the later
+    "Missed call" alert replaces this one instead of stacking on top of it.
+    """
+    sender = db.get(User, message.sender_id)
+    name = sender.display_name if sender is not None else "Someone"
+    kind = "video" if getattr(message, "call_mode", None) == "video" else "voice"
+    return {
+        "type": "message",
+        "title": name,
+        "body": f"Incoming {kind} call",
+        "tag": f"dm-{conversation_id}",
+        "url": f"/messages/{conversation_id}",
+        "icon": _icon_path(sender.id if sender is not None else None),
+        "badge": BADGE_PATH,
+        "conversation_id": conversation_id,
+        "message_id": message.id,
+        "call_id": getattr(message, "call_ref", None),
+        "sender": {
+            "id": sender.id if sender is not None else None,
+            "username": sender.username if sender is not None else None,
+            "display_name": name,
+            "avatar_color": sender.avatar_color if sender is not None else "#6366f1",
+        },
+    }
+
+
 def notification_payload(event: dict[str, Any], text: str, url: str) -> dict[str, Any]:
     """Wrap a realtime notification frame into a push payload.
 
