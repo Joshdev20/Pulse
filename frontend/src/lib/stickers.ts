@@ -1,5 +1,5 @@
 import type { Message } from './types'
-import { callPreview } from './calls-format'
+import { callPreview, displayCallState } from './calls-format'
 
 /* Generated from `backend/app/stickers.py`. Edit the catalogue there and
    re-run the generator (`python3 scripts/gen_stickers.py`); do not hand-edit
@@ -344,10 +344,15 @@ export const STICKER_EMOJI: Record<string, { emoji: string; label: string }> = {
 }
 
 /** The one-line text an inbox row shows for a message. */
-export function previewOf(message: Message): string {
+export function previewOf(message: Message, now: number = Date.now()): string {
   // A call has no body, so it is named first: falling through would show an
   // empty row for the one entry where the wording carries the whole message.
-  if (message.call) return callPreview(message.call)
+  if (message.call) {
+    // Corrected for age, so an inbox row cannot advertise a call that is long
+    // over as still ringing — the same rule the thread entry applies.
+    const state = displayCallState(message.call, message.created_at, now)
+    return callPreview(state === message.call.state ? message.call : { ...message.call, state })
+  }
   if (message.sticker) {
     const entry = STICKER_EMOJI[message.sticker]
     return entry ? `${entry.emoji} Sticker` : 'Sticker'

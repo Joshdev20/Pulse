@@ -5534,7 +5534,9 @@ h4 {
   }
 }
 
-/* The remote video fills the overlay; everything else is drawn over it. */
+/* The remote video fills the overlay; everything else is drawn over it.
+   Hidden rather than unmounted before media connects, so the stream stays
+   attached and starts painting the moment the peer's frames arrive. */
 .call-remote {
   position: absolute;
   inset: 0;
@@ -5544,10 +5546,8 @@ h4 {
   background: #05070d;
 }
 
-.call-video-fallback {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(120% 80% at 50% 30%, #233046 0%, #0b1120 70%);
+.call-remote.hidden {
+  opacity: 0;
 }
 
 .call-info {
@@ -5560,6 +5560,17 @@ h4 {
   text-align: center;
   margin-top: auto;
   margin-bottom: auto;
+  padding: 14px 22px;
+  border-radius: 22px;
+  transition: background 0.2s ease;
+}
+
+/* Once the peer's video is behind it, the name needs its own backing to stay
+   readable over an arbitrary picture. */
+.call-info.over-video {
+  background: rgba(5, 7, 13, 0.42);
+  backdrop-filter: blur(10px);
+  margin-bottom: 26px;
 }
 
 .call-avatar {

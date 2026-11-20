@@ -5,6 +5,7 @@ import { CloseIcon, ReplyIcon } from './Icons'
 import { useRealtime } from '../context/RealtimeContext'
 import type { RealtimeEvent } from '../context/RealtimeContext'
 import { playNotificationSound } from '../lib/sound'
+import { callPreview } from '../lib/calls-format'
 import {
   isPageHidden,
   notificationIconUrl,
@@ -80,6 +81,16 @@ export function NotificationCenter() {
 
   const push = useCallback((popup: Popup) => {
     setPopups((current) => {
+      // The same message id can arrive more than once: a call entry is
+      // published when it starts and again when it ends. Replacing in place
+      // keeps one card per message and, more importantly, keeps React keys
+      // unique — appending made the stack hold two `message-<id>` entries.
+      const existing = current.findIndex((item) => item.key === popup.key)
+      if (existing !== -1) {
+        const next = [...current]
+        next[existing] = popup
+        return next
+      }
       // Cap the stack so a burst cannot cover the page.
       const next = [...current, popup]
       return next.length > 4 ? next.slice(next.length - 4) : next
@@ -97,7 +108,14 @@ export function NotificationCenter() {
           if (!message || message.mine) return
           playNotificationSound()
           const name = message.sender.display_name
-          const body = message.body || 'Sent an attachment'
+          // A call row has no body, and it is re-published as the call
+          // progresses. Its own wording is used so the popup says what
+          // happened instead of "Sent an attachment", and a call that merely
+          // rings again does not chime twice for the same entry.
+          const body = message.call
+            ? callPreview(message.call)
+            : message.body || 'Sent an attachment'
+          const isCall = Boolean(message.call)
           if (isPageHidden()) {
             showDesktopNotification({
               title: name,
@@ -113,7 +131,7 @@ export function NotificationCenter() {
               actorColor: message.sender.avatar_color,
               actorUrl: message.sender.avatar_url,
               text: body,
-              title: 'New message',
+              title: isCall ? 'Call' : 'New message',
               to: `/messages/${message.conversation_id}`,
               isMessage: true,
             })

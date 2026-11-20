@@ -1,5 +1,6 @@
 """Tests for direct messages, conversations and the realtime socket."""
 
+import asyncio
 import json
 
 from sqlalchemy import event
@@ -1681,3 +1682,122 @@ def test_an_answered_call_does_not_notify(client, make_user, monkeypatch):
         _close(grace_socket)
 
     assert calls == []
+
+
+# --- Calls that never report their end --------------------------------------
+#
+# The frame that ends a call travels over the same socket as everything else, so
+# it is lost whenever the peer closes the tab, drops the network, or the process
+# restarts mid-call. The row is then left `ringing` and both readers see a call
+# that is still in progress. These tests cover the sweeper that finalises those
+# rows and, crucially, publishes the corrected entry so an open thread updates
+# without a reload.
+
+
+def _pushed_call_state(socket, expected: str) -> dict:
+    """Read pushed message frames until the call entry reports ``expected``."""
+    for _ in range(10):
+        frame = recv_frame(socket, "message")
+        call = frame["message"].get("call")
+        if call and call["state"] == expected:
+            return frame
+    raise AssertionError(f"no pushed call entry in state {expected!r}")
+
+
+def test_a_ringing_call_is_finalised_and_pushed_to_both_sides(client, make_user, db_session):
+    """An abandoned call stops reading as live, live, on both screens."""
+    from datetime import timedelta
+
+    from app.models import Message, utcnow
+    from app.routers.realtime import CALL_RING_STALE_SECONDS, sweep_stale_calls
+
+    ada, ada_user = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        # The callee's tab is closed, so the decline never arrives. The row is
+        # aged past the ring window rather than waiting 90 real seconds.
+        row = db_session.query(Message).filter(Message.call_ref == "c1").one()
+        row.created_at = utcnow() - timedelta(seconds=CALL_RING_STALE_SECONDS + 5)
+        db_session.commit()
+
+        resolved = asyncio.run(sweep_stale_calls(db_session))
+        assert resolved == 1
+
+        # Both peers are told, and the pushed entry is the finished one: this is
+        # what makes the open thread update rather than wait for a reload. The
+        # ringing entry is still queued from the offer, so the frame that
+        # matters is the later one for the same row.
+        for socket, expected in ((ada_socket, "cancelled"), (grace_socket, "missed")):
+            pushed = _pushed_call_state(socket, expected)
+            assert pushed["message"]["call"]["state"] == expected
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    assert _call_entries(client, ada, cid)[0]["call"]["state"] == "cancelled"
+    assert _call_entries(client, grace, cid)[0]["call"]["state"] == "missed"
+
+
+def test_a_call_that_connected_long_ago_is_finalised_with_its_duration(
+    client, make_user, db_session
+):
+    """A hangup lost after media connected must not read as an endless call."""
+    from datetime import timedelta
+
+    from app.models import Message, utcnow
+    from app.routers.realtime import CALL_ACTIVE_STALE_SECONDS, sweep_stale_calls
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(grace_socket, "grace", cid, "answer")
+        recv_frame(ada_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    row = db_session.query(Message).filter(Message.call_ref == "c1").one()
+    row.created_at = utcnow() - timedelta(seconds=CALL_ACTIVE_STALE_SECONDS + 60)
+    row.call_connected_at = utcnow() - timedelta(seconds=125)
+    db_session.commit()
+
+    assert asyncio.run(sweep_stale_calls(db_session)) == 1
+
+    entry = _call_entries(client, ada, cid)[0]["call"]
+    assert entry["state"] == "answered"
+    # The duration is the talk time, not the age of the row.
+    assert entry["seconds"] is not None
+    assert entry["seconds"] >= 120
+
+
+def test_the_sweeper_leaves_a_call_that_is_still_ringing_alone(client, make_user, db_session):
+    """A call in progress must not be finalised out from under the two peers."""
+    from app.models import Message
+    from app.routers.realtime import sweep_stale_calls
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        assert asyncio.run(sweep_stale_calls(db_session)) == 0
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    row = db_session.query(Message).filter(Message.call_ref == "c1").one()
+    assert row.call_state == "ringing"
+    assert _call_entries(client, grace, cid)[0]["call"]["state"] == "ringing"

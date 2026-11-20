@@ -1,7 +1,8 @@
 """Pulse — a small social media API built with FastAPI."""
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -182,10 +183,26 @@ async def lifespan(_app: FastAPI):
     # Join the cross-process realtime bus so a socket held by one worker still
     # receives events published by another.
     await manager.start()
+    # Finalise calls whose end frame never arrived, so an abandoned call cannot
+    # sit as "Calling…" in a thread that is already open.
+    sweeper = asyncio.create_task(_sweep_calls_forever())
     try:
         yield
     finally:
+        sweeper.cancel()
+        with suppress(asyncio.CancelledError):
+            await sweeper
         await manager.stop()
+
+
+async def _sweep_calls_forever() -> None:
+    """Run the stale-call sweeper on a fixed cadence for the life of the app."""
+    while True:
+        try:
+            await realtime.sweep_stale_calls()
+        except Exception:  # noqa: BLE001 - the loop must survive a bad sweep
+            logger.debug("call sweep raised", exc_info=True)
+        await asyncio.sleep(realtime.CALL_SWEEP_INTERVAL_SECONDS)
 
 
 app = FastAPI(

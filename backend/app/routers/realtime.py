@@ -6,6 +6,7 @@ from datetime import timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ..deps import DbSession, forget_last_seen, touch_last_seen
 from .. import push
@@ -407,3 +408,80 @@ async def _publish_call_entry(db: DbSession, row: Message, conversation_id: int)
                 participant_id,
                 push.message_payload(db, row, conversation_id, participant_id),
             )
+
+
+# How stale a transient call row may be before it is finalised.
+#
+# These mirror the read-time expiry in `messages._call_log`, and exist for the
+# same reason: the frame that ends a call (a decline, a hangup) travels over the
+# same socket as everything else, so it is lost whenever the peer closes the tab,
+# loses the network, or the process restarts mid-call. The row is then left
+# `ringing` and both sides read it as a call still in progress.
+#
+# Read-time expiry alone is not enough. It only applies to the *next* read, so
+# the thread the reader already has open keeps showing "Calling…" until they
+# navigate away and back. Finalising here — and publishing the finished entry —
+# is what turns that into a live update.
+CALL_RING_STALE_SECONDS = 90
+CALL_ACTIVE_STALE_SECONDS = 6 * 60 * 60
+
+# How often the sweeper looks for abandoned rows.
+CALL_SWEEP_INTERVAL_SECONDS = 15
+
+
+async def sweep_stale_calls(db: Session | None = None) -> int:
+    """Finalise call rows whose end frame never arrived, and publish them.
+
+    Returns how many rows were resolved, which is what the tests assert on. Each
+    row is committed and published on its own so one bad row cannot stop the
+    rest of the sweep, and so the readers of a resolved call hear about it
+    immediately rather than at the end of a batch.
+
+    A session may be passed in so a test can sweep the database it controls;
+    the running app passes nothing and gets its own.
+    """
+    own_session = db is None
+    if db is None:
+        from ..database import SessionLocal
+
+        db = SessionLocal()
+    resolved = 0
+    try:
+        stale = list(
+            db.scalars(
+                select(Message).where(
+                    Message.call_ref.is_not(None),
+                    Message.call_state.in_((CALL_RINGING, CALL_ACTIVE)),
+                )
+            ).all()
+        )
+        now = utcnow().replace(tzinfo=None)
+        for row in stale:
+            created = row.created_at
+            if created is not None and getattr(created, "tzinfo", None) is not None:
+                created = created.astimezone(timezone.utc).replace(tzinfo=None)
+            if created is None:
+                continue
+            age = (now - created).total_seconds()
+            if row.call_state == CALL_RINGING and age > CALL_RING_STALE_SECONDS:
+                # A call nobody ever answered. Which wording each side sees is
+                # resolved per reader in `messages._call_log`, so the neutral
+                # stored state is what gets written here.
+                row.call_state = "cancelled"
+            elif row.call_state == CALL_ACTIVE and age > CALL_ACTIVE_STALE_SECONDS:
+                row.call_state = "answered"
+                row.call_seconds = _connected_seconds(row)
+            else:
+                continue
+            db.commit()
+            resolved += 1
+            try:
+                await _publish_call_entry(db, row, row.conversation_id)
+            except Exception:  # noqa: BLE001 - publishing must not stop the sweep
+                logger.debug("could not publish resolved call %s", row.id, exc_info=True)
+    except Exception:  # noqa: BLE001 - a sweep failure must not kill the loop
+        logger.debug("call sweep failed", exc_info=True)
+    finally:
+        if own_session:
+            db.close()
+    return resolved

@@ -35,7 +35,11 @@ function statusLine(phase: string, endedReason: string | null, durationMs: numbe
  * One overlay for both roles: an incoming call shows accept/decline, an active
  * one shows the media and the hang-up controls. Video is drawn as a large
  * remote picture with a small self-preview; an audio call has no video elements
- * at all, only the avatar, so nothing has to be hidden or re-laid-out.
+ * on screen at all, only the avatar, so nothing has to be hidden or re-laid-out.
+ *
+ * The remote element is mounted for every call, audio included: an audio track
+ * only plays once it is attached to a media element, so an audio call with no
+ * remote sink is a call with no sound.
  */
 export function CallOverlay() {
   const {
@@ -50,7 +54,24 @@ export function CallOverlay() {
   } = useCall()
 
   const localRef = useRef<HTMLVideoElement>(null)
-  const remoteRef = useRef<HTMLVideoElement>(null)
+  const remoteVideoRef = useRef<HTMLVideoElement>(null)
+  const remoteAudioRef = useRef<HTMLAudioElement>(null)
+
+  // The remote element that exists for this mode owns the stream. Attaching to
+  // both would play the audio twice on a video call.
+  const remoteRef = state.mode === 'video' ? remoteVideoRef : remoteAudioRef
+  // Nothing is attached until the call has been accepted. `ontrack` fires when
+  // the offer is applied, which is *before* the callee has agreed to anything,
+  // and an element holding the peer's stream at that point is a live sink for
+  // their microphone the moment ICE completes.
+  const accepting = state.phase === 'connecting' || state.phase === 'active'
+
+  useEffect(() => {
+    const node = remoteRef.current
+    if (!node) return
+    const wanted = accepting ? remoteStream : null
+    if (node.srcObject !== wanted) node.srcObject = wanted
+  }, [remoteRef, remoteStream, accepting, state.mode])
 
   useEffect(() => {
     if (localRef.current && localRef.current.srcObject !== localStream) {
@@ -58,33 +79,33 @@ export function CallOverlay() {
     }
   }, [localStream])
 
-  useEffect(() => {
-    if (remoteRef.current && remoteRef.current.srcObject !== remoteStream) {
-      remoteRef.current.srcObject = remoteStream
-    }
-  }, [remoteStream])
-
   if (state.phase === 'idle') return null
 
   const ringing = state.phase === 'ringing'
   const ended = state.phase === 'ended'
-  const showVideo = state.mode === 'video' && state.phase === 'active' && !state.cameraOff
+  // Video is only shown once media is actually flowing. Before that the
+  // overlay shows the avatar, so an un-accepted call is never a black screen.
+  // `cameraOff` is the *local* camera and must not hide the peer's picture.
+  const showRemoteVideo = state.mode === 'video' && state.phase === 'active'
 
   return (
     <div className={`call-overlay${ended ? ' ended' : ''}`} role="dialog" aria-modal="true" aria-label="Call">
-      {showVideo && (
+      {state.mode === 'video' && (
         <video
-          ref={remoteRef}
-          className="call-remote"
+          ref={remoteVideoRef}
+          className={`call-remote${showRemoteVideo ? '' : ' hidden'}`}
           autoPlay
           playsInline
           aria-label={`${state.peerName} video`}
         />
       )}
-      {state.mode === 'video' && !showVideo && <div className="call-video-fallback" aria-hidden="true" />}
+      {state.mode === 'audio' && (
+        // Never seen, but it is what actually plays the other person's voice.
+        <audio ref={remoteAudioRef} autoPlay aria-label={`${state.peerName} audio`} />
+      )}
 
-      <div className="call-info">
-        {(!showVideo || ringing) && (
+      <div className={`call-info${showRemoteVideo ? ' over-video' : ''}`}>
+        {!showRemoteVideo && (
           <div className={`call-avatar${ringing ? ' ringing' : ''}`}>
             <Avatar
               name={state.peerName}
@@ -99,7 +120,7 @@ export function CallOverlay() {
         <p className="call-status" aria-live="polite">
           {statusLine(state.phase, state.endedReason, state.durationMs)}
         </p>
-        {state.mode === 'video' && ringing && (
+        {state.mode === 'video' && !showRemoteVideo && !ended && (
           <span className="call-kind">
             <VideoIcon size={14} /> Video call
           </span>
@@ -116,7 +137,7 @@ export function CallOverlay() {
           aria-label="Your camera"
         />
       )}
-      {/* Audio-only calls still need the local element mounted so the track is
+      {/* Audio-only calls still need a local element mounted so the track is
           attached; it is never shown. */}
       {state.mode === 'audio' && <video ref={localRef} className="call-audio-sink" autoPlay playsInline muted />}
 

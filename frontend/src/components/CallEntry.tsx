@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { PhoneIcon, VideoIcon } from './Icons'
 import { RelativeTime } from './UI'
-import { callDetail, callLabel } from '../lib/calls-format'
+import { callDetail, callLabel, displayCallState } from '../lib/calls-format'
+import { useNow } from '../lib/useNow'
 import type { Message } from '../lib/types'
 
 /** A hold this long opens the menu; the same threshold the bubbles use. */
@@ -33,13 +34,22 @@ export function CallEntry({
 }) {
   const timer = useRef<number | null>(null)
   const origin = useRef<{ x: number; y: number } | null>(null)
+  // Ticks while the thread is open, so a call whose end frame never arrived
+  // stops reading as live without a reload. The interval only re-renders this
+  // entry, and only its state actually changes.
+  const now = useNow(15_000)
 
   const call = message.call
   if (!call) return null
 
-  const live = call.state === 'ringing' || call.state === 'active'
-  const missed = call.state === 'missed' || call.state === 'declined' || call.state === 'cancelled'
-  const detail = callDetail(call)
+  // The stored state, corrected for age. `state` is what every label below
+  // reads, so a stale "ringing" row reads as a finished call on both sides.
+  const state = displayCallState(call, message.created_at, now)
+  const shown = state === call.state ? call : { ...call, state }
+
+  const live = state === 'ringing' || state === 'active'
+  const missed = state === 'missed' || state === 'declined' || state === 'cancelled'
+  const detail = callDetail(shown)
   const Icon = call.mode === 'video' ? VideoIcon : PhoneIcon
 
   function cancel() {
@@ -94,7 +104,7 @@ export function CallEntry({
     <div
       className={`call-entry${missed ? ' missed' : ''}${live ? ' live' : ''}`}
       role="note"
-      aria-label={`${callLabel(call)}${detail ? `, ${detail}` : ''}`}
+      aria-label={`${callLabel(shown)}${detail ? `, ${detail}` : ''}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={cancel}
@@ -110,7 +120,7 @@ export function CallEntry({
         <Icon size={15} />
       </span>
       <span className="call-entry-text">
-        <span className="call-entry-label">{callLabel(call)}</span>
+        <span className="call-entry-label">{callLabel(shown)}</span>
         {detail && <span className="call-entry-detail">{detail}</span>}
       </span>
       <RelativeTime iso={message.created_at} className="call-entry-time" />

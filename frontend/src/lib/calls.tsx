@@ -39,6 +39,19 @@ const RTC_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
 }
 
+/**
+ * How long an incoming call can be ignored before it stops ringing.
+ *
+ * Deliberately a little longer than the caller's `RING_TIMEOUT_MS`, so the
+ * normal ending is the caller's hangup frame arriving and this only fires when
+ * that frame was lost — the case it exists for. Firing first would have the
+ * callee tear the call down while the caller still believes it is ringing.
+ */
+const INCOMING_TIMEOUT_MS = RING_TIMEOUT_MS + 10_000
+
+/** How long a call can sit in `connecting` before it is treated as failed. */
+const CONNECT_TIMEOUT_MS = 20_000
+
 export type CallMode = 'audio' | 'video'
 
 /** Where a call is in its lifecycle, which drives what the overlay shows. */
@@ -131,6 +144,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const tickTimer = useRef<number | null>(null)
   const startedAt = useRef<number | null>(null)
   const disconnectTimer = useRef<number | null>(null)
+  // The remote stream being assembled. A ref, not state, because `ontrack` is
+  // called once per track and each call needs to add to the same stream.
+  const remoteRef = useRef<MediaStream | null>(null)
+  // Bounds how long a call may sit in `connecting` before it is declared failed.
+  const connectTimer = useRef<number | null>(null)
   // The last frame the local side has seen, so a duplicate offer from a
   // reconnecting peer does not tear down a working call.
   const answeredRef = useRef(false)
@@ -139,9 +157,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (ringTimer.current !== null) window.clearTimeout(ringTimer.current)
     if (tickTimer.current !== null) window.clearInterval(tickTimer.current)
     if (disconnectTimer.current !== null) window.clearTimeout(disconnectTimer.current)
+    if (connectTimer.current !== null) window.clearTimeout(connectTimer.current)
     ringTimer.current = null
     tickTimer.current = null
     disconnectTimer.current = null
+    connectTimer.current = null
   }, [])
 
   const stopMedia = useCallback(() => {
@@ -164,6 +184,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     pendingIceRef.current = []
     answeredRef.current = false
     startedAt.current = null
+    remoteRef.current = null
     stopMedia()
   }, [clearTimers, stopMedia])
 
@@ -201,14 +222,26 @@ export function CallProvider({ children }: { children: ReactNode }) {
       const pc = new RTCPeerConnection(RTC_CONFIG)
       pcRef.current = pc
 
-      const remote = new MediaStream()
-      setRemoteStream(remote)
       pc.ontrack = (event) => {
-        for (const track of event.streams[0]?.getTracks() ?? [event.track]) {
-          remote.addTrack(track)
+        // Tracks are collected but the call is *not* promoted to active here.
+        //
+        // `ontrack` fires when the remote description is applied, which on the
+        // callee's side is the moment the offer arrives — before they have
+        // accepted anything. Treating that as "connected" flipped the overlay
+        // out of `ringing` the instant a call came in, which hid the accept and
+        // decline buttons and showed a black video for a call that had not
+        // started. Only `connectionState === 'connected'` means media is really
+        // flowing, and that is handled below.
+        const stream = event.streams[0]
+        if (!stream) return
+        const remote = remoteRef.current ?? new MediaStream()
+        remoteRef.current = remote
+        for (const track of stream.getTracks()) {
+          if (!remote.getTracks().includes(track)) remote.addTrack(track)
         }
+        // A fresh MediaStream object so React re-renders with the new tracks;
+        // the element is attached by the overlay's effect.
         setRemoteStream(new MediaStream(remote.getTracks()))
-        setState((current) => (current.phase === 'active' ? current : { ...current, phase: 'active' }))
       }
 
       pc.onicecandidate = (event) => {
@@ -227,6 +260,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
       pc.onconnectionstatechange = () => {
         if (pc !== pcRef.current) return
         if (pc.connectionState === 'connected') {
+          if (connectTimer.current !== null) window.clearTimeout(connectTimer.current)
+          connectTimer.current = null
           startedAt.current = Date.now()
           if (tickTimer.current !== null) window.clearInterval(tickTimer.current)
           tickTimer.current = window.setInterval(() => {
@@ -315,6 +350,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const pc = pcRef.current
     if (!conversationId || !callId || !pc) return
 
+    // Answering stops the ring: the incoming timeout is what would otherwise
+    // tear this call down a few seconds into it.
+    if (ringTimer.current !== null) window.clearTimeout(ringTimer.current)
+    ringTimer.current = null
+
     setState((current) => ({ ...current, phase: 'connecting', incoming: false }))
 
     let stream: MediaStream
@@ -342,6 +382,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
       mode: state.mode,
       payload: answer.sdp,
     })
+
+    // Nothing guarantees `connected` arrives: a peer that never gets a usable
+    // ICE pair leaves the overlay on "Connecting…" indefinitely. Bounding it
+    // turns that into a clear failure the user can act on.
+    if (connectTimer.current !== null) window.clearTimeout(connectTimer.current)
+    connectTimer.current = window.setTimeout(() => {
+      connectTimer.current = null
+      if (pcRef.current?.connectionState === 'connected') return
+      end('failed', true)
+    }, CONNECT_TIMEOUT_MS)
   }, [end, sendCall, state.conversationId, state.mode])
 
   const decline = useCallback(() => {
@@ -423,6 +473,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
           }
         }
         pendingIceRef.current = []
+
+        // A call nobody answers has to stop ringing. Without this the callee's
+        // overlay stayed up until the caller's own timeout arrived — and if the
+        // caller's hangup frame was lost, that never happened at all, leaving a
+        // ringing screen that could only be dismissed by declining.
+        if (ringTimer.current !== null) window.clearTimeout(ringTimer.current)
+        ringTimer.current = window.setTimeout(() => {
+          ringTimer.current = null
+          end('timeout', true, 'hangup')
+        }, INCOMING_TIMEOUT_MS)
         return
       }
 
@@ -444,6 +504,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (ringTimer.current !== null) window.clearTimeout(ringTimer.current)
         ringTimer.current = null
         setState((current) => ({ ...current, phase: 'connecting' }))
+        // The peer answered but media may still never connect (no usable ICE
+        // pair). Bound the wait so the caller is not left on "Connecting…".
+        if (connectTimer.current !== null) window.clearTimeout(connectTimer.current)
+        connectTimer.current = window.setTimeout(() => {
+          connectTimer.current = null
+          if (pcRef.current?.connectionState === 'connected') return
+          end('failed', true)
+        }, CONNECT_TIMEOUT_MS)
         return
       }
 

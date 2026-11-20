@@ -84,6 +84,9 @@ function Inbox({
   typingIn: Set<number>
 }) {
   const [query, setQuery] = useState('')
+  // Re-renders the previews on a clock, so a call that has ended stops reading
+  // as "Calling…" in the inbox without waiting for a reload.
+  const now = useNow(15_000)
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -170,7 +173,7 @@ function Inbox({
                         {conversation.last_message.mine && (
                           <span className="inbox-you">You: </span>
                         )}
-                        {previewOf(conversation.last_message)}
+                        {previewOf(conversation.last_message, now)}
                       </>
                     ) : (
                       <span className="inbox-you">Say hello</span>

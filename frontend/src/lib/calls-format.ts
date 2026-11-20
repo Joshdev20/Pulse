@@ -81,3 +81,36 @@ export function callPreview(call: CallLog): string {
         : kind
   }
 }
+
+/**
+ * How long a call may read as live on screen before it is shown as over.
+ *
+ * The server resolves a stale row on read and the sweeper finalises it within
+ * `CALL_SWEEP_INTERVAL_SECONDS`, but a thread that is already open only learns
+ * about that from a pushed frame. If that frame is lost — the peer closed the
+ * tab, the socket blipped — the entry sat as "Calling…" until the reader
+ * navigated away and back, which is the lag this bounds.
+ *
+ * Kept just above the server's own ring expiry so the two agree: a call the
+ * server still considers live is not shown as missed here first.
+ */
+const RING_STALE_MS = 90_000
+const ACTIVE_STALE_MS = 6 * 60 * 60 * 1000
+
+/**
+ * The state to *display* for a call, given when it started.
+ *
+ * Display only: nothing is written back, so a call that really is still ringing
+ * recovers as soon as the next frame arrives. This is the client's half of the
+ * same rule the server applies on read, and it exists because a client that
+ * renders a two-hour-old "Calling…" is showing a call that cannot be happening.
+ */
+export function displayCallState(call: CallLog, createdAt: string, now: number): CallLog['state'] {
+  if (call.state !== 'ringing' && call.state !== 'active') return call.state
+  const started = new Date(createdAt).getTime()
+  if (Number.isNaN(started)) return call.state
+  const age = now - started
+  if (call.state === 'ringing' && age > RING_STALE_MS) return 'cancelled'
+  if (call.state === 'active' && age > ACTIVE_STALE_MS) return 'answered'
+  return call.state
+}
