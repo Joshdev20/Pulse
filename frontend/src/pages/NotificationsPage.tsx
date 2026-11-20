@@ -6,6 +6,7 @@ import { BellIcon, CommentIcon, ComposeIcon, HeartIcon, RepostIcon, ReplyIcon, U
 import { useRealtime } from '../context/RealtimeContext'
 import { api } from '../lib/api'
 import * as queryCache from '../lib/queryCache'
+import { decrement, setCount } from '../lib/unread'
 import type { Notification } from '../lib/types'
 
 const CACHE_KEY = 'notifications'
@@ -89,6 +90,10 @@ export function NotificationsPage() {
         queryCache.write(CACHE_KEY, next)
         return next
       })
+      // Drop the shell badge now, not when the request lands: the reader has
+      // opened the notification, and a badge that lingers until a refresh
+      // reads as the click having failed.
+      decrement('notifications')
       void api.markRead(item.id).catch(() => undefined)
     }
     if (item.post_id) navigate(`/p/${item.post_id}`)
@@ -101,6 +106,7 @@ export function NotificationsPage() {
       queryCache.write(CACHE_KEY, next)
       return next
     })
+    setCount('notifications', 0)
     try {
       await api.markAllRead()
     } catch {

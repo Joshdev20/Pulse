@@ -404,3 +404,70 @@ export const StickerIcon = (p: IconProps) => (
     <path d="M9 9.5h.01M15 9.5h.01" />
   </Base>
 )
+
+/** Two overlapping sheets: the conventional "copy" mark. */
+export const CopyIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="9" y="9" width="11" height="11" rx="2.4" />
+    <path d="M15 6.5A2.5 2.5 0 0 0 12.5 4H6.4A2.4 2.4 0 0 0 4 6.4v6.1A2.5 2.5 0 0 0 6.5 15" />
+  </Base>
+)
+
+/** An arrow leaving a box: forwarding a message to another thread. */
+export const ForwardIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M20 4 10.5 13.5" />
+    <path d="M20 4h-6M20 4v6" />
+    <path d="M4 20v-4.5A3.5 3.5 0 0 1 7.5 12H13" />
+  </Base>
+)
+
+export const PhoneIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M6.2 3.5h2.6l1.5 3.7-2 1.3a11 11 0 0 0 5.2 5.2l1.3-2 3.7 1.5v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.2 5.7a2 2 0 0 1 2-2.2Z" />
+  </Base>
+)
+
+export const VideoIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="3" y="6" width="12.5" height="12" rx="3" />
+    <path d="m15.5 12 5-3v9l-5-3z" />
+  </Base>
+)
+
+export const MicOffIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M15 9.5V6a3 3 0 0 0-5.6-1.5" />
+    <path d="M9 9v3a3 3 0 0 0 4.6 2.6" />
+    <path d="M5.5 10.5a6.5 6.5 0 0 0 10 5.6M18.5 10.5a6.5 6.5 0 0 1-.6 2.7" />
+    <path d="M12 17v3.5M8.5 20.5h7" />
+    <path d="m3.5 3.5 17 17" />
+  </Base>
+)
+
+export const VideoOffIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M15.5 10.2V9a3 3 0 0 0-3-3H6.4" />
+    <path d="M3 7.5v7.2A3 3 0 0 0 6 17.7h6.5a3 3 0 0 0 2.2-1" />
+    <path d="m15.5 12 5-3v9l-3.2-1.9" />
+    <path d="m3.5 3.5 17 17" />
+  </Base>
+)
+
+export const CameraFlipIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 9V7.5A2.5 2.5 0 0 1 6.5 5H12" />
+    <path d="m9.5 2.8L12 5 9.5 7.2" />
+    <path d="M20 15v1.5a2.5 2.5 0 0 1-2.5 2.5H12" />
+    <path d="m14.5 21.2L12 19l2.5-2.2" />
+    <circle cx="12" cy="12" r="3.2" />
+  </Base>
+)
+
+/** A clock face: a message that has left this device but not been delivered. */
+export const ClockIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5V12l3 1.8" />
+  </Base>
+)

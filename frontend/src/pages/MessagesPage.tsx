@@ -4,20 +4,27 @@ import { Avatar, DisplayName } from '../components/Avatar'
 import { MediaPicker } from '../components/MediaPicker'
 import { VoiceRecorderButton, voiceNoteFilename } from '../components/VoiceRecorderButton'
 import { MessageBubble } from '../components/MessageBubble'
+import { MessageActionSheet } from '../components/MessageActionSheet'
+import type { MessageAction } from '../components/MessageActionSheet'
 import { StickerPicker } from '../components/StickerPicker'
-import { EmptyState, ErrorState, FeedSkeleton, RelativeTime, Spinner } from '../components/UI'
+import { Modal, EmptyState, ErrorState, FeedSkeleton, RelativeTime, Spinner } from '../components/UI'
 import {
   ChevronLeftIcon,
   CloseIcon,
   MailIcon,
   PaperclipIcon,
+  PhoneIcon,
   ReplyIcon,
+  SearchIcon,
   SendIcon,
   StickerIcon,
+  VideoIcon,
 } from '../components/Icons'
 import { useRealtime } from '../context/RealtimeContext'
+import { useCall } from '../lib/calls'
 import { api, ApiError } from '../lib/api'
 import * as queryCache from '../lib/queryCache'
+import { decrement } from '../lib/unread'
 import { formatPresence } from '../lib/format'
 import { previewOf } from '../lib/stickers'
 import { useNow } from '../lib/useNow'
@@ -33,20 +40,62 @@ const PIN_WINDOW_MS = 2500
 /** A `scrollHeight` change smaller than this is not worth re-pinning for. */
 const GROWTH_TOLERANCE_PX = 2
 
-/** Inbox: every conversation, newest activity first. */
+/** A message this close to the previous one is drawn in the same group. */
+const GROUP_WINDOW_MS = 4 * 60_000
+
+/** Two messages more than this far apart get a date divider between them. */
+const DAY_MS = 24 * 60 * 60_000
+
+function dayKey(iso: string): string {
+  const date = new Date(iso)
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+}
+
+function dayLabel(iso: string, now: number): string {
+  const date = new Date(iso)
+  const today = new Date(now)
+  const yesterday = new Date(now - DAY_MS)
+  if (dayKey(iso) === dayKey(today.toISOString())) return 'Today'
+  if (dayKey(iso) === dayKey(yesterday.toISOString())) return 'Yesterday'
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+  })
+}
+
+/** Inbox: every conversation, newest activity first, searchable. */
 function Inbox({
   conversations,
   activeId,
   loading,
   error,
   onReload,
+  typingIn,
 }: {
   conversations: Conversation[]
   activeId?: number
   loading: boolean
   error: string | null
   onReload: () => void
+  /** Conversations where the partner is typing right now. */
+  typingIn: Set<number>
 }) {
+  const [query, setQuery] = useState('')
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return conversations
+    return conversations.filter((conversation) => {
+      const partner = conversation.partner
+      return (
+        partner.display_name.toLowerCase().includes(needle) ||
+        partner.username.toLowerCase().includes(needle)
+      )
+    })
+  }, [conversations, query])
+
   if (loading) return <FeedSkeleton rows={4} />
   if (error) return <ErrorState message={error} onRetry={onReload} />
   if (conversations.length === 0) {
@@ -60,46 +109,145 @@ function Inbox({
   }
 
   return (
-    <ul className="inbox">
-      {conversations.map((conversation) => (
-        <li key={conversation.id}>
-          <Link
-            to={`/messages/${conversation.id}`}
-            className={`inbox-row${conversation.id === activeId ? ' active' : ''}`}
-          >
-            <Avatar
-              name={conversation.partner.display_name}
-              color={conversation.partner.avatar_color}
-              url={conversation.partner.avatar_url}
-              size="md"
-            />
-            <div className="inbox-info">
-              <div className="inbox-top">
-                <span className="inbox-name">
-                  <DisplayName user={conversation.partner} />
+    <>
+      <div className="inbox-search">
+        <SearchIcon size={15} />
+        <input
+          className="inbox-search-input"
+          type="search"
+          value={query}
+          placeholder="Search messages"
+          aria-label="Search conversations"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
+
+      {visible.length === 0 && (
+        <p className="inbox-none">No conversation matches “{query.trim()}”.</p>
+      )}
+
+      <ul className="inbox">
+        {visible.map((conversation) => {
+          const partner = conversation.partner
+          const typing = typingIn.has(conversation.id)
+          return (
+            <li key={conversation.id}>
+              <Link
+                to={`/messages/${conversation.id}`}
+                className={`inbox-row${conversation.id === activeId ? ' active' : ''}${
+                  conversation.unread_count > 0 ? ' unread' : ''
+                }`}
+              >
+                <span className="inbox-avatar">
+                  <Avatar
+                    name={partner.display_name}
+                    color={partner.avatar_color}
+                    url={partner.avatar_url}
+                    size="md"
+                  />
+                  {partner.is_online && <span className="presence-dot" aria-hidden="true" />}
                 </span>
-                <RelativeTime iso={conversation.last_message_at} className="inbox-time" />
-              </div>
-              <div className="inbox-preview">
-                {conversation.last_message
-                  ? `${conversation.last_message.mine ? 'You: ' : ''}${previewOf(conversation.last_message)}`
-                  : 'Say hello'}
-              </div>
-            </div>
-            {conversation.unread_count > 0 && (
-              <span className="inbox-unread">{conversation.unread_count}</span>
-            )}
-          </Link>
-        </li>
-      ))}
-    </ul>
+                <div className="inbox-info">
+                  <div className="inbox-top">
+                    <span className="inbox-name">
+                      <DisplayName user={partner} />
+                    </span>
+                    <RelativeTime iso={conversation.last_message_at} className="inbox-time" />
+                  </div>
+                  <div className={`inbox-preview${typing ? ' typing' : ''}`}>
+                    {typing ? (
+                      <span className="inbox-typing">
+                        typing
+                        <span className="typing-dots" aria-hidden="true">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      </span>
+                    ) : conversation.last_message ? (
+                      <>
+                        {conversation.last_message.mine && (
+                          <span className="inbox-you">You: </span>
+                        )}
+                        {previewOf(conversation.last_message)}
+                      </>
+                    ) : (
+                      <span className="inbox-you">Say hello</span>
+                    )}
+                  </div>
+                </div>
+                {conversation.unread_count > 0 && (
+                  <span className="inbox-unread" aria-label={`${conversation.unread_count} unread`}>
+                    {conversation.unread_count > 99 ? '99+' : conversation.unread_count}
+                  </span>
+                )}
+              </Link>
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+}
+
+/** The forward destination picker. */
+function ForwardPicker({
+  conversations,
+  onPick,
+  onClose,
+  busy,
+}: {
+  conversations: Conversation[]
+  onPick: (conversationId: number) => void
+  onClose: () => void
+  busy: boolean
+}) {
+  return (
+    <Modal title="Forward to" onClose={onClose}>
+      <p className="forward-hint">Pick a conversation to send a copy of this message to.</p>
+      <ul className="forward-list">
+        {conversations.map((conversation) => (
+          <li key={conversation.id}>
+            <button
+              type="button"
+              className="forward-row"
+              disabled={busy}
+              onClick={() => onPick(conversation.id)}
+            >
+              <Avatar
+                name={conversation.partner.display_name}
+                color={conversation.partner.avatar_color}
+                url={conversation.partner.avatar_url}
+                size="sm"
+              />
+              <span className="forward-name">
+                <DisplayName user={conversation.partner} />
+              </span>
+            </button>
+          </li>
+        ))}
+        {conversations.length === 0 && (
+          <li className="forward-empty">Start another conversation first, then forward to it.</li>
+        )}
+      </ul>
+    </Modal>
   )
 }
 
 /** A single thread with live delivery, typing state and attachments. */
-function Thread({ conversation, onSent }: { conversation: Conversation; onSent: () => void }) {
-
+function Thread({
+  conversation,
+  conversations,
+  onSent,
+  onTyping,
+}: {
+  conversation: Conversation
+  conversations: Conversation[]
+  onSent: () => void
+  onTyping: (conversationId: number, typing: boolean) => void
+}) {
   const { subscribe, sendTyping } = useRealtime()
+  const call = useCall()
   const [messages, setMessages] = useState<Message[]>(
     () => queryCache.read<Message[]>(`messages:${conversation.id}`) ?? [],
   )
@@ -107,19 +255,30 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     () => queryCache.read<Message[]>(`messages:${conversation.id}`) === undefined,
   )
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<Media[]>([])
   const [sending, setSending] = useState(false)
   const [partnerTyping, setPartnerTyping] = useState(false)
   const [replyTo, setReplyTo] = useState<Message | null>(null)
+  const [editing, setEditing] = useState<Message | null>(null)
   const [stickersOpen, setStickersOpen] = useState(false)
+  const [menu, setMenu] = useState<{ message: Message; anchor: DOMRect } | null>(null)
+  const [forwarding, setForwarding] = useState<Message | null>(null)
+  const [forwardBusy, setForwardBusy] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<Message | null>(null)
   // Live presence for the partner, seeded from the conversation payload and
   // then updated by `presence` frames without refetching the inbox.
   const [partner, setPartner] = useState(conversation.partner)
+  // How far the partner has read, so own messages can show "Seen" immediately.
+  const [partnerReadAt, setPartnerReadAt] = useState<string | null>(
+    conversation.partner_read_at,
+  )
 
   useEffect(() => {
     setPartner(conversation.partner)
-  }, [conversation.partner])
+    setPartnerReadAt(conversation.partner_read_at)
+  }, [conversation.partner, conversation.partner_read_at])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const typingTimer = useRef<number | null>(null)
@@ -148,13 +307,53 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
       .finally(() => setLoading(false))
   }, [conversation.id, historyKey])
 
+  // A receipt that arrived while the history was loading would be overwritten
+  // by the fetch, so the loaded page is reconciled with it here.
   useEffect(() => {
-    load()
-    void api.markConversationRead(conversation.id).catch(() => undefined)
-    onSent()
-  }, [conversation.id, load, onSent])
+    if (!partnerReadAt) return
+    setMessages((current) => {
+      let changed = false
+      const next = current.map((item) => {
+        if (!item.mine || item.read_by_partner) return item
+        if (new Date(item.created_at) > new Date(partnerReadAt)) return item
+        changed = true
+        return { ...item, read_by_partner: true }
+      })
+      if (!changed) return current
+      queryCache.write(historyKey, next)
+      return next
+    })
+  }, [historyKey, partnerReadAt, messages.length])
 
-  // Live messages, likes and typing indicators for this thread only.
+  /**
+   * Clear the unread state for this thread, at once and in the background.
+   *
+   * The badge in the shell drops immediately rather than after the request:
+   * opening a thread is the reader saying they have seen it, and waiting for a
+   * round trip is what made the count linger until a refresh.
+   *
+   * The amount to subtract is held in a ref because the count changes as a
+   * result of this very call — the inbox reloads with zero unread — and a
+   * dependency on it would re-run the mount effect, refetch, and loop.
+   */
+  const unreadOnOpen = useRef(conversation.unread_count)
+  const markRead = useCallback(() => {
+    decrement('messages', unreadOnOpen.current)
+    unreadOnOpen.current = 0
+    void api.markConversationRead(conversation.id).catch(() => undefined)
+  }, [conversation.id])
+
+  useEffect(() => {
+    unreadOnOpen.current = conversation.unread_count
+    load()
+    markRead()
+    onSent()
+    // `conversation.unread_count` is read through the ref above on purpose:
+    // including it here would refetch the thread every time a message lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation.id, load, markRead, onSent])
+
+  // Live messages, edits, deletions, likes and typing for this thread only.
   useEffect(
     () =>
       subscribe((event) => {
@@ -165,13 +364,46 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
             queryCache.write(historyKey, next)
             return next
           })
+          // A message arriving in the thread the reader is looking at is read
+          // on arrival, so the inbox must not show it as unread either.
           void api.markConversationRead(conversation.id).catch(() => undefined)
+        }
+        if (event.type === 'message_edit' && event.message?.conversation_id === conversation.id) {
+          const updated = event.message
+          setMessages((current) => {
+            const next = current.map((item) => (item.id === updated.id ? updated : item))
+            queryCache.write(historyKey, next)
+            return next
+          })
+        }
+        if (event.type === 'message_delete' && event.conversation_id === conversation.id) {
+          setMessages((current) => {
+            const next = current.filter((item) => item.id !== event.message_id)
+            queryCache.write(historyKey, next)
+            return next
+          })
+          setReplyTo((current) => (current?.id === event.message_id ? null : current))
         }
         if (event.type === 'message_like' && event.conversation_id === conversation.id) {
           setMessages((current) => {
             const next = current.map((item) =>
               item.id === event.message_id
                 ? { ...item, like_count: event.like_count ?? item.like_count }
+                : item,
+            )
+            queryCache.write(historyKey, next)
+            return next
+          })
+        }
+        if (event.type === 'read' && event.conversation_id === conversation.id) {
+          // The partner read this thread: every own message up to that stamp
+          // becomes "Seen" without a refetch.
+          const readAt = event.last_read_at ?? new Date().toISOString()
+          setPartnerReadAt(readAt)
+          setMessages((current) => {
+            const next = current.map((item) =>
+              item.mine && new Date(item.created_at) <= new Date(readAt)
+                ? { ...item, read_by_partner: true }
                 : item,
             )
             queryCache.write(historyKey, next)
@@ -191,7 +423,20 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
           typingTimer.current = window.setTimeout(() => setPartnerTyping(false), 3500)
         }
       }),
-    [subscribe, conversation.id],
+    [subscribe, conversation.id, conversation.partner.id, historyKey],
+  )
+
+  // The inbox row shows "typing" too, so the parent is told as it changes.
+  useEffect(() => {
+    onTyping(conversation.id, partnerTyping)
+  }, [onTyping, conversation.id, partnerTyping])
+
+  useEffect(
+    () => () => {
+      onTyping(conversation.id, false)
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current)
+    },
+    [onTyping, conversation.id],
   )
 
   useLayoutEffect(() => {
@@ -311,10 +556,32 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     })
   }
 
+  function replaceMessage(message: Message) {
+    setMessages((current) => {
+      const next = current.map((item) => (item.id === message.id ? message : item))
+      queryCache.write(historyKey, next)
+      return next
+    })
+  }
+
   function startReply(message: Message) {
+    setEditing(null)
     setReplyTo(message)
     // Focus the composer so the swipe lands the user where they expect.
     inputRef.current?.focus()
+  }
+
+  function startEdit(message: Message) {
+    setReplyTo(null)
+    setEditing(message)
+    setDraft(message.body)
+    inputRef.current?.focus()
+  }
+
+  function cancelComposeMode() {
+    setReplyTo(null)
+    setEditing(null)
+    setDraft('')
   }
 
   /**
@@ -347,6 +614,80 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     }
   }
 
+  async function copyMessage(message: Message) {
+    try {
+      await navigator.clipboard.writeText(message.body)
+      flash('Copied')
+    } catch {
+      flash('Could not copy')
+    }
+  }
+
+  function flash(text: string) {
+    setNotice(text)
+    window.setTimeout(() => setNotice((current) => (current === text ? null : current)), 1800)
+  }
+
+  async function deleteMessage(message: Message) {
+    setConfirmDelete(null)
+    const snapshot = messages
+    setMessages((current) => {
+      const next = current.filter((item) => item.id !== message.id)
+      queryCache.write(historyKey, next)
+      return next
+    })
+    try {
+      await api.deleteMessage(conversation.id, message.id)
+      flash('Message deleted')
+      onSent()
+    } catch (caught) {
+      setMessages(snapshot)
+      queryCache.write(historyKey, snapshot)
+      setError(caught instanceof ApiError ? caught.message : 'Could not delete the message')
+    }
+  }
+
+  async function forwardTo(targetId: number) {
+    if (!forwarding) return
+    setForwardBusy(true)
+    try {
+      await api.forwardMessage(conversation.id, forwarding.id, targetId)
+      setForwarding(null)
+      flash('Forwarded')
+      onSent()
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not forward the message')
+    } finally {
+      setForwardBusy(false)
+    }
+  }
+
+  function onAction(action: MessageAction) {
+    const message = menu?.message
+    setMenu(null)
+    if (!message) return
+    switch (action) {
+      case 'reply':
+        startReply(message)
+        break
+      case 'like':
+        void toggleLike(message)
+        break
+      case 'copy':
+        void copyMessage(message)
+        break
+      case 'edit':
+        startEdit(message)
+        break
+      case 'forward':
+        setForwarding(message)
+        break
+      case 'delete':
+        setConfirmDelete(message)
+        break
+    }
+  }
+
   function onDraftChange(value: string) {
     setDraft(value)
     // Throttle the indicator: at most one every two seconds while typing.
@@ -360,6 +701,24 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const body = draft.trim()
+    if (editing) {
+      if (!body || sending) return
+      setSending(true)
+      setError(null)
+      try {
+        const updated = await api.editMessage(conversation.id, editing.id, body)
+        replaceMessage(updated)
+        setEditing(null)
+        setDraft('')
+        flash('Message updated')
+      } catch (caught) {
+        setError(caught instanceof ApiError ? caught.message : 'Could not save the edit')
+      } finally {
+        setSending(false)
+      }
+      return
+    }
+
     if ((!body && attachments.length === 0) || sending) return
 
     setSending(true)
@@ -406,7 +765,9 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     }
   }
 
-  const canSend = (draft.trim().length > 0 || attachments.length > 0) && !sending
+  const canSend = editing
+    ? draft.trim().length > 0 && !sending
+    : (draft.trim().length > 0 || attachments.length > 0) && !sending
 
   /**
    * Upload a finished recording and send it as the next message.
@@ -441,6 +802,35 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
     }
   }
 
+  const callActive = call.state.phase !== 'idle' && call.state.phase !== 'ended'
+
+  function startCall(mode: 'audio' | 'video') {
+    if (callActive) return
+    void call.start({
+      conversationId: conversation.id,
+      mode,
+      peerName: partner.display_name,
+      peerColor: partner.avatar_color,
+      peerAvatar: partner.avatar_url,
+    })
+  }
+
+  /** Grouping: same sender, and close enough in time to read as one turn. */
+  const rendered = useMemo(() => {
+    return messages.map((message, index) => {
+      const previous = messages[index - 1]
+      const grouped = Boolean(
+        previous &&
+          previous.sender.id === message.sender.id &&
+          new Date(message.created_at).getTime() - new Date(previous.created_at).getTime() <
+            GROUP_WINDOW_MS,
+      )
+      const showDay =
+        !previous || dayKey(previous.created_at) !== dayKey(message.created_at)
+      return { message, grouped, showDay }
+    })
+  }, [messages])
+
   return (
     <div className="thread">
       <header className="thread-head">
@@ -454,15 +844,41 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
             />
             {partner.is_online && <span className="presence-dot" aria-hidden="true" />}
           </span>
-          <div>
+          <div className="thread-identity">
             <div className="thread-name">
               <DisplayName user={partner} />
             </div>
-            <div className={`thread-handle${partner.is_online ? ' online' : ''}`}>
-              {formatPresence(partner.last_seen_at, partner.is_online, now)}
+            <div
+              className={`thread-handle${partner.is_online ? ' online' : ''}${
+                partnerTyping ? ' typing' : ''
+              }`}
+            >
+              {partnerTyping ? 'typing…' : formatPresence(partner.last_seen_at, partner.is_online, now)}
             </div>
           </div>
         </Link>
+        <div className="thread-call-actions">
+          <button
+            type="button"
+            className="icon-btn thread-call-btn"
+            aria-label={`Audio call ${partner.display_name}`}
+            title="Audio call"
+            onClick={() => startCall('audio')}
+            disabled={callActive}
+          >
+            <PhoneIcon size={19} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn thread-call-btn"
+            aria-label={`Video call ${partner.display_name}`}
+            title="Video call"
+            onClick={() => startCall('video')}
+            disabled={callActive}
+          >
+            <VideoIcon size={19} />
+          </button>
+        </div>
       </header>
 
       <div className="thread-body" ref={scrollRef}>
@@ -476,18 +892,27 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
           </p>
         )}
 
-        {messages.map((message) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            onReply={startReply}
-            onToggleLike={toggleLike}
-          />
+        {rendered.map(({ message, grouped, showDay }) => (
+          <div key={message.id} className="thread-item">
+            {showDay && (
+              <div className="thread-day">
+                <span>{dayLabel(message.created_at, now)}</span>
+              </div>
+            )}
+            <MessageBubble
+              message={message}
+              grouped={grouped}
+              partnerOnline={Boolean(partner.is_online)}
+              onReply={startReply}
+              onToggleLike={toggleLike}
+              onOpenMenu={(target, anchor) => setMenu({ message: target, anchor })}
+            />
+          </div>
         ))}
 
         {partnerTyping && (
           <div className="bubble-row">
-            <div className="bubble typing-bubble" aria-live="polite">
+            <div className="bubble typing-bubble" aria-live="polite" aria-label="Typing">
               <span className="dot" />
               <span className="dot" />
               <span className="dot" />
@@ -496,6 +921,7 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
         )}
       </div>
 
+      {notice && <p className="thread-notice">{notice}</p>}
       {error && messages.length > 0 && <p className="thread-error">{error}</p>}
 
       {replyTo && (
@@ -518,6 +944,24 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
         </div>
       )}
 
+      {editing && (
+        <div className="reply-preview editing">
+          <ReplyIcon size={15} />
+          <div className="reply-preview-body">
+            <span className="reply-preview-name">Editing message</span>
+            <span className="reply-preview-text">{editing.body}</span>
+          </div>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Cancel edit"
+            onClick={cancelComposeMode}
+          >
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      )}
+
       <StickerPicker
         open={stickersOpen}
         disabled={sending}
@@ -526,25 +970,27 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
       />
 
       <form className="composer-inline thread-composer" onSubmit={submit}>
-        <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} />
-        <button
-          type="button"
-          className={`icon-btn sticker-toggle${stickersOpen ? ' active' : ''}`}
-          aria-label={stickersOpen ? 'Hide stickers' : 'Show stickers'}
-          aria-expanded={stickersOpen}
-          onClick={() => setStickersOpen((open) => !open)}
-        >
-          <StickerIcon size={19} />
-        </button>
-        <VoiceRecorderButton
-          disabled={sending}
-          onRecorded={sendVoiceNote}
-          onError={setError}
-        />
+        {!editing && (
+          <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} />
+        )}
+        {!editing && (
+          <button
+            type="button"
+            className={`icon-btn sticker-toggle${stickersOpen ? ' active' : ''}`}
+            aria-label={stickersOpen ? 'Hide stickers' : 'Show stickers'}
+            aria-expanded={stickersOpen}
+            onClick={() => setStickersOpen((open) => !open)}
+          >
+            <StickerIcon size={19} />
+          </button>
+        )}
+        {!editing && (
+          <VoiceRecorderButton disabled={sending} onRecorded={sendVoiceNote} onError={setError} />
+        )}
         <textarea
           ref={inputRef}
           className="input thread-input"
-          placeholder={`Message @${conversation.partner.username}`}
+          placeholder={editing ? 'Edit your message' : `Message @${conversation.partner.username}`}
           value={draft}
           rows={1}
           onChange={(event) => onDraftChange(event.target.value)}
@@ -553,18 +999,68 @@ function Thread({ conversation, onSent }: { conversation: Conversation; onSent: 
               event.preventDefault()
               void submit(event)
             }
+            if (event.key === 'Escape' && editing) {
+              cancelComposeMode()
+            }
           }}
-          aria-label="Message"
+          aria-label={editing ? 'Edit message' : 'Message'}
         />
         <button
           type="submit"
           className="btn btn-primary btn-icon"
           disabled={!canSend}
-          aria-label="Send message"
+          aria-label={editing ? 'Save edit' : 'Send message'}
         >
           {sending ? <Spinner size={16} /> : <SendIcon size={18} />}
         </button>
       </form>
+
+      {menu && (
+        <MessageActionSheet
+          message={menu.message}
+          anchor={menu.anchor}
+          onAction={onAction}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {forwarding && (
+        <ForwardPicker
+          conversations={conversations.filter((item) => item.id !== conversation.id)}
+          busy={forwardBusy}
+          onPick={(targetId) => void forwardTo(targetId)}
+          onClose={() => setForwarding(null)}
+        />
+      )}
+
+      {confirmDelete && (
+        <Modal
+          title="Delete message?"
+          onClose={() => setConfirmDelete(null)}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setConfirmDelete(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => void deleteMessage(confirmDelete)}
+              >
+                Delete
+              </button>
+            </>
+          }
+        >
+          <p>
+            This removes the message for both of you. It cannot be undone.
+          </p>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -582,6 +1078,7 @@ export function MessagesPage() {
     () => queryCache.read<Conversation[]>(INBOX_KEY) === undefined,
   )
   const [error, setError] = useState<string | null>(null)
+  const [typingIn, setTypingIn] = useState<Set<number>>(new Set())
 
   const activeId = conversationId ? Number(conversationId) : undefined
 
@@ -607,13 +1104,29 @@ export function MessagesPage() {
   // in a loop.
   const refreshInbox = useCallback(() => load(true), [load])
 
+  /** Track which threads have a partner typing, for the inbox rows. */
+  const setTyping = useCallback((id: number, typing: boolean) => {
+    setTypingIn((current) => {
+      if (typing === current.has(id)) return current
+      const next = new Set(current)
+      if (typing) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
+
   // Any incoming message reorders the inbox.
   useEffect(
     () =>
       subscribe((event) => {
         if (event.type === 'message') load()
+        if (event.type === 'typing' && typeof event.conversation_id === 'number') {
+          const id = event.conversation_id
+          setTyping(id, true)
+          window.setTimeout(() => setTyping(id, false), 4000)
+        }
       }),
-    [subscribe, load],
+    [subscribe, load, setTyping],
   )
 
   const active = useMemo(
@@ -624,6 +1137,26 @@ export function MessagesPage() {
   // On a narrow screen the inbox and the thread take turns, so the URL drives
   // which one is visible.
   const showThread = Boolean(activeId)
+
+  /**
+   * Drop a thread's unread badge the moment it is opened.
+   *
+   * `Thread` clears the server's copy and the shell's count; this keeps the
+   * inbox row itself in step, so stepping back out shows no badge rather than
+   * waiting for the next fetch.
+   */
+  useEffect(() => {
+    if (!activeId) return
+    setConversations((current) => {
+      const row = current.find((item) => item.id === activeId)
+      if (!row || row.unread_count === 0) return current
+      const next = current.map((item) =>
+        item.id === activeId ? { ...item, unread_count: 0 } : item,
+      )
+      queryCache.write(INBOX_KEY, next)
+      return next
+    })
+  }, [activeId])
 
   return (
     <>
@@ -656,11 +1189,17 @@ export function MessagesPage() {
             loading={loading}
             error={error}
             onReload={load}
+            typingIn={typingIn}
           />
         </div>
         <div className="messages-thread">
           {active ? (
-            <Thread conversation={active} onSent={refreshInbox} />
+            <Thread
+              conversation={active}
+              conversations={conversations}
+              onSent={refreshInbox}
+              onTyping={setTyping}
+            />
           ) : (
             activeId && (
               <div className="state">

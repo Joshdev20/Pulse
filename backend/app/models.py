@@ -422,6 +422,16 @@ class Message(Base):
     reply_to_id: Mapped[int | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # When the sender last changed `body`. Null means never edited, which is
+    # what the "edited" marker in the thread keys off.
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The message this one was forwarded from, if any. SET NULL so removing the
+    # original leaves the forward standing, just without a provenance line. The
+    # id alone is not enough to read the original: the forward route only sets
+    # it when the caller can already see that message.
+    forwarded_from_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")

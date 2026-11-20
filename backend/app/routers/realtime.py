@@ -16,7 +16,7 @@ router = APIRouter(tags=["realtime"])
 
 # Frame types a client may send after authenticating. Anything else is ignored
 # rather than echoed, so the socket is not a general-purpose relay.
-ALLOWED_INBOUND = {"typing", "read", "ping"}
+ALLOWED_INBOUND = {"typing", "read", "ping", "call"}
 
 
 @router.websocket("/api/ws")
@@ -62,6 +62,8 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
                 await socket.send_text(json.dumps({"type": "pong"}))
             elif kind == "typing":
                 await _relay_typing(db, user_id, frame)
+            elif kind == "call":
+                await _relay_call(db, user_id, frame)
             elif kind == "read":
                 await socket.send_text(json.dumps({"type": "ack", "for": "read"}))
             elif kind not in ALLOWED_INBOUND:
@@ -191,3 +193,51 @@ def _typing_peers(db: DbSession, user_id: int, conversation_id: int) -> list[int
             )
         ).all()
     )
+
+
+# The call lifecycle as relayed frames. A "signal" carries an opaque SDP or ICE
+# blob between the two peers; the rest are the state transitions the callee and
+# caller need to agree on. Anything outside this set is dropped.
+CALL_ACTIONS = {"offer", "answer", "ice", "accept", "decline", "hangup"}
+
+# SDP and ICE payloads are a few kilobytes; anything far larger is not one.
+MAX_CALL_PAYLOAD_CHARS = 12_000
+
+
+async def _relay_call(db: DbSession, user_id: int, frame: dict) -> None:
+    """Forward one call-control frame to the other member of a conversation.
+
+    The server is a relay, not a party to the call: it never parses the SDP or
+    the ICE candidates, it only checks that the sender belongs to the thread and
+    that the destination is the other participant. That keeps WebRTC signalling
+    free of media handling and out of the API's data model — a call leaves no
+    rows behind.
+
+    Membership is checked here rather than trusted from the client for the same
+    reason as typing: otherwise the socket would be a way to ring a stranger.
+    """
+    conversation_id = frame.get("conversation_id")
+    action = frame.get("action")
+    if not isinstance(conversation_id, int) or action not in CALL_ACTIONS:
+        return
+
+    payload = frame.get("payload")
+    if isinstance(payload, str) and len(payload) > MAX_CALL_PAYLOAD_CHARS:
+        return
+
+    try:
+        peers = _typing_peers(db, user_id, conversation_id)
+    finally:
+        _release(db)
+
+    outgoing = {
+        "type": "call",
+        "conversation_id": conversation_id,
+        "from": user_id,
+        "action": action,
+        "call_id": frame.get("call_id"),
+        "mode": frame.get("mode") if frame.get("mode") in {"audio", "video"} else "audio",
+        "payload": payload if isinstance(payload, str) else None,
+    }
+    for peer_id in peers:
+        await manager.publish(peer_id, outgoing)

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { ApiError, api, setToken, getToken } from '../lib/api'
 import { clearMediaCache } from '../lib/mediaCache'
 import { clear as clearQueryCache, write as writeQueryCache } from '../lib/queryCache'
+import { resetCounts } from '../lib/unread'
 import { clearCachedPushState } from '../lib/push'
 import { clearLastUser, loadLastUser, saveLastUser } from '../lib/lastUser'
 import {
@@ -33,6 +34,9 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 function clearSessionCaches() {
   clearMediaCache()
   clearQueryCache()
+  // The badge counts are the previous account's, and they are read by the
+  // shell on the next render, so they are cleared with the rest.
+  resetCounts()
 }
 
 interface AuthValue {

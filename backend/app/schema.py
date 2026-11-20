@@ -55,6 +55,10 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # Sticker id from the shipped catalogue. Nullable, so every message written
     # before stickers existed stays a plain message.
     ("messages", "sticker", "VARCHAR(64) NULL"),
+    # Edit and forward. Nullable: a message that was never edited has no stamp,
+    # and one that was written rather than forwarded has no source.
+    ("messages", "edited_at", "TIMESTAMP NULL"),
+    ("messages", "forwarded_from_id", "INTEGER NULL"),
     # Web Push endpoint for a browser, so alerts reach a closed tab.
     ("push_subscriptions", "user_agent", "VARCHAR(200) NOT NULL DEFAULT ''"),
     ("push_subscriptions", "last_used_at", "TIMESTAMP NULL"),

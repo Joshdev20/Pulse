@@ -342,6 +342,7 @@ export const api = {
     mediaIds: number[] = [],
     replyToId?: number | null,
     sticker?: string | null,
+    forwardedFromId?: number | null,
   ) =>
     request<Message>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
@@ -350,8 +351,29 @@ export const api = {
         media_ids: mediaIds,
         reply_to_id: replyToId ?? null,
         sticker: sticker ?? null,
+        forwarded_from_id: forwardedFromId ?? null,
       }),
     }),
+
+  editMessage: (conversationId: number, messageId: number, body: string) =>
+    request<Message>(`/api/conversations/${conversationId}/messages/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ body }),
+    }),
+
+  deleteMessage: (conversationId: number, messageId: number) =>
+    request<void>(`/api/conversations/${conversationId}/messages/${messageId}`, {
+      method: 'DELETE',
+    }),
+
+  /** Copy a message into another thread. The server checks both ends. */
+  forwardMessage: (conversationId: number, messageId: number, targetConversationId: number) =>
+    request<Message>(
+      `/api/conversations/${conversationId}/messages/${messageId}/forward${query({
+        target_conversation_id: targetConversationId,
+      })}`,
+      { method: 'POST' },
+    ),
 
   stickers: () => request<Sticker[]>('/api/conversations/stickers'),
 

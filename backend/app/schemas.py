@@ -238,6 +238,16 @@ class MessageCreate(BaseModel):
     # A sticker id from the shipped catalogue. Validated against it by the
     # route, because a client-supplied id is untrusted input.
     sticker: str | None = Field(default=None, max_length=64)
+    # Set when this message forwards another one. The route checks the caller
+    # could already read the source, so the id cannot be used to reach into a
+    # thread the sender is not part of.
+    forwarded_from_id: int | None = None
+
+
+class MessageEdit(BaseModel):
+    """A replacement body for a message the caller wrote."""
+
+    body: str = Field(min_length=1, max_length=4000)
 
 
 class MessageQuote(BaseModel):
@@ -270,6 +280,13 @@ class MessageOut(BaseModel):
     reply_to: MessageQuote | None = None
     like_count: int = 0
     liked_by_me: bool = False
+    # When the sender last changed the body, so the thread can mark it edited.
+    edited_at: UTCDatetime | None = None
+    # Whether this message was forwarded rather than written in this thread.
+    forwarded: bool = False
+    # The reader's partner has read past this message. Only ever true on the
+    # reader's own messages; the other side's messages are read by definition.
+    read_by_partner: bool = False
 
 
 class ConversationOut(BaseModel):
@@ -279,6 +296,9 @@ class ConversationOut(BaseModel):
     partner: UserPublic
     last_message: MessageOut | None = None
     unread_count: int = 0
+    # How far the *partner* has read in this thread, so the thread can mark the
+    # reader's own messages as seen without a second request.
+    partner_read_at: UTCDatetime | None = None
 
 
 class ConversationStart(BaseModel):

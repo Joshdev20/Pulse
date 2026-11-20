@@ -1,6 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import type { ReactNode } from 'react'
 import { api, getToken } from '../lib/api'
+import { readCounts, setCount, subscribeCounts } from '../lib/unread'
 import { useAuth } from './AuthContext'
 import type { Conversation, Message, RealtimeNotification } from '../lib/types'
 
@@ -14,7 +24,18 @@ export interface NotificationActor {
 }
 
 export interface RealtimeEvent {
-  type: 'notification' | 'message' | 'message_like' | 'typing' | 'presence' | 'ready' | 'pong'
+  type:
+    | 'notification'
+    | 'message'
+    | 'message_like'
+    | 'message_edit'
+    | 'message_delete'
+    | 'read'
+    | 'typing'
+    | 'presence'
+    | 'call'
+    | 'ready'
+    | 'pong'
   notification?: RealtimeNotification
   /** Present on `notification` frames so a popup can name who acted. */
   actor?: NotificationActor | null
@@ -27,6 +48,27 @@ export interface RealtimeEvent {
   /** Present on `presence` frames: a partner came online or went offline. */
   is_online?: boolean
   last_seen_at?: string | null
+  /** Present on `read` frames: how far the reader has now read. */
+  last_read_at?: string | null
+  /** Present on `call` frames. `from` is the user who sent the frame. */
+  from?: number
+  action?: CallAction
+  call_id?: string | null
+  mode?: 'audio' | 'video'
+  /** An opaque SDP or ICE blob. The server relays it without inspecting it. */
+  payload?: string | null
+}
+
+/** The call lifecycle as relayed between the two peers. */
+export type CallAction = 'offer' | 'answer' | 'ice' | 'accept' | 'decline' | 'hangup'
+
+/** One frame a client asks the server to relay to the other participant. */
+export interface CallFrame {
+  conversationId: number
+  action: CallAction
+  callId: string
+  mode: 'audio' | 'video'
+  payload?: string | null
 }
 
 type Listener = (event: RealtimeEvent) => void
@@ -36,6 +78,8 @@ interface RealtimeValue {
   subscribe: (listener: Listener) => () => void
   /** Ask the server to relay a typing indicator for this conversation. */
   sendTyping: (conversationId: number) => void
+  /** Ask the server to relay one call-control frame to the other participant. */
+  sendCall: (frame: CallFrame) => void
 }
 
 const RealtimeContext = createContext<RealtimeValue | null>(null)
@@ -108,6 +152,26 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: 'typing', conversation_id: conversationId }))
     }
+  }, [])
+
+  /**
+   * Relay one call frame. Dropped silently when the socket is down: the call
+   * overlay already tells the caller they are not connected, and a queued
+   * offer delivered minutes later would ring the other side for nothing.
+   */
+  const sendCall = useCallback((frame: CallFrame) => {
+    const socket = socketRef.current
+    if (socket?.readyState !== WebSocket.OPEN) return
+    socket.send(
+      JSON.stringify({
+        type: 'call',
+        conversation_id: frame.conversationId,
+        action: frame.action,
+        call_id: frame.callId,
+        mode: frame.mode,
+        payload: frame.payload ?? null,
+      }),
+    )
   }, [])
 
   useEffect(() => {
@@ -273,8 +337,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   }, [emit, sessionEpoch])
 
   const value = useMemo<RealtimeValue>(
-    () => ({ connected, subscribe, sendTyping }),
-    [connected, subscribe, sendTyping],
+    () => ({ connected, subscribe, sendTyping, sendCall }),
+    [connected, subscribe, sendTyping, sendCall],
   )
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>
@@ -298,21 +362,29 @@ export function useRealtimeEvent(listener: Listener, deps: unknown[] = []) {
   }, [subscribe, ...deps])
 }
 
-/** Total unread direct messages, refreshed on realtime message events. */
+/**
+ * Total unread direct messages, refreshed on realtime message events.
+ *
+ * The number lives in `lib/unread.ts` rather than in component state so the
+ * inbox can drop it the instant a thread is opened: the badge is drawn in the
+ * shell, the thread is opened in `MessagesPage`, and only a shared store lets
+ * one tell the other. `refresh` is still how the server's own count is applied,
+ * which is what corrects the local guess after a reconnect or a second tab.
+ */
 export function useUnreadMessages(): { count: number; refresh: () => void } {
-  const [count, setCount] = useState(0)
+  const count = useSyncExternalStore(subscribeCounts, () => readCounts().messages)
   const { subscribe } = useRealtime()
   const { user } = useAuth()
 
   const refresh = useCallback(() => {
     // Nothing to count without a session, and the request would only 401.
     if (!user) {
-      setCount(0)
+      setCount('messages', 0)
       return
     }
     api
       .messagesUnreadCount()
-      .then((result) => setCount(result.count))
+      .then((result) => setCount('messages', result.count))
       .catch(() => undefined)
   }, [user])
 
@@ -323,7 +395,10 @@ export function useUnreadMessages(): { count: number; refresh: () => void } {
   useEffect(
     () =>
       subscribe((event) => {
-        if (event.type === 'message') refresh()
+        // A message arriving in a thread that is already open is read on
+        // arrival, so the inbox asks again rather than guessing; a message in
+        // any other thread is a genuine increment the badge can take at once.
+        if (event.type === 'message' && !event.message?.mine) refresh()
       }),
     [subscribe, refresh],
   )
@@ -333,19 +408,19 @@ export function useUnreadMessages(): { count: number; refresh: () => void } {
 
 /** Unread notification count, incremented live as events arrive. */
 export function useUnreadNotifications(): { count: number; refresh: () => void } {
-  const [count, setCount] = useState(0)
+  const count = useSyncExternalStore(subscribeCounts, () => readCounts().notifications)
   const { subscribe } = useRealtime()
   const { user } = useAuth()
 
   const refresh = useCallback(() => {
     // As above: a visitor has no unread anything.
     if (!user) {
-      setCount(0)
+      setCount('notifications', 0)
       return
     }
     api
       .unreadCount()
-      .then((result) => setCount(result.count))
+      .then((result) => setCount('notifications', result.count))
       .catch(() => undefined)
   }, [user])
 
@@ -356,7 +431,9 @@ export function useUnreadNotifications(): { count: number; refresh: () => void }
   useEffect(
     () =>
       subscribe((event) => {
-        if (event.type === 'notification') setCount((current) => current + 1)
+        if (event.type === 'notification') {
+          setCount('notifications', readCounts().notifications + 1)
+        }
       }),
     [subscribe],
   )

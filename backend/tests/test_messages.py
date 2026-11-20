@@ -964,3 +964,325 @@ def test_sticker_is_broadcast_over_the_socket(client, make_user):
         send_sticker(client, ada, cid, "fire")
         frame = recv_frame(socket, "message")
         assert frame["message"]["sticker"] == "fire"
+
+
+# ---------------------------------------------------------------------------
+# Edit, delete and forward
+# ---------------------------------------------------------------------------
+
+
+def test_author_can_edit_a_message(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, cid, "tpyo").json()["id"]
+
+    response = client.patch(
+        f"/api/conversations/{cid}/messages/{message_id}",
+        headers=ada,
+        json={"body": "typo"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["body"] == "typo"
+    assert response.json()["edited_at"] is not None
+
+    history = client.get(f"/api/conversations/{cid}/messages", headers=grace).json()
+    assert history[0]["body"] == "typo"
+    assert history[0]["edited_at"] is not None
+
+
+def test_recipient_cannot_edit_someone_elses_message(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, cid, "mine").json()["id"]
+
+    response = client.patch(
+        f"/api/conversations/{cid}/messages/{message_id}",
+        headers=grace,
+        json={"body": "theirs now"},
+    )
+    assert response.status_code == 403
+
+
+def test_edit_is_delivered_over_the_socket(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, cid, "before").json()["id"]
+
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect("/api/ws") as socket:
+        socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        recv_frame(socket, "ready")
+        client.patch(
+            f"/api/conversations/{cid}/messages/{message_id}",
+            headers=ada,
+            json={"body": "after"},
+        )
+        frame = recv_frame(socket, "message_edit")
+        assert frame["message"]["body"] == "after"
+
+
+def test_author_can_delete_a_message(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, cid, "regrettable").json()["id"]
+
+    response = client.delete(f"/api/conversations/{cid}/messages/{message_id}", headers=ada)
+    assert response.status_code == 204
+
+    assert client.get(f"/api/conversations/{cid}/messages", headers=grace).json() == []
+
+
+def test_delete_clears_the_quote_on_a_reply(client, make_user):
+    """A reply outlives the message it quoted, without the quote."""
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    original = send(client, ada, cid, "original").json()["id"]
+    reply = client.post(
+        f"/api/conversations/{cid}/messages",
+        headers=ada,
+        json={"body": "a reply", "reply_to_id": original},
+    ).json()["id"]
+
+    assert client.delete(f"/api/conversations/{cid}/messages/{original}", headers=ada).status_code == 204
+
+    history = client.get(f"/api/conversations/{cid}/messages", headers=ada).json()
+    assert [m["id"] for m in history] == [reply]
+    assert history[0]["reply_to"] is None
+
+
+def test_delete_is_delivered_over_the_socket(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, cid, "gone soon").json()["id"]
+
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect("/api/ws") as socket:
+        socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        recv_frame(socket, "ready")
+        client.delete(f"/api/conversations/{cid}/messages/{message_id}", headers=ada)
+        frame = recv_frame(socket, "message_delete")
+        assert frame["message_id"] == message_id
+
+
+def test_recipient_cannot_delete_someone_elses_message(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, cid, "keep me").json()["id"]
+
+    assert client.delete(f"/api/conversations/{cid}/messages/{message_id}", headers=grace).status_code == 403
+
+
+def test_forward_copies_content_into_another_thread(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    make_user("linus")
+    first = start(client, ada, "grace").json()["id"]
+    second = start(client, ada, "linus").json()["id"]
+    message_id = send(client, ada, first, "worth sharing").json()["id"]
+
+    response = client.post(
+        f"/api/conversations/{first}/messages/{message_id}/forward",
+        headers=ada,
+        params={"target_conversation_id": second},
+    )
+    assert response.status_code == 201, response.text
+    forwarded = response.json()
+    assert forwarded["body"] == "worth sharing"
+    assert forwarded["forwarded"] is True
+    assert forwarded["conversation_id"] == second
+
+    # The original thread keeps its own copy of the message.
+    history = client.get(f"/api/conversations/{first}/messages", headers=ada).json()
+    assert [m["body"] for m in history] == ["worth sharing"]
+
+
+def test_cannot_forward_into_a_thread_you_are_not_in(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    make_user("linus")
+    make_user("margaret")
+    mine = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, mine, "private").json()["id"]
+
+    foreign = start(client, make_user("donald")[0], "margaret").json()["id"]
+    response = client.post(
+        f"/api/conversations/{mine}/messages/{message_id}/forward",
+        headers=ada,
+        params={"target_conversation_id": foreign},
+    )
+    assert response.status_code == 404
+
+
+def test_cannot_forward_a_message_you_cannot_read(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    linus, _ = make_user("linus")
+    make_user("margaret")
+    ada_thread = start(client, ada, "grace").json()["id"]
+    message_id = send(client, ada, ada_thread, "not for you").json()["id"]
+
+    linus_thread = start(client, linus, "margaret").json()["id"]
+    response = client.post(
+        f"/api/conversations/{ada_thread}/messages/{message_id}/forward",
+        headers=linus,
+        params={"target_conversation_id": linus_thread},
+    )
+    assert response.status_code == 404
+
+
+def test_forward_by_id_on_send_copies_the_body(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    make_user("linus")
+    first = start(client, ada, "grace").json()["id"]
+    second = start(client, ada, "linus").json()["id"]
+    message_id = send(client, ada, first, "forward me").json()["id"]
+
+    response = client.post(
+        f"/api/conversations/{second}/messages",
+        headers=ada,
+        json={"forwarded_from_id": message_id},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["body"] == "forward me"
+    assert response.json()["forwarded"] is True
+
+
+# ---------------------------------------------------------------------------
+# Read receipts
+# ---------------------------------------------------------------------------
+
+
+def test_read_receipt_marks_the_senders_messages_seen(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    send(client, ada, cid, "did you see this?")
+
+    mine = client.get(f"/api/conversations/{cid}/messages", headers=ada).json()
+    assert mine[0]["read_by_partner"] is False
+
+    client.post(f"/api/conversations/{cid}/read", headers=grace)
+
+    mine = client.get(f"/api/conversations/{cid}/messages", headers=ada).json()
+    assert mine[0]["read_by_partner"] is True
+
+    inbox = client.get("/api/conversations", headers=ada).json()
+    assert inbox[0]["partner_read_at"] is not None
+
+
+def test_read_receipt_reaches_the_sender_over_the_socket(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    send(client, ada, cid, "ping")
+
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect("/api/ws") as socket:
+        socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+        recv_frame(socket, "ready")
+        client.post(f"/api/conversations/{cid}/read", headers=grace)
+        frame = recv_frame(socket, "read")
+        assert frame["conversation_id"] == cid
+        assert frame["last_read_at"] is not None
+
+
+def test_inbox_carries_partner_read_state(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    send(client, grace, cid, "hello")
+
+    inbox = client.get("/api/conversations", headers=ada).json()
+    assert inbox[0]["unread_count"] == 1
+    assert inbox[0]["partner_read_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Calls
+# ---------------------------------------------------------------------------
+
+
+def test_call_frames_reach_the_other_participant(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    with client.websocket_connect("/api/ws") as grace_socket:
+        grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        recv_frame(grace_socket, "ready")
+
+        with client.websocket_connect("/api/ws") as ada_socket:
+            ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+            recv_frame(ada_socket, "ready")
+
+            ada_socket.send_text(
+                json.dumps(
+                    {
+                        "type": "call",
+                        "conversation_id": cid,
+                        "action": "offer",
+                        "call_id": "abc",
+                        "mode": "video",
+                        "payload": "v=0",
+                    }
+                )
+            )
+            frame = recv_frame(grace_socket, "call")
+            assert frame["action"] == "offer"
+            assert frame["mode"] == "video"
+            assert frame["payload"] == "v=0"
+            assert frame["from"] != 0
+
+
+def test_call_frames_into_a_foreign_thread_are_dropped(client, make_user):
+    """A socket must not be able to ring somebody it shares no thread with."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    make_user("linus")
+    cid = start(client, ada, "grace").json()["id"]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    with client.websocket_connect("/api/ws") as grace_socket:
+        grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        recv_frame(grace_socket, "ready")
+        # Grace is not a participant of this conversation id at all.
+        grace_socket.send_text(
+            json.dumps({"type": "call", "conversation_id": cid + 999, "action": "offer"})
+        )
+        grace_socket.send_text(json.dumps({"type": "ping"}))
+        # The next frame is the pong, proving no call was relayed ahead of it.
+        assert json.loads(grace_socket.receive_text())["type"] == "pong"
+
+
+def test_unknown_call_action_is_ignored(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    with client.websocket_connect("/api/ws") as grace_socket:
+        grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+        recv_frame(grace_socket, "ready")
+        grace_socket.send_text(
+            json.dumps({"type": "call", "conversation_id": cid, "action": "exfiltrate"})
+        )
+        grace_socket.send_text(json.dumps({"type": "ping"}))
+        assert json.loads(grace_socket.receive_text())["type"] == "pong"
+
+
+def test_sticker_catalogue_ships_several_packs(client, make_user):
+    ada, _ = make_user("ada")
+    catalogue = client.get("/api/conversations/stickers", headers=ada).json()
+    packs = {entry["pack"] for entry in catalogue}
+    assert {"Reactions", "Moods", "Lifestyle", "Celebration", "Animals"} <= packs
+    assert len(catalogue) > 60

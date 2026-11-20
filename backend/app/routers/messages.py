@@ -1,5 +1,7 @@
 """Direct messages: conversations, message history and read state."""
 
+from datetime import timezone
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -21,12 +23,13 @@ from ..models import (
     User,
     utcnow,
 )
-from .. import push, stickers
+from .. import push, storage, stickers
 from ..realtime import manager
 from ..schemas import (
     ConversationOut,
     ConversationStart,
     MessageCreate,
+    MessageEdit,
     MessageOut,
     MessageQuote,
 )
@@ -105,12 +108,58 @@ def _like_state(
     return counts, mine
 
 
-def serialize_messages(db: Session, messages: list[Message], viewer: User | None) -> list[MessageOut]:
+def _partner_read_state(
+    db: Session, conversation_ids: set[int], viewer: User | None
+) -> dict[int, object]:
+    """How far the *other* participant has read, per conversation.
+
+    One grouped query for a whole page. The thread needs this to decide which of
+    the reader's own messages the partner has seen, and a per-message query
+    would be one round trip each on a database in another region.
+    """
+    if viewer is None or not conversation_ids:
+        return {}
+    rows = db.execute(
+        select(
+            ConversationParticipant.conversation_id,
+            ConversationParticipant.last_read_at,
+        ).where(
+            ConversationParticipant.conversation_id.in_(conversation_ids),
+            ConversationParticipant.user_id != viewer.id,
+        )
+    ).all()
+    return {conversation_id: last_read_at for conversation_id, last_read_at in rows}
+
+
+def _as_naive_utc(value):
+    """Normalise a timestamp so two of them can be compared.
+
+    Postgres hands back aware datetimes and SQLite naive ones, and comparing the
+    two raises. Everything this app stores is UTC, so dropping the offset is
+    lossless here.
+    """
+    if value is None:
+        return None
+    if getattr(value, "tzinfo", None) is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def serialize_messages(
+    db: Session,
+    messages: list[Message],
+    viewer: User | None,
+    partner_read: dict[int, object] | None = None,
+) -> list[MessageOut]:
     if not messages:
         return []
     authors = serialize_users(db, [m.sender for m in messages], viewer)
     quotes = _quotes_for(db, messages)
     like_counts, liked_ids = _like_state(db, messages, viewer)
+    if partner_read is None:
+        partner_read = _partner_read_state(
+            db, {m.conversation_id for m in messages}, viewer
+        )
     return [
         MessageOut(
             id=m.id,
@@ -124,9 +173,29 @@ def serialize_messages(db: Session, messages: list[Message], viewer: User | None
             reply_to=quotes.get(m.id),
             like_count=like_counts.get(m.id, 0),
             liked_by_me=m.id in liked_ids,
+            edited_at=m.edited_at,
+            forwarded=m.forwarded_from_id is not None,
+            read_by_partner=_read_by_partner(
+                m, partner_read.get(m.conversation_id), viewer
+            ),
         )
         for m in messages
     ]
+
+
+def _read_by_partner(message: Message, partner_read_at, viewer: User | None) -> bool:
+    """Whether the partner has read up to this message.
+
+    Only the reader's own messages can be unread to the partner; anything they
+    received is read by definition once it is on their screen.
+    """
+    if viewer is None or message.sender_id != viewer.id:
+        return False
+    read_at = _as_naive_utc(partner_read_at)
+    created = _as_naive_utc(message.created_at)
+    if read_at is None or created is None:
+        return False
+    return created <= read_at
 
 
 # A conversation summary needs one row per conversation; this module does it
@@ -165,7 +234,13 @@ def _summarize(db: Session, user: User) -> list[ConversationOut]:
     )
 
     rows = db.execute(
-        select(Conversation, person, Message, _UNREAD_FOR_PARTICIPANT.label("unread_count"))
+        select(
+            Conversation,
+            person,
+            Message,
+            partner_cp.last_read_at,
+            _UNREAD_FOR_PARTICIPANT.label("unread_count"),
+        )
         .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
         .join(partner_cp, partner_cp.conversation_id == Conversation.id)
         .join(person, person.id == partner_cp.user_id)
@@ -185,7 +260,7 @@ def _summarize(db: Session, user: User) -> list[ConversationOut]:
     senders = serialize_users(db, [row[2].sender for row in rows if row[2] is not None], user)
 
     out: list[ConversationOut] = []
-    for conversation, partner, last, unread_count in rows:
+    for conversation, partner, last, partner_read_at, unread_count in rows:
         preview = None
         if last is not None:
             preview = MessageOut(
@@ -197,6 +272,9 @@ def _summarize(db: Session, user: User) -> list[ConversationOut]:
                 media=serialize_media(last.media),
                 mine=last.sender_id == user.id,
                 sticker=last.sticker,
+                edited_at=last.edited_at,
+                forwarded=last.forwarded_from_id is not None,
+                read_by_partner=_read_by_partner(last, partner_read_at, user),
             )
         out.append(
             ConversationOut(
@@ -206,6 +284,7 @@ def _summarize(db: Session, user: User) -> list[ConversationOut]:
                 partner=serialized_partners[partner.id],
                 last_message=preview,
                 unread_count=unread_count or 0,
+                partner_read_at=partner_read_at,
             )
         )
     return out
@@ -358,11 +437,24 @@ async def send_message(
     _require_participant(db, conversation_id, user)
 
     body = payload.body.strip()
+    sticker = payload.sticker or None
+    forwarded_from_id = _validate_forward_source(db, payload.forwarded_from_id, user)
+
+    if forwarded_from_id is not None and not body and not payload.media_ids and sticker is None:
+        # A bare forward carries the original's content. Copying it here rather
+        # than referencing it at read time keeps the forward intact when the
+        # original is deleted, and keeps the media ownership rules simple.
+        source = db.get(Message, forwarded_from_id)
+        body = source.body
+        sticker = source.sticker
+
     attachments = _claim_media(db, payload.media_ids, user)
+    if not attachments and forwarded_from_id is not None and not payload.media_ids:
+        source = db.get(Message, forwarded_from_id)
+        attachments = _rehome_media(db, source, user)
     # A sticker id is client input, so it is checked against the shipped
     # catalogue instead of being stored on trust: an unknown id would render as
     # an empty bubble for every reader.
-    sticker = payload.sticker or None
     if sticker is not None and not stickers.is_known(sticker):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown sticker")
     if not body and not attachments and sticker is None:
@@ -376,6 +468,7 @@ async def send_message(
         body=body,
         sticker=sticker,
         reply_to_id=reply_to_id,
+        forwarded_from_id=forwarded_from_id,
     )
     db.add(message)
     db.flush()
@@ -390,10 +483,18 @@ async def send_message(
     db.commit()
     db.refresh(message)
 
+    return await _broadcast_new_message(db, message, user)
+
+
+async def _broadcast_new_message(db: Session, message: Message, user: User) -> MessageOut:
+    """Send one committed message to every participant, each in their own shape.
+
+    ``mine`` and the read receipt are relative to the reader, so one
+    serialization cannot be shared. This also keeps the sender's other open tabs
+    in sync, not just the recipient's.
+    """
     serialized = serialize_messages(db, [message], user)[0]
-    # Every participant gets its own copy: ``mine`` is relative to the reader,
-    # so one serialization cannot be broadcast to everyone. This also keeps the
-    # sender's other open tabs in sync, not just the recipient's.
+    conversation_id = message.conversation_id
     participant_ids = set(
         db.scalars(
             select(ConversationParticipant.user_id).where(
@@ -405,18 +506,229 @@ async def send_message(
         viewer = db.get(User, participant_id)
         if viewer is None:
             continue
-        payload = {
+        frame = {
             "type": "message",
             "conversation_id": conversation_id,
             "message": serialize_messages(db, [message], viewer)[0].model_dump(mode="json"),
         }
-        await manager.publish(participant_id, payload)
+        await manager.publish(participant_id, frame)
         # Web Push is the only channel that reaches a closed browser; the
         # socket above covers an open tab. The sender is skipped: they already
         # know what they wrote.
         if participant_id != user.id:
             push.schedule_notify(participant_id, push.message_payload(db, message, conversation_id))
     return serialized
+
+
+def _validate_forward_source(db: Session, message_id: int | None, user: User) -> int | None:
+    """Check that the caller may forward ``message_id``, returning it or None.
+
+    The source must be a message the caller can already read: their own, or one
+    in a thread they belong to. Without that check the id would be a way to pull
+    another conversation's content into a thread of the caller's choosing.
+    """
+    if message_id is None:
+        return None
+    source = db.get(Message, message_id)
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+    participant = _participant(db, source.conversation_id, user.id)
+    if participant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+    return message_id
+
+
+def _rehome_media(db: Session, source: Message, user: User) -> list[Media]:
+    """Copy a forwarded message's attachments into fresh rows for the forward.
+
+    Rows cannot be shared: `_media_access` decides visibility from the message
+    the media is attached to, so re-pointing the original rows at the forward
+    would revoke the original thread's access to its own attachment.
+    """
+    copies: list[Media] = []
+    for item in source.media:
+        stored_name = item.stored_name
+        blob = item.blob
+        if blob is not None:
+            stored_name = storage.store(blob, stored_name.rsplit(".", 1)[-1])
+        copies.append(
+            Media(
+                owner_id=user.id,
+                stored_name=stored_name,
+                content_type=item.content_type,
+                kind=item.kind,
+                size_bytes=item.size_bytes,
+                blob=blob,
+                poster_content_type=item.poster_content_type,
+                poster_blob=item.poster_blob,
+                duration_ms=item.duration_ms,
+                width=item.width,
+                height=item.height,
+                alt_text=item.alt_text,
+            )
+        )
+    for copy in copies:
+        db.add(copy)
+    if copies:
+        db.flush()
+    return copies
+
+
+@router.patch("/{conversation_id}/messages/{message_id}", response_model=MessageOut)
+async def edit_message(
+    conversation_id: int,
+    message_id: int,
+    payload: MessageEdit,
+    db: DbSession,
+    user: CurrentUser,
+) -> MessageOut:
+    """Change the text of a message the caller wrote.
+
+    Only the author may edit, and only the body: a sticker or an attachment is
+    part of what the other side has already seen, so editing them would rewrite
+    history rather than correct a typo.
+    """
+    message = _require_message(db, conversation_id, message_id, user)
+    if message.sender_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only edit your own messages")
+
+    body = payload.body.strip()
+    if not body and message.sticker is None and not message.media:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Message cannot be empty")
+
+    message.body = body
+    message.edited_at = utcnow()
+    db.commit()
+    db.refresh(message)
+
+    return await _broadcast_message_change(db, message, user, "message_edit")
+
+
+@router.delete(
+    "/{conversation_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_message(
+    conversation_id: int, message_id: int, db: DbSession, user: CurrentUser
+) -> None:
+    """Remove a message the caller wrote, for both sides.
+
+    A hard delete rather than a tombstone: the reply rows that quoted it are
+    already `ON DELETE SET NULL`, so they survive with their quote cleared. The
+    inbox preview is recomputed from whatever the newest surviving message is,
+    which is why `last_message_at` is rewritten here.
+    """
+    message = _require_message(db, conversation_id, message_id, user)
+    if message.sender_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only delete your own messages")
+
+    conversation = db.get(Conversation, conversation_id)
+    # Quotes of this message are cleared rather than cascaded; the constraint
+    # does that on Postgres, and this keeps a legacy database in step.
+    db.execute(
+        Message.__table__.update()
+        .where(Message.reply_to_id == message_id)
+        .values(reply_to_id=None)
+    )
+    db.execute(
+        Message.__table__.update()
+        .where(Message.forwarded_from_id == message_id)
+        .values(forwarded_from_id=None)
+    )
+    db.delete(message)
+    db.flush()
+
+    newest = db.scalar(
+        select(Message.created_at)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.id.desc())
+        .limit(1)
+    )
+    if conversation is not None:
+        conversation.last_message_at = newest or conversation.created_at or utcnow()
+    db.commit()
+
+    participant_ids = set(
+        db.scalars(
+            select(ConversationParticipant.user_id).where(
+                ConversationParticipant.conversation_id == conversation_id
+            )
+        ).all()
+    )
+    frame = {
+        "type": "message_delete",
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+    }
+    for participant_id in participant_ids:
+        await manager.publish(participant_id, frame)
+
+
+async def _broadcast_message_change(
+    db: Session, message: Message, user: User, frame_type: str
+) -> MessageOut:
+    """Publish an edited message to every participant in their own shape."""
+    serialized = serialize_messages(db, [message], user)[0]
+    participant_ids = set(
+        db.scalars(
+            select(ConversationParticipant.user_id).where(
+                ConversationParticipant.conversation_id == message.conversation_id
+            )
+        ).all()
+    )
+    for participant_id in participant_ids:
+        viewer = db.get(User, participant_id)
+        if viewer is None:
+            continue
+        await manager.publish(
+            participant_id,
+            {
+                "type": frame_type,
+                "conversation_id": message.conversation_id,
+                "message": serialize_messages(db, [message], viewer)[0].model_dump(mode="json"),
+            },
+        )
+    return serialized
+
+
+@router.post("/{conversation_id}/messages/{message_id}/forward", response_model=MessageOut,
+             status_code=status.HTTP_201_CREATED)
+async def forward_message(
+    conversation_id: int,
+    message_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    target_conversation_id: int = Query(..., ge=1),
+) -> MessageOut:
+    """Forward a message the caller can read into ``target_conversation_id``.
+
+    Both ends are checked: the caller must be able to read the source, and must
+    belong to the destination. A forward carries a copy of the content, so
+    deleting the original later leaves it standing.
+    """
+    _require_participant(db, target_conversation_id, user)
+    source = _require_message(db, conversation_id, message_id, user)
+
+    attachments = _rehome_media(db, source, user)
+    message = Message(
+        conversation_id=target_conversation_id,
+        sender_id=user.id,
+        body=source.body,
+        sticker=source.sticker,
+        forwarded_from_id=source.id,
+    )
+    db.add(message)
+    db.flush()
+    for item in attachments:
+        item.message_id = message.id
+
+    conversation = db.get(Conversation, target_conversation_id)
+    conversation.last_message_at = message.created_at or utcnow()
+    participant = _participant(db, target_conversation_id, user.id)
+    participant.last_read_at = utcnow()
+    db.commit()
+    db.refresh(message)
+
+    return await _broadcast_new_message(db, message, user)
 
 
 def _validate_reply_target(
@@ -453,10 +765,28 @@ def _claim_media(db: Session, media_ids: list[int], user: User) -> list[Media]:
 
 
 @router.post("/{conversation_id}/read")
-def mark_read(conversation_id: int, db: DbSession, user: CurrentUser) -> dict[str, int]:
+async def mark_read(conversation_id: int, db: DbSession, user: CurrentUser) -> dict[str, int]:
+    """Clear this thread's unread count and tell the partner it was read.
+
+    The receipt is what turns the sender's "Sent" tick into "Seen" without a
+    refresh, so it is published here rather than left for the next poll.
+    """
     participant = _require_participant(db, conversation_id, user)
     participant.last_read_at = utcnow()
     db.commit()
+
+    partner = _partner_of(db, conversation_id, user.id)
+    await manager.publish(
+        partner.id,
+        {
+            "type": "read",
+            "conversation_id": conversation_id,
+            "user_id": user.id,
+            "last_read_at": participant.last_read_at.isoformat()
+            if participant.last_read_at is not None
+            else None,
+        },
+    )
     return {"unread_count": 0}
 
 

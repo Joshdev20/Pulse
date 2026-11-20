@@ -117,6 +117,12 @@ export interface Message {
   reply_to: MessageQuote | null
   like_count: number
   liked_by_me: boolean
+  /** When the sender last changed the body; null means never edited. */
+  edited_at: string | null
+  /** True when this message was forwarded rather than written in the thread. */
+  forwarded: boolean
+  /** The partner has read past this message. Only set on your own messages. */
+  read_by_partner: boolean
 }
 
 /** One entry in the sticker catalogue the server publishes. */
@@ -143,6 +149,8 @@ export interface Conversation {
   partner: User
   last_message: Message | null
   unread_count: number
+  /** How far the partner has read, for the "Seen" mark on your own messages. */
+  partner_read_at: string | null
 }
 
 /** A notification the API can produce. `repost` is someone sharing your post. */

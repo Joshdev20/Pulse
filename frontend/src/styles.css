@@ -2865,11 +2865,13 @@ h4 {
 }
 
 .inbox-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border);
+  margin: 2px 8px;
+  padding: 11px 12px;
+  border-radius: 12px;
   color: inherit;
   text-decoration: none;
   transition: background 0.14s ease;
@@ -2880,8 +2882,7 @@ h4 {
 }
 
 .inbox-row.active {
-  background: var(--surface-2);
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
 .inbox-info {
@@ -4119,49 +4120,130 @@ h4 {
   color: #f43f5e;
 }
 
-/* Per-message actions. Hidden on pointer devices until hover/focus so the
-   thread stays clean, but always present for keyboard and touch users. */
-.bubble-actions {
-  display: flex;
-  gap: 2px;
-  margin-left: 4px;
-  opacity: 0;
-  transition: opacity 0.14s ease;
+/* The long-press menu. It floats over the thread next to the bubble it acts
+   on, on both a phone and a desktop, so the bubble itself carries no controls
+   and the row stays clean. */
+.msg-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  /* A very light wash rather than a dim: the thread behind the menu is the
+     context for the action, so it must stay readable. */
+  background: rgba(6, 8, 15, 0.32);
+  animation: fade-in 0.12s ease;
 }
 
-.bubble-row.mine .bubble-actions {
-  order: -1;
-  margin-left: 0;
-  margin-right: 4px;
+.msg-sheet {
+  position: fixed;
+  z-index: 61;
+  width: min(232px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow:
+    0 18px 44px rgba(4, 6, 16, 0.34),
+    0 2px 8px rgba(4, 6, 16, 0.18);
+  animation: sheet-in 0.14s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.bubble-wrap:hover .bubble-actions,
-.bubble-actions:focus-within {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .bubble-actions {
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(-4px);
+  }
+  to {
     opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }
 
-.bubble-action {
-  width: 26px;
-  height: 26px;
+.msg-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 7px 9px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 5px;
+}
+
+.msg-sheet-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msg-sheet-head .icon-btn {
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+
+.msg-sheet-actions {
+  display: flex;
+  flex-direction: column;
+}
+
+.msg-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 520;
+  color: var(--text);
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.msg-sheet-item:hover,
+.msg-sheet-item:focus-visible {
+  background: var(--surface-3);
+  outline: none;
+}
+
+.msg-sheet-item.danger {
+  color: var(--rose);
+}
+
+.msg-sheet-item.danger:hover,
+.msg-sheet-item.danger:focus-visible {
+  background: rgba(244, 63, 94, 0.12);
+}
+
+.msg-sheet-icon {
   display: grid;
   place-items: center;
-  border-radius: 50%;
+  width: 22px;
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* The delivery mark on your own messages. */
+.bubble-tick {
+  display: inline-flex;
+  align-items: center;
   color: var(--text-faint);
 }
 
-.bubble-action:hover {
-  color: var(--text);
-  background: var(--surface-3);
+.bubble-tick.read {
+  color: #38bdf8;
 }
 
-.bubble-action.liked {
-  color: #f43f5e;
+/* The second tick overlaps the first, the way a double tick is drawn. */
+.bubble-tick-second {
+  margin-left: -7px;
+}
+
+/* A sent-but-undelivered message shows a clock, so it reads as "in flight"
+   rather than as a failed send. */
+.bubble-tick.pending {
+  opacity: 0.7;
 }
 
 .reply-preview {
@@ -4885,5 +4967,528 @@ h4 {
   }
   .bubble-sticker {
     font-size: 56px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Chat polish: the inbox as a live surface, and the thread as the focus.
+
+   Everything here is additive. The pane geometry, the bubble alignment and the
+   mobile switch between inbox and thread are unchanged, so the redesign cannot
+   move the layout out from under the responsive rules further up the file.
+   --------------------------------------------------------------------------- */
+
+/* The unread marker is a bar on the leading edge rather than a coloured row, so
+   a long list of unread threads does not turn into a wall of tint. */
+.inbox-row.unread::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 22px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.inbox-row.unread .inbox-name {
+  font-weight: 700;
+}
+
+.inbox-row.unread .inbox-preview {
+  color: var(--text);
+}
+
+.inbox-avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.inbox-you {
+  color: var(--text-faint);
+}
+
+/* "typing" in the row: the word, then three dots that keep moving, so the
+   preview is visibly alive rather than a stale line of text. */
+.inbox-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-weight: 550;
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 2.5px;
+  align-items: center;
+}
+
+.typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: typing 1.2s infinite ease-in-out;
+}
+
+.typing-dots i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.typing-dots i:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+.inbox-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 12px 4px;
+  padding: 0 11px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+}
+
+.inbox-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.inbox-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 13.5px;
+  outline: none;
+}
+
+.inbox-none {
+  padding: 18px 16px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
+/* The identity block shares the header with the call buttons, so both the name
+   and the presence line have to be able to shrink: a long display name must
+   ellipsise rather than push the buttons off the edge. */
+.thread-partner {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-identity {
+  min-width: 0;
+}
+
+.thread-name,
+.thread-handle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-handle.typing {
+  color: var(--accent);
+}
+
+.thread-call-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.thread-call-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  color: var(--text-muted);
+}
+
+.thread-call-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--accent);
+}
+
+/* Date dividers, so a long thread has landmarks without a header per message. */
+.thread-day {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
+.thread-day::before,
+.thread-day::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Grouped messages sit closer together, which is what makes a run of replies
+   read as one turn rather than as separate statements. */
+.thread-item + .thread-item .bubble-row.grouped {
+  margin-top: 2px;
+}
+
+.bubble-avatar-spacer {
+  width: 30px;
+  flex: none;
+}
+
+.bubble-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.bubble-edited {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* The foot is a flex row of time, marks and ticks, so the time drops the block
+   margin the standalone rule gives it. */
+.bubble-foot .bubble-time {
+  display: inline;
+  margin-top: 0;
+}
+
+/* A press darkens the bubble very slightly before the menu opens, which is the
+   only feedback a long press can give while it is still deciding. */
+.bubble.pressing {
+  filter: brightness(0.96);
+}
+
+/* The bubble owns horizontal gestures (swipe to reply) but must leave vertical
+   scrolling to the thread, or the list cannot be scrolled with a thumb resting
+   on a message. */
+.bubble {
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Selecting text is a desktop gesture. Enabling it on touch would make a long
+   press start a selection instead of opening the action menu, so it is limited
+   to devices with a real pointer. */
+@media (hover: hover) and (pointer: fine) {
+  .bubble p {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+.bubble.dragging {
+  /* No text selection while a drag is in flight: selecting the body would
+     otherwise fight the swipe on a desktop. */
+  user-select: none;
+}
+
+.thread-notice {
+  margin: 0;
+  padding: 7px 18px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.reply-preview.editing {
+  border-left: 3px solid #f59e0b;
+}
+
+.reply-preview-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.reply-preview-name {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.reply-preview-text {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.forward-hint {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
+.forward-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.forward-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  text-align: left;
+}
+
+.forward-row:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.forward-name {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.forward-empty {
+  padding: 14px 10px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
+.sticker-toggle.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------------------------------------------------------------------------
+   Calls
+   --------------------------------------------------------------------------- */
+
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 40px 24px 48px;
+  background: radial-gradient(120% 80% at 50% 0%, #1e293b 0%, #0b1120 62%, #05070d 100%);
+  color: #f8fafc;
+  animation: fade-in 0.18s ease;
+}
+
+.call-overlay.ended {
+  animation: fade-out 0.2s ease 2s forwards;
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* The remote video fills the overlay; everything else is drawn over it. */
+.call-remote {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #05070d;
+}
+
+.call-video-fallback {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 80% at 50% 30%, #233046 0%, #0b1120 70%);
+}
+
+.call-info {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+.call-avatar {
+  border-radius: 50%;
+  padding: 5px;
+  background: rgba(248, 250, 252, 0.08);
+}
+
+/* A slow pulse while ringing: the only motion in an otherwise still screen,
+   which is what makes an incoming call feel like it is waiting. */
+.call-avatar.ringing {
+  animation: call-pulse 1.9s ease-in-out infinite;
+}
+
+@keyframes call-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 18px rgba(56, 189, 248, 0);
+  }
+}
+
+.call-name {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+}
+
+.call-status {
+  margin: 0;
+  font-size: 14px;
+  color: rgba(248, 250, 252, 0.68);
+  font-variant-numeric: tabular-nums;
+}
+
+.call-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.1);
+  font-size: 12px;
+  font-weight: 550;
+  color: rgba(248, 250, 252, 0.85);
+}
+
+.call-local {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  z-index: 2;
+  width: 116px;
+  height: 156px;
+  border-radius: 16px;
+  object-fit: cover;
+  background: #05070d;
+  border: 1px solid rgba(248, 250, 252, 0.16);
+  box-shadow: 0 10px 30px rgba(2, 4, 10, 0.5);
+  /* Mirrored, the way a self-view is expected to behave. */
+  transform: scaleX(-1);
+}
+
+.call-local.hidden {
+  opacity: 0;
+}
+
+/* The audio sink is mounted but never seen: an audio track still has to be
+   attached to an element for some browsers to play it. */
+.call-audio-sink {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.call-controls {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.call-btn {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #f8fafc;
+  background: rgba(248, 250, 252, 0.14);
+  border: 1px solid rgba(248, 250, 252, 0.1);
+  transition:
+    transform 0.14s ease,
+    background 0.14s ease;
+}
+
+.call-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(248, 250, 252, 0.22);
+}
+
+.call-btn:active {
+  transform: scale(0.96);
+}
+
+.call-btn.soft.off {
+  background: rgba(248, 250, 252, 0.9);
+  color: #0b1120;
+}
+
+/* Accept and decline share a glyph, so the colour is what distinguishes them;
+   accept is rotated the way a handset is picked up. */
+.call-btn.accept {
+  background: #22c55e;
+}
+
+.call-btn.accept:hover {
+  background: #16a34a;
+}
+
+.call-btn.decline {
+  background: #ef4444;
+  transform: rotate(135deg);
+}
+
+.call-btn.decline:hover {
+  background: #dc2626;
+  transform: rotate(135deg) translateY(-1px);
+}
+
+@media (max-width: 640px) {
+  .call-overlay {
+    padding: 28px 18px 34px;
+  }
+
+  .call-local {
+    width: 88px;
+    height: 118px;
+    top: 16px;
+    right: 16px;
+  }
+
+  .call-btn {
+    width: 54px;
+    height: 54px;
   }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell } from './components/Layout'
+import { CallOverlay } from './components/CallOverlay'
 import { Composer } from './components/Composer'
 import { InstallPrompt } from './components/InstallPrompt'
 import { NotificationCenter } from './components/NotificationCenter'
@@ -8,6 +9,7 @@ import { Modal } from './components/UI'
 import { PulseLogo } from './components/PulseLogo'
 import { useAuth } from './context/AuthContext'
 import { RealtimeProvider } from './context/RealtimeContext'
+import { CallProvider } from './lib/calls'
 import { HomePage } from './pages/HomePage'
 import { ExplorePage } from './pages/ExplorePage'
 import { AdminPage } from './pages/AdminPage'
@@ -61,7 +63,12 @@ function Shell() {
   if (loading) return <BrandLoader />
   return (
     <RealtimeProvider>
-      <Layout />
+      <CallProvider>
+        <Layout />
+        {/* Inside the call provider and outside the routed pages, so a call
+            keeps its state while the reader moves around the app. */}
+        <CallOverlay />
+      </CallProvider>
     </RealtimeProvider>
   )
 }
