@@ -191,6 +191,17 @@ the public URL returns 502 until the dev server is bound to 12000.
   default pool (5 + 10 overflow) and every HTTP request then blocks on `pool_timeout` (~30s).
   That is what made the whole app hang on its loading spinner, so the page title stayed at
   the base `Pulse`. `tests/test_realtime_pool.py` guards this with a deliberately tiny pool.
+- **Production is slow, and it is not your bug.** On the free Render instance with a
+  remote Postgres, a plain text message takes 5-8 s end to end: the POST itself measured
+  7776 ms, and the `message` frame reached the other socket a few seconds in. Every
+  `call` frame queues behind the same per-frame database work, so an offer can take ~5 s
+  to ring and the answer ~4 s more. A browser harness with short `sleep()`s therefore
+  reports "the caller never left Ringing" and "no media" against production while the
+  identical run against `127.0.0.1` passes instantly. Measure before concluding: probe
+  the relay with two raw `ws` clients and timestamps, and compare a *text* message as the
+  baseline. If the text message is also seconds late, the delay is the platform, not the
+  call code. Use waits of 20-25 s when driving production.
+
 - Presence is a *transition*, not a per-socket fact. `routers/realtime.py` announces it only
   when the first socket for a user connects and the last one disconnects, so a second tab
   does not flicker the status. It fans out to conversation partners only (`_announce_presence`
