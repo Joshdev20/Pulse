@@ -313,8 +313,29 @@ def webm_header(track_codec: bytes) -> bytes:
     )
 
 
-def iso_bmff(brand: bytes) -> bytes:
-    return b"\x00\x00\x00\x18" + b"ftyp" + brand + b"\x00" * 32
+def iso_bmff(brand: bytes, tracks: bytes = b"") -> bytes:
+    return b"\x00\x00\x00\x18" + b"ftyp" + brand + b"\x00" * 32 + tracks
+
+
+def test_sniff_splits_mp4_audio_from_mp4_video():
+    """An audio-only MP4 is a voice note, whichever brand it carries.
+
+    A browser that records writes fragmented MP4 under a generic brand — Safari
+    records voice notes as `isom`, indistinguishable from ordinary video by
+    brand alone — so the track list decides. `soun` without `vide` is audio;
+    anything else stays a video, which keeps an ordinary upload from being
+    downgraded to a voice note.
+    """
+    # The audio-specific brands are audio regardless of the track list.
+    assert storage.sniff(iso_bmff(b"M4A ")).content_type == "audio/mp4"
+    # A generic brand is decided by the handlers it declares.
+    assert storage.sniff(iso_bmff(b"isom", b"soun")).content_type == "audio/mp4"
+    assert storage.sniff(iso_bmff(b"mp42", b"soun")).content_type == "audio/mp4"
+    # Both handlers means a picture is present, so it is a video.
+    assert storage.sniff(iso_bmff(b"isom", b"sounvide")).content_type == "video/mp4"
+    # No handler at all is an unknown file, which stays a video.
+    assert storage.sniff(iso_bmff(b"mp42")).content_type == "video/mp4"
+    assert storage.sniff(iso_bmff(b"isom")).content_type == "video/mp4"
 
 
 def test_sniff_identifies_audio_types():
@@ -346,6 +367,13 @@ def test_sniff_splits_mp4_audio_from_mp4_video():
 
 
 def test_audio_upload_is_accepted(client, make_user):
+    """A voice note is stored in the one format every reader can decode.
+
+    A recorder writes whatever its own engine encodes — Chrome and Firefox
+    produce WebM/Opus, which iOS cannot play at all — so a note stored as
+    uploaded is a message that arrives and cannot be heard. Every note is
+    therefore normalised to AAC in MP4 on the way in.
+    """
     headers, _ = make_user("ada")
     response = client.post(
         "/api/media",
@@ -356,8 +384,30 @@ def test_audio_upload_is_accepted(client, make_user):
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["kind"] == "audio"
-    assert body["content_type"] == "audio/wav"
+    assert body["content_type"] == "audio/mp4"
     assert body["url"] == f"/api/media/{body['id']}"
+
+
+def test_audio_upload_plays_everywhere_it_is_opened(client, make_user):
+    """What is served is an MP4 carrying AAC, not the container that arrived.
+
+    This is the whole point of the conversion: the stored type says MP4, and the
+    bytes inside carry the `mp4a` sample entry that marks AAC. A file that is
+    MP4 but holds Opus would satisfy the type and still be unplayable on iOS,
+    which is the trap this checks against.
+    """
+    headers, _ = make_user("ada")
+    created = client.post(
+        "/api/media",
+        headers=headers,
+        files={"file": ("note.wav", io.BytesIO(wav_bytes()), "audio/wav")},
+    ).json()
+
+    served = client.get(f"/api/media/{created['id']}", headers=headers)
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "audio/mp4"
+    assert b"mp4a" in served.content[: storage.SNIFF_BYTES]
+    assert b"Opus" not in served.content[: storage.SNIFF_BYTES]
 
 
 def test_audio_upload_keeps_its_duration(client, make_user):
@@ -925,3 +975,80 @@ def test_extract_poster_reads_a_real_frame():
     with Image.open(io.BytesIO(poster)) as image:
         image.load()
         assert max(image.size) <= video.POSTER_MAX_EDGE
+
+
+def test_audio_is_universal_only_when_it_carries_aac():
+    """The codec decides, not the container.
+
+    Chrome answers `isTypeSupported("audio/mp4")` while writing Opus inside it,
+    so an MP4 from Chrome is not playable on iOS even though its type looks
+    right. Only a file carrying the `mp4a` sample entry is left alone.
+    """
+    from app import audio
+
+    assert audio.is_universal(b"\x00\x00\x00\x18ftypisom" + b"mp4a", "audio/mp4")
+    # An MP4 whose sample entry is Opus still has to be converted.
+    assert not audio.is_universal(b"\x00\x00\x00\x18ftypisom" + b"Opus", "audio/mp4")
+    # Anything not in an MP4 is converted whatever it holds.
+    assert not audio.is_universal(b"\x1a\x45\xdf\xa3" + b"mp4a", "audio/webm")
+    assert not audio.is_universal(b"OggS" + b"mp4a", "audio/ogg")
+
+
+def test_to_universal_returns_none_without_ffmpeg(monkeypatch):
+    """No ffmpeg is a note kept as recorded, never a failed upload."""
+    from app import audio
+
+    monkeypatch.setattr(audio, "_ffmpeg", lambda: None)
+    assert audio.to_universal(wav_bytes()) is None
+
+
+def test_to_universal_converts_a_real_recording():
+    """The conversion produces AAC in MP4, which is what every reader decodes."""
+    from app import audio
+
+    if not audio.ffmpeg_available():
+        pytest.skip("no ffmpeg available to encode audio")
+
+    converted = audio.to_universal(wav_bytes())
+    assert converted is not None
+    data, content_type = converted
+    assert content_type == "audio/mp4"
+    assert b"mp4a" in data[: storage.SNIFF_BYTES]
+    # The output is a real MP4, not the input passed through.
+    assert data[4:8] == b"ftyp"
+
+
+def test_backfill_converts_notes_already_sent(client, make_user, db_session):
+    """A note stored before the conversion starts working without being resent.
+
+    The point of the backfill: an old WebM note is unplayable on iOS, and the
+    reader cannot do anything about that. Converting the stored row is what
+    fixes the notes already sitting in a conversation.
+    """
+    from app import audio, storage
+    from app.models import Media
+    from app.routers.media import backfill_audio
+
+    if not audio.ffmpeg_available():
+        pytest.skip("no ffmpeg available to encode audio")
+
+    _headers, user = make_user("ada")
+    original = wav_bytes()
+    media = Media(
+        owner_id=user["id"],
+        kind="audio",
+        content_type="audio/wav",
+        stored_name=storage.store(original, "wav"),
+        size_bytes=len(original),
+        blob=original,
+    )
+    db_session.add(media)
+    db_session.commit()
+
+    assert backfill_audio(db_session) >= 1
+    db_session.refresh(media)
+    assert media.content_type == "audio/mp4"
+    assert b"mp4a" in media.blob[: storage.SNIFF_BYTES]
+
+    # Idempotent: a second run has nothing left to convert.
+    assert backfill_audio(db_session) == 0

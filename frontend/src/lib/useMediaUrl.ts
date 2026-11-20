@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MediaError, refMedia, unrefMedia, type Entry, type MediaAsset } from './mediaCache'
+import { MediaError, dropMedia, refMedia, unrefMedia, type Entry, type MediaAsset } from './mediaCache'
 
 export type { MediaAsset } from './mediaCache'
 
@@ -33,7 +33,15 @@ export function useMediaUrl(path: string | null | undefined): MediaAsset | null 
  * "still downloading" and "will never arrive", otherwise a failed avatar sits
  * behind its skeleton forever.
  */
-export function useMediaStatus(path: string | null | undefined): {
+export function useMediaStatus(
+  path: string | null | undefined,
+  /**
+   * Bumped to ask for the bytes again after they may have changed on the
+   * server. The path alone cannot express that: it is the same URL, but a
+   * different response is now expected.
+   */
+  attempt = 0,
+): {
   asset: MediaAsset | null
   failed: boolean
   loading: boolean
@@ -48,9 +56,13 @@ export function useMediaStatus(path: string | null | undefined): {
       return
     }
 
+    // A new attempt means the previous response is stale, including a cached
+    // object URL holding the old bytes.
+    if (attempt > 0) dropMedia(path)
+
     let cancelled = false
     let timer: number | undefined
-    let attempt = 0
+    let attemptCount = 0
     // The reference held for the attempt in flight, handed back before the next
     // one starts so a retry loop does not pile up references on a failed path.
     let held: Entry | null = null
@@ -61,7 +73,7 @@ export function useMediaStatus(path: string | null | undefined): {
     const start = () => {
       if (cancelled) return
       if (held) unrefMedia(path, held)
-      const entry = refMedia(path)
+      const entry = refMedia(path, attempt > 0)
       held = entry
       entry.promise
         .then((result) => {
@@ -82,8 +94,8 @@ export function useMediaStatus(path: string | null | undefined): {
           }
           const rateLimited = status === 429
           const schedule = rateLimited ? RATE_LIMIT_DELAYS_MS : RETRY_DELAYS_MS
-          const fallback = schedule[attempt]
-          attempt += 1
+          const fallback = schedule[attemptCount]
+          attemptCount += 1
           if (fallback === undefined) {
             setAsset(null)
             setFailed(true)
@@ -102,7 +114,7 @@ export function useMediaStatus(path: string | null | undefined): {
       if (timer !== undefined) window.clearTimeout(timer)
       if (held) unrefMedia(path, held)
     }
-  }, [path])
+  }, [path, attempt])
 
   return { asset, failed, loading: Boolean(path) && !asset && !failed }
 }

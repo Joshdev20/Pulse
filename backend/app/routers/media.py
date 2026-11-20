@@ -8,7 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import or_, select
 
-from .. import images, storage, video
+from .. import audio, images, storage, video
 from ..deps import CurrentUser, DbSession, OptionalUser, serialize_media
 from ..models import ConversationParticipant, Media, Message, Post, User
 from ..schemas import MediaOut
@@ -103,6 +103,19 @@ async def upload(
     content_type = sniffed.content_type
     if sniffed.kind == "image":
         data, content_type = images.optimize_image(data, sniffed.content_type)
+
+    # A voice note is converted to the one format every reader can decode. The
+    # recorder can only write what its own engine encodes, so a note recorded on
+    # Chrome is WebM/Opus, which iOS cannot play at all; storing it as recorded
+    # means the message arrives and cannot be heard. `to_universal` returns None
+    # when it cannot convert, and the original bytes are kept — a note that
+    # might not play everywhere beats a note that failed to send.
+    if sniffed.kind == "audio" and not audio.is_universal(data, content_type):
+        # ffmpeg is a subprocess and can take seconds. Run it in a worker thread
+        # so one upload cannot stall every other request on this event loop.
+        converted = await run_in_threadpool(audio.to_universal, data)
+        if converted is not None:
+            data, content_type = converted
 
     stored_name = storage.store(data, storage.ALLOWED_TYPES.get(content_type, sniffed.extension))
     # Only a video carries a preview frame; an image is its own preview. The
@@ -403,6 +416,44 @@ def backfill_blobs(db) -> int:
             repaired += 1
         except (ValueError, OSError):
             continue
+    if repaired:
+        db.commit()
+    return repaired
+
+
+def backfill_audio(db) -> int:
+    """Convert voice notes stored in a format some readers cannot decode.
+
+    Notes sent before uploads were normalised are still WebM/Opus, which iOS
+    cannot play at all: the message is there and the player says unavailable.
+    Converting them here means a note already sitting in a conversation starts
+    working, rather than only the ones sent from now on.
+
+    Only rows that are still a database blob are touched — that is the durable
+    copy — and only when ffmpeg is available. Idempotent: a row that is already
+    AAC is skipped, so the boots after the first do no work. Never raises, for
+    the same reason as the blob backfill.
+    """
+    if not audio.ffmpeg_available():
+        return 0
+
+    repaired = 0
+    rows = db.scalars(
+        select(Media).where(Media.kind == "audio").order_by(Media.id)
+    ).all()
+    for media in rows:
+        blob = media.blob
+        if not blob or audio.is_universal(blob, media.content_type):
+            continue
+        converted = audio.to_universal(blob)
+        if converted is None:
+            continue
+        data, content_type = converted
+        media.blob = data
+        media.content_type = content_type
+        media.size_bytes = len(data)
+        media.stored_name = storage.store(data, storage.ALLOWED_TYPES[content_type])
+        repaired += 1
     if repaired:
         db.commit()
     return repaired

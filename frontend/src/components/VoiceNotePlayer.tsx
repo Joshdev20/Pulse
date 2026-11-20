@@ -39,22 +39,45 @@ function barHeights(seed: number): number[] {
  * element loads, which is the one case that needs a fetch.
  */
 export function VoiceNotePlayer({ item }: { item: Media }) {
-  const { asset, failed } = useMediaStatus(item.url)
+  const [retryCount, setRetryCount] = useState(0)
+  const { asset, failed } = useMediaStatus(item.url, retryCount)
   const audioRef = useRef<HTMLAudioElement>(null)
   const [playing, setPlaying] = useState(false)
   const [current, setCurrent] = useState(0)
   const [loaded, setLoaded] = useState(0)
-  // A clip that downloads but cannot be decoded — a truncated upload, or a
-  // container this browser has no codec for — is as unplayable as one that
-  // never arrived. Without this the button stayed enabled, `play()` rejected
-  // silently, and a tap on it did nothing at all.
-  const [undecodable, setUndecodable] = useState(false)
+  // A clip the element could not decode — a truncated upload, or a container
+  // this browser has no codec for — is as unplayable as one that never arrived.
+  // Without this the button stayed enabled, `play()` rejected silently, and a
+  // tap on it did nothing at all.
+  //
+  // It is keyed on the source rather than a plain flag so a retry gets a fresh
+  // attempt: the re-fetch produces a new blob URL, and that one must not inherit
+  // the previous failure.
+  const [undecodableSrc, setUndecodableSrc] = useState<string | null>(null)
 
   // The stored length in seconds, or null when the upload predates it.
   const stored = item.duration_ms ? item.duration_ms / 1000 : 0
   const duration = loaded || stored
   const heights = useMemo(() => barHeights(item.id), [item.id])
+  const undecodable = Boolean(asset && undecodableSrc === asset.url)
   const unplayable = failed || undecodable
+
+  /**
+   * Fetch the note again, once.
+   *
+   * "Unavailable" used to be final: the bytes were cached, the element had
+   * already refused them, and nothing re-ran the download. But the cause is
+   * often not a broken clip — it is a note stored in a format this device
+   * cannot decode, which the server converts when it stores or repairs it. A
+   * retry is what lets that conversion be picked up without reloading the app.
+   */
+  function retry() {
+    if (retryCount > 0) return
+    setUndecodableSrc(null)
+    setLoaded(0)
+    setCurrent(0)
+    setRetryCount(1)
+  }
 
   // A single element is shared by every voice note in a thread only in the sense
   // that each player owns one; starting a new clip leaves the previous one
@@ -130,7 +153,21 @@ export function VoiceNotePlayer({ item }: { item: Media }) {
       </div>
 
       <span className="voice-time">
-        {unplayable ? 'unavailable' : duration > 0 ? formatDuration(shown) : '--:--'}
+        {unplayable ? (
+          <button
+            type="button"
+            className="voice-retry"
+            onClick={retry}
+            disabled={retryCount > 0}
+            title="Try playing this voice note again"
+          >
+            {retryCount > 0 ? 'unavailable' : 'tap to retry'}
+          </button>
+        ) : duration > 0 ? (
+          formatDuration(shown)
+        ) : (
+          '--:--'
+        )}
       </span>
 
       {asset && !unplayable && (
@@ -151,7 +188,7 @@ export function VoiceNotePlayer({ item }: { item: Media }) {
           }}
           onError={() => {
             setPlaying(false)
-            setUndecodable(true)
+            setUndecodableSrc(asset.url)
           }}
         />
       )}

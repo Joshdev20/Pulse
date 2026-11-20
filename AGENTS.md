@@ -222,6 +222,31 @@ the public URL returns 502 until the dev server is bound to 12000.
 - A voice note is a `Media` with `kind == "audio"`. `MediaGallery` routes those to
   `VoiceNotePlayer` (a hand-built play/seek control over a real `<audio>` element), so
   `MessageBubble` and `PostCard` need no audio-specific code.
+- A note is stored as AAC in MP4, whatever the recorder produced
+  (`audio.to_universal` in `backend/app/audio.py`). The recorder can only write what
+  its own engine encodes — Chrome and Firefox write WebM/Opus, which iOS cannot decode
+  at all — so a note stored as uploaded is a message that arrives and cannot be heard.
+  AAC/MP4 is the one pair every engine that can record also plays. Do not try to fix
+  this in `useVoiceRecorder.ts` by preferring `audio/mp4`: Chrome answers
+  `isTypeSupported` for it and then writes Opus *inside* the MP4, so the container says
+  nothing about the codec. `audio.is_universal` is the test that matters — it looks for
+  the `mp4a` sample entry, not the container — and the server is the only place the
+  codec can be trusted. A note that is already AAC is left untouched, so the iOS path
+  costs no transcode. Everything is best-effort: no ffmpeg, an unreadable input or a
+  timeout returns None and the original bytes are stored, because a note that might not
+  play everywhere beats a note that failed to send.
+- `backfill_audio` (`routers/media.py`, called from `main.py` at startup) converts notes
+  sent before that normalisation existed, so a clip already sitting in a conversation
+  starts working rather than only the ones sent afterwards. Idempotent, and it runs
+  after `backfill_blobs` because that is what gives an older row its bytes.
+- `sniff` decides an MP4 is audio from its track list, not its brand: a recorder writes
+  a generic brand like `isom`, so `soun` present and `vide` absent is the test
+  (`_is_audio_mp4`). Brand-only detection filed every iOS voice note as a video.
+- "Unavailable" in `VoiceNotePlayer` is a real state, not a cosmetic one: the element
+  refused the bytes. It offers one tap to retry, keyed on the source URL so the
+  re-fetched blob is not tarred with the previous failure — `useMediaStatus` takes an
+  `attempt` counter and drops the cached object URL when it changes. The common cause
+  is a note converted on the server since it was first fetched.
 - A video tile must never download the clip just to draw its preview. `/api/media/{id}`
   ignores range requests and answers with the whole blob, so a tile that waits on the
   video pays the full size for one frame. The poster is captured in the browser at upload

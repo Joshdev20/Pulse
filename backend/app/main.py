@@ -51,6 +51,28 @@ def _backfill_media_blobs() -> None:
         db.close()
 
 
+def _backfill_audio() -> None:
+    """Convert voice notes stored in a container some readers cannot decode.
+
+    Runs once per boot. A note recorded on Chrome was stored as WebM/Opus, which
+    iOS cannot play at all, so this is what makes the notes already sitting in
+    conversations start working rather than only the ones sent from now on.
+    Idempotent, so the boots after the first do no work.
+    """
+    from .database import SessionLocal
+    from .routers.media import backfill_audio
+
+    db = SessionLocal()
+    try:
+        repaired = backfill_audio(db)
+        if repaired:
+            print(f"Converted {repaired} voice note(s) to a playable format.")
+    except Exception as exc:  # noqa: BLE001 - startup must survive a bad row
+        print(f"Voice note backfill skipped: {exc}")
+    finally:
+        db.close()
+
+
 def _backfill_official_follows() -> None:
     """Make every existing account follow the official account.
 
@@ -137,6 +159,9 @@ async def lifespan(_app: FastAPI):
     ensure_schema(engine)
     storage.ensure_upload_dir()
     _backfill_media_blobs()
+    # After the blob backfill: it is what gives an older row the bytes this
+    # conversion needs.
+    _backfill_audio()
     _backfill_like_views()
     _warn_on_push_misconfiguration()
     if settings.auto_seed:

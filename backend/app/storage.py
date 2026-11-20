@@ -80,6 +80,28 @@ class Sniffed:
 _AUDIO_BRANDS = {b"M4A ", b"M4B ", b"M4P "}
 
 
+def _is_audio_mp4(head: bytes) -> bool:
+    """Whether an ISO-BMFF header describes an audio-only file.
+
+    The major brand is not enough on its own. A browser that records with
+    `MediaRecorder` writes fragmented MP4 under a generic brand — Safari's voice
+    notes are `isom`, exactly like an ordinary video — so a brand-only test
+    files every voice note recorded on iOS as a video. That is not cosmetic: the
+    clip is stored as `video/mp4`, and a reader that expects a video never gets
+    a player.
+
+    What does separate them is the track list. An MP4 names each track's handler
+    in a `hdlr` box, `soun` for audio and `vide` for picture. Audio-only means
+    `soun` is present and `vide` is not, which is checked positively in both
+    directions so an unfamiliar file is left as a video rather than being
+    downgraded to a voice note. `moov` sits at the front of a file written for
+    streaming (the `+faststart` layout every recorder produces), so the track
+    list is inside the inspected window.
+    """
+    window = head[:SNIFF_BYTES]
+    return b"soun" in window and b"vide" not in window
+
+
 def _is_audio_webm(head: bytes) -> bool:
     """Whether a WebM/Matroska header describes an audio-only stream.
 
@@ -122,11 +144,10 @@ def sniff(head: bytes) -> Sniffed:
             return _sniffed("audio/wav")
 
     # ISO-BMFF: `ftyp` at offset 4. The major brand at offset 8 says whether
-    # this is an audio-only recording or a video. Only audio-specific brands
-    # count as audio; a generic brand like `mp42` or `isom` is treated as video,
-    # which is what an ordinary MP4 upload is.
+    # this is an audio-only recording or a video, and the track list settles it
+    # when the brand is one of the generic ones a recorder writes.
     if head[4:8] == b"ftyp":
-        if head[8:12] in _AUDIO_BRANDS:
+        if head[8:12] in _AUDIO_BRANDS or _is_audio_mp4(head):
             return _sniffed("audio/mp4")
         return _sniffed("video/mp4")
 

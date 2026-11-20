@@ -44,10 +44,17 @@ function filenameFrom(header: string | null): string | null {
   return match ? decodeURIComponent(match[1]) : null
 }
 
-async function fetchAsset(path: string): Promise<MediaAsset> {
+async function fetchAsset(path: string, revalidate = false): Promise<MediaAsset> {
   const token = getToken()
   const response = await fetch(apiUrl(path), {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    // The bytes for an id are treated as immutable, and the response carries a
+    // day-long `max-age` to match. That is wrong for a note the server has
+    // since converted in place: the path is unchanged but the bytes are not, so
+    // a retry has to ask the server again rather than be answered from the
+    // browser's cache. `no-cache` revalidates against the ETag, which changes
+    // when the stored file does.
+    ...(revalidate ? { cache: 'no-cache' as RequestCache } : {}),
   })
   if (!response.ok) {
     // `Retry-After` is seconds; the rate limiter sets it, so a retry can wait
@@ -76,11 +83,20 @@ function release(entry: Entry) {
  * Return the shared entry for `path`, starting the download if needed.
  *
  * The caller owns one reference and must hand it back with `unref`.
+ *
+ * `revalidate` asks the server rather than the browser cache, for the case
+ * where the bytes for a path have changed. Only the caller that is retrying
+ * should set it: every other consumer wants the cached copy.
  */
-export function refMedia(path: string): Entry {
+export function refMedia(path: string, revalidate = false): Entry {
   let entry = cache.get(path)
   if (!entry) {
-    const created: Entry = { promise: fetchAsset(path), refs: 0, asset: null, released: false }
+    const created: Entry = {
+      promise: fetchAsset(path, revalidate),
+      refs: 0,
+      asset: null,
+      released: false,
+    }
     created.promise
       .then((result) => {
         if (created.released) URL.revokeObjectURL(result.url)
@@ -129,6 +145,21 @@ export function unrefMedia(path: string, entry: Entry) {
 export function clearMediaCache() {
   for (const entry of cache.values()) release(entry)
   cache.clear()
+}
+
+/**
+ * Drop one path from the cache, so the next consumer downloads it again.
+ *
+ * For the case where the bytes themselves changed on the server — a stored
+ * voice note converted to a playable format, say. The cached object URL holds
+ * the old response, and the browser may answer a repeat request from its own
+ * cache, so both have to be discarded for a retry to see anything new.
+ */
+export function dropMedia(path: string) {
+  const entry = cache.get(path)
+  if (!entry) return
+  cache.delete(path)
+  release(entry)
 }
 
 /**

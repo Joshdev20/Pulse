@@ -4462,8 +4462,36 @@ h4 {
   background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
-.voice-note.failed {
-  opacity: 0.6;
+/* A note that will not play keeps its pill at full strength: the retry control
+   lives in it, and dimming the container would read as "disabled". Only the
+   decorative waveform is muted, so the state is still visible. */
+.voice-note.failed .voice-track {
+  opacity: 0.45;
+}
+
+/* The "tap to retry" control that replaces the length when a note will not
+   play. Styled as text so it sits where the duration was, with an underline to
+   show it is something you can act on. */
+.voice-retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.voice-retry:hover {
+  color: var(--text);
+}
+
+.voice-retry:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  text-decoration: none;
 }
 
 .bubble.mine .voice-note {

@@ -7,6 +7,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * records only MP4/AAC, Chrome prefers WebM/Opus, and Firefox's WebM support is
  * Opus-only. The list is ordered so each engine lands on something it can
  * actually encode, and the first entry a browser reports as supported is used.
+ *
+ * Do not try to steer this towards AAC. Chrome answers `isTypeSupported` for
+ * `audio/mp4` while encoding Opus *inside* it, so an MP4 from Chrome is not an
+ * AAC file and iOS cannot play it either way. Choosing the container here buys
+ * nothing; the server converts every note to AAC on arrival, which is the only
+ * place the codec can be trusted.
+ *
  * An empty `mimeType` means "let the browser choose", which is the fallback for
  * an engine that reports none of these.
  */
