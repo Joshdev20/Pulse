@@ -29,6 +29,10 @@ export function StickerPicker({ open, disabled, onPick, onClose }: Props) {
   const [loading, setLoading] = useState(() => queryCache.read<Sticker[]>(CACHE_KEY) === undefined)
   const [error, setError] = useState<string | null>(null)
   const [pack, setPack] = useState<string>('Reactions')
+  // The Flags pack alone is 249 entries, so a grid you can only scroll is not a
+  // way to find Nigeria. The filter applies to the open pack only, which keeps
+  // it predictable: switching packs clears what was typed.
+  const [query, setQuery] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
 
   // The catalogue never changes within a deploy, so it is fetched once and
@@ -75,7 +79,14 @@ export function StickerPicker({ open, disabled, onPick, onClose }: Props) {
   if (!open) return null
 
   const packs = [...new Set(stickers.map((sticker) => sticker.pack))]
-  const visible = stickers.filter((sticker) => sticker.pack === pack)
+  const term = query.trim().toLowerCase()
+  const visible = stickers.filter(
+    (sticker) =>
+      sticker.pack === pack &&
+      (term === '' ||
+        sticker.label.toLowerCase().includes(term) ||
+        sticker.id.toLowerCase().includes(term)),
+  )
 
   return (
     <div className="sticker-tray" ref={panelRef} role="dialog" aria-label="Stickers">
@@ -88,7 +99,10 @@ export function StickerPicker({ open, disabled, onPick, onClose }: Props) {
               role="tab"
               aria-selected={name === pack}
               className={`sticker-pack${name === pack ? ' active' : ''}`}
-              onClick={() => setPack(name)}
+              onClick={() => {
+                setPack(name)
+                setQuery('')
+              }}
             >
               {name}
             </button>
@@ -99,12 +113,27 @@ export function StickerPicker({ open, disabled, onPick, onClose }: Props) {
         </button>
       </div>
 
+      {!loading && !error && (
+        <input
+          type="search"
+          className="sticker-search"
+          placeholder={`Search ${pack.toLowerCase()}`}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          aria-label="Search stickers in this pack"
+        />
+      )}
+
       {loading && (
         <div className="sticker-loading">
           <Spinner size={18} />
         </div>
       )}
       {!loading && error && <p className="sticker-error">{error}</p>}
+
+      {!loading && !error && visible.length === 0 && (
+        <p className="sticker-error">No stickers match “{query.trim()}”.</p>
+      )}
 
       {!loading && !error && (
         <div className="sticker-grid">

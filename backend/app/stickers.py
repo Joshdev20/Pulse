@@ -14,6 +14,8 @@ sticker that exists.
 
 from dataclasses import dataclass
 
+from .flags import COUNTRIES, flag_emoji
+
 
 @dataclass(frozen=True)
 class Sticker:
@@ -118,6 +120,18 @@ STICKERS: tuple[Sticker, ...] = (
     Sticker("butterfly", "\U0001f98b", "Butterfly", "Animals"),
     Sticker("whale", "\U0001f433", "Whale", "Animals"),
 )
+
+# Every country flag, appended after the hand-written packs so the curated set
+# above stays the part a reader edits. Ids are `flag-<code>` (lower case) because
+# a sticker id is a URL-ish token, while the code itself stays upper case in the
+# label. Generated rather than listed: 249 literal emoji would be unreadable and
+# one bad escape would render as letters instead of a flag.
+FLAGS: tuple[Sticker, ...] = tuple(
+    Sticker(f"flag-{code.lower()}", flag_emoji(code), name, "Flags")
+    for code, name in COUNTRIES
+)
+
+STICKERS: tuple[Sticker, ...] = STICKERS + FLAGS
 
 BY_ID: dict[str, Sticker] = {sticker.id: sticker for sticker in STICKERS}
 

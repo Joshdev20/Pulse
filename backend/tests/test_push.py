@@ -1300,3 +1300,58 @@ def test_the_notification_badge_asset_is_monochrome():
     assert all(p[:3] == (255, 255, 255) for p in opaque), "the badge must be pure white"
 
 
+
+
+# --------------------------------------------------------------------------
+# Call entries in an alert
+# --------------------------------------------------------------------------
+
+
+def _call_row(conversation_id: int, sender_id: int, **fields):
+    """A call row as the relay would have written it."""
+    from app.models import Message
+
+    return Message(
+        conversation_id=conversation_id,
+        sender_id=sender_id,
+        body="",
+        call_mode=fields.pop("mode", "audio"),
+        call_state=fields.pop("state", "missed"),
+        **fields,
+    )
+
+
+def test_a_missed_call_alert_names_the_call(client, make_user, db_session):
+    """A call has no body, so the alert has to say what happened itself."""
+    from app import push
+
+    ada, ada_user = make_user("ada")
+    make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+
+    row = _call_row(cid, ada_user["id"], state="missed", mode="video")
+    payload = push.message_payload(db_session, row, cid)
+    assert payload["body"] == "Missed video call"
+
+
+def test_an_answered_call_alert_carries_its_duration(client, make_user, db_session):
+    from app import push
+
+    ada, ada_user = make_user("ada")
+    make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+
+    row = _call_row(cid, ada_user["id"], state="answered", call_seconds=245)
+    payload = push.message_payload(db_session, row, cid)
+    assert payload["body"] == "Voice call · 4m 05s"
+
+
+def test_a_short_call_alert_shows_seconds_only(client, make_user, db_session):
+    from app import push
+
+    ada, ada_user = make_user("ada")
+    make_user("grace")
+    cid = client.post("/api/conversations", headers=ada, json={"username": "grace"}).json()["id"]
+
+    row = _call_row(cid, ada_user["id"], state="answered", call_seconds=42)
+    assert push.message_payload(db_session, row, cid)["body"] == "Voice call · 42s"

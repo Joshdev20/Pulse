@@ -59,6 +59,13 @@ _ADDITIONS: list[tuple[str, str, str]] = [
     # and one that was written rather than forwarded has no source.
     ("messages", "edited_at", "TIMESTAMP NULL"),
     ("messages", "forwarded_from_id", "INTEGER NULL"),
+    # Call log entries. All nullable, so every message written before calls
+    # existed stays an ordinary message.
+    ("messages", "call_mode", "VARCHAR(16) NULL"),
+    ("messages", "call_state", "VARCHAR(16) NULL"),
+    ("messages", "call_seconds", "INTEGER NULL"),
+    ("messages", "call_ref", "VARCHAR(32) NULL"),
+    ("messages", "call_connected_at", "TIMESTAMP NULL"),
     # Web Push endpoint for a browser, so alerts reach a closed tab.
     ("push_subscriptions", "user_agent", "VARCHAR(200) NOT NULL DEFAULT ''"),
     ("push_subscriptions", "last_used_at", "TIMESTAMP NULL"),

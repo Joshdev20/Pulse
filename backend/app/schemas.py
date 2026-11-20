@@ -264,6 +264,26 @@ class MessageQuote(BaseModel):
     has_media: bool = False
 
 
+class CallLog(BaseModel):
+    """How a call in the thread is described to a reader.
+
+    The state is resolved per reader, because the same call is a different
+    event to each side: an unanswered outgoing call is "no answer" to the
+    caller and "missed" to the person who did not pick up. `by_me` is what lets
+    the client word it, so the wording lives in one place rather than in the
+    stored row.
+    """
+
+    mode: Literal["audio", "video"]
+    # `ringing` and `active` are live states; `answered`, `missed`, `declined`
+    # and `cancelled` are final. A live state carries no duration, so the client
+    # shows a timer rather than a fixed one.
+    state: Literal["ringing", "active", "answered", "missed", "declined", "cancelled"]
+    # Whether the reader placed this call. Decides "Outgoing" vs "Incoming".
+    by_me: bool = False
+    seconds: int | None = None
+
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -276,6 +296,9 @@ class MessageOut(BaseModel):
     mine: bool = False
     # A sticker id from the shipped catalogue, when this message is one.
     sticker: str | None = None
+    # Set when this row is a call rather than a message. Such a row has no
+    # body, is not editable or forwardable, and renders as a centred entry.
+    call: CallLog | None = None
     # The quoted message, when this is a reply and the target still exists.
     reply_to: MessageQuote | None = None
     like_count: int = 0

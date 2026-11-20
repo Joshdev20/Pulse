@@ -266,6 +266,38 @@ the public URL returns 502 until the dev server is bound to 12000.
   generator after changing the catalogue.
 - `Message.sticker` is nullable and the column is added by `ensure_schema`, so every
   message written before stickers existed stays a plain message.
+- The **Flags** pack is generated from `backend/app/flags.py` (ISO 3166-1 alpha-2 code ->
+  name) as the two regional-indicator code points, not as literal emoji, so a typo is a
+  wrong flag rather than a broken escape. That is 249 entries, so `StickerPicker` has a
+  per-pack filter — without it the pack is only scrollable and Nigeria is unfindable. The
+  filter applies to the open pack and clears when the pack changes.
+
+### Call log entries
+
+- A call is a `Message` row with `call_state` set and no body, so it sorts into the
+  history and pages like any other message. `call_mode`, `call_state`, `call_seconds`,
+  `call_ref` and `call_connected_at` are all nullable and added by `ensure_schema`.
+- The row is written by `_record_call` in `routers/realtime.py` from the signalling frames,
+  never by the client directly: the offer (always the caller's) creates it, the answer,
+  decline or hangup advance it. One row per `call_ref`, so a peer that reconnects mid-call
+  and re-offers does not append a second entry.
+- **The stored state is neutral; the wording is per reader.** A caller who gave up while
+  the phone rang is stored as `cancelled`, which is `missed` to the callee.
+  `_call_log()` in `routers/messages.py` resolves that from the viewer's side and
+  `lib/calls-format.ts` only picks words — never re-derive the state in the client, or the
+  two translations drift. `_call_quote_text` and `push._call_preview` go through the same
+  resolution, so a quoted call and a missed-call alert cannot disagree with the entry.
+- A row left `ringing` past `RING_EXPIRY_SECONDS`, or `active` past `ACTIVE_EXPIRY_SECONDS`,
+  is read as finished. That is what stops a lost hangup or a restart mid-call from showing
+  "in progress" forever, without a sweeper job.
+- `CallEntry` is a centred pill, not a bubble: it has no author to attribute and nothing to
+  reply to, so its menu offers only delete (and only to the row's owner). It takes the same
+  hold-to-open gesture as a bubble. The hold is abandoned on `>= 10px` of movement **and**
+  on a captured `scroll` event, because only one pointer move arrives before the row slides
+  out from under the finger.
+- React nulls `event.currentTarget` after a handler returns, so a long-press timer must
+  capture the element *before* the `setTimeout`; reading it inside the callback opens the
+  menu against `null`.
 
 ### Profile link previews
 

@@ -1286,3 +1286,398 @@ def test_sticker_catalogue_ships_several_packs(client, make_user):
     packs = {entry["pack"] for entry in catalogue}
     assert {"Reactions", "Moods", "Lifestyle", "Celebration", "Animals"} <= packs
     assert len(catalogue) > 60
+
+
+# --- Call log in the thread -------------------------------------------------
+#
+# A call is recorded as a message row so it sorts into the history. These tests
+# drive the real relay frames over a socket, because the state transitions are
+# decided by which side sends which frame — calling the recorder directly would
+# not prove that.
+
+
+def _call(client_socket, token: str, conversation_id: int, action: str, call_id: str = "c1",
+          mode: str = "audio", payload: str | None = None) -> None:
+    frame = {
+        "type": "call",
+        "conversation_id": conversation_id,
+        "action": action,
+        "call_id": call_id,
+        "mode": mode,
+    }
+    if payload is not None:
+        frame["payload"] = payload
+    client_socket.send_text(json.dumps(frame))
+
+
+def _history(client, headers, conversation_id: int) -> list[dict]:
+    response = client.get(f"/api/conversations/{conversation_id}/messages", headers=headers)
+    assert response.status_code == 200
+    return response.json()
+
+
+def _call_entries(client, headers, conversation_id: int) -> list[dict]:
+    return [message for message in _history(client, headers, conversation_id) if message["call"]]
+
+
+def _two_sockets(client, ada, grace):
+    """Both participants connected, in the order the relay expects."""
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+    grace_socket = client.websocket_connect("/api/ws")
+    grace_socket.__enter__()
+    grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+    recv_frame(grace_socket, "ready")
+    ada_socket = client.websocket_connect("/api/ws")
+    ada_socket.__enter__()
+    ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+    recv_frame(ada_socket, "ready")
+    return ada_socket, grace_socket
+
+
+def _close(socket) -> None:
+    socket.__exit__(None, None, None)
+
+
+def test_offer_records_a_call_entry_both_sides_can_read(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer", mode="video")
+        # The entry is published before the signalling frame, so the first
+        # `call` frame arrives after the entry has already been recorded.
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    for headers in (ada, grace):
+        entries = _call_entries(client, headers, cid)
+        assert len(entries) == 1
+        call = entries[0]["call"]
+        assert call["mode"] == "video"
+        assert call["state"] == "ringing"
+        assert call["seconds"] is None
+
+    # The direction is relative to the reader, not stored on the row.
+    assert _call_entries(client, ada, cid)[0]["call"]["by_me"] is True
+    assert _call_entries(client, grace, cid)[0]["call"]["by_me"] is False
+
+
+def test_answered_call_records_its_duration(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(grace_socket, "grace", cid, "answer", payload="v=0")
+        recv_frame(ada_socket, "call")
+        # The duration comes from when media connected, so the test rewinds the
+        # stored stamp rather than sleeping.
+        _call(ada_socket, "ada", cid, "hangup")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    entries = _call_entries(client, ada, cid)
+    assert len(entries) == 1
+    call = entries[0]["call"]
+    assert call["state"] == "answered"
+    # Answering and hanging up happen in the same instant here, so the talk time
+    # is zero seconds rather than a missing duration: the call did connect.
+    assert call["seconds"] == 0
+
+
+def test_a_call_nobody_answers_is_missed_for_the_callee(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        # The caller gives up without the callee ever answering.
+        _call(ada_socket, "ada", cid, "hangup")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    # The same row reads as two different events, which is the whole reason the
+    # state is resolved per reader rather than stored as one label.
+    assert _call_entries(client, ada, cid)[0]["call"]["state"] == "cancelled"
+    assert _call_entries(client, grace, cid)[0]["call"]["state"] == "missed"
+    assert _call_entries(client, grace, cid)[0]["call"]["seconds"] is None
+
+
+def test_a_declined_call_is_recorded_as_declined(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(grace_socket, "grace", cid, "decline")
+        recv_frame(ada_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    for headers in (ada, grace):
+        entries = _call_entries(client, headers, cid)
+        assert len(entries) == 1
+        assert entries[0]["call"]["state"] == "declined"
+        assert entries[0]["call"]["seconds"] is None
+
+
+def test_one_call_leaves_one_entry_however_many_frames_arrive(client, make_user):
+    """A reconnecting peer re-sends the offer; that must not duplicate the row."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(grace_socket, "grace", cid, "answer")
+        recv_frame(ada_socket, "call")
+        _call(ada_socket, "ada", cid, "hangup")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    entries = _call_entries(client, ada, cid)
+    assert len(entries) == 1
+    assert entries[0]["call"]["state"] == "answered"
+
+
+def test_a_call_entry_cannot_be_edited_or_forwarded(client, make_user):
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+    other = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    entry = _call_entries(client, ada, cid)[0]
+    edited = client.patch(
+        f"/api/conversations/{cid}/messages/{entry['id']}",
+        headers=ada,
+        json={"body": "not a call"},
+    )
+    assert edited.status_code == 400
+
+    forwarded = client.post(
+        f"/api/conversations/{cid}/messages/{entry['id']}/forward",
+        headers=ada,
+        params={"target_conversation_id": other},
+    )
+    assert forwarded.status_code == 400
+
+
+def test_a_call_entry_names_itself_when_quoted(client, make_user):
+    """A reply to a call must not quote an empty line."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer", mode="video")
+        recv_frame(grace_socket, "call")
+        _call(ada_socket, "ada", cid, "hangup")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    entry = _call_entries(client, ada, cid)[0]
+    reply = client.post(
+        f"/api/conversations/{cid}/messages",
+        headers=grace,
+        json={"body": "sorry I missed it", "reply_to_id": entry["id"]},
+    )
+    assert reply.status_code == 201
+    # Worded for whoever is reading the reply, the same way the entry is: the
+    # call reads as missed to Grace, who was the one being called.
+    assert reply.json()["reply_to"]["body"] == "Video call (missed)"
+    for_viewer = client.get(f"/api/conversations/{cid}/messages", headers=ada).json()
+    quoted = next(m for m in for_viewer if m["body"] == "sorry I missed it")
+    assert quoted["reply_to"]["body"] == "Video call"
+
+
+def test_the_inbox_preview_names_a_call(client, make_user):
+    """The newest message drives the inbox row, and a call has no body."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(grace_socket, "grace", cid, "decline")
+        recv_frame(ada_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    inbox = client.get("/api/conversations", headers=grace).json()
+    row = next(item for item in inbox if item["id"] == cid)
+    assert row["last_message"]["call"]["state"] == "declined"
+
+
+def test_a_call_row_needs_no_sticker_to_serialize(client, make_user):
+    """A call row has no body and no sticker; it must still be a valid message."""
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    entry = _call_entries(client, ada, cid)[0]
+    assert entry["body"] == ""
+    assert entry["sticker"] is None
+    assert entry["media"] == []
+
+
+# --- Sticker catalogue ------------------------------------------------------
+
+
+def test_every_sticker_pack_is_published(client, make_user):
+    ada, _ = make_user("ada")
+    catalogue = client.get("/api/conversations/stickers", headers=ada).json()
+    packs = {sticker["pack"] for sticker in catalogue}
+    assert {"Reactions", "Greetings", "Flags"} <= packs
+    assert len(packs) >= 9
+
+
+def test_the_flag_pack_covers_every_country(client, make_user):
+    """The pack is generated from ISO 3166-1, so its size is the check."""
+    from app.flags import COUNTRIES
+
+    ada, _ = make_user("ada")
+    catalogue = client.get("/api/conversations/stickers", headers=ada).json()
+    flags = [sticker for sticker in catalogue if sticker["pack"] == "Flags"]
+    assert len(flags) == len(COUNTRIES) == 249
+    assert len({sticker["id"] for sticker in flags}) == 249
+    # Each entry is a two-letter regional-indicator pair, not a letter fallback.
+    for sticker in flags:
+        assert len(sticker["emoji"]) == 2
+        assert all(0x1F1E6 <= ord(char) <= 0x1F1FF for char in sticker["emoji"])
+
+
+def test_a_flag_can_be_sent_and_read_back(client, make_user):
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    sent = client.post(
+        f"/api/conversations/{cid}/messages",
+        headers=ada,
+        json={"body": "", "sticker": "flag-ng"},
+    )
+    assert sent.status_code == 201
+    assert sent.json()["sticker"] == "flag-ng"
+
+    history = client.get(f"/api/conversations/{cid}/messages", headers=ada).json()
+    assert history[-1]["sticker"] == "flag-ng"
+
+
+def test_an_unknown_flag_id_is_rejected(client, make_user):
+    """A code that is not a country must not become a sticker."""
+    ada, _ = make_user("ada")
+    make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    sent = client.post(
+        f"/api/conversations/{cid}/messages",
+        headers=ada,
+        json={"body": "", "sticker": "flag-zz"},
+    )
+    assert sent.status_code == 400
+
+
+def test_a_missed_call_notifies_the_person_who_did_not_answer(client, make_user, monkeypatch):
+    """A missed call has to reach a closed tab, which is where it matters."""
+    calls: list[tuple[int, dict]] = []
+    monkeypatch.setattr(
+        "app.routers.realtime.push.schedule_notify",
+        lambda user_id, payload: calls.append((user_id, payload)) or True,
+    )
+
+    ada, ada_user = make_user("ada")
+    grace, grace_user = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(ada_socket, "ada", cid, "hangup")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    recipients = [user_id for user_id, _ in calls]
+    assert grace_user["id"] in recipients
+    # The caller is looking at their own screen; alerting them is noise.
+    assert ada_user["id"] not in recipients
+    missed = next(payload for user_id, payload in calls if user_id == grace_user["id"])
+    # Worded for the recipient: the caller cancelled, but what happened to Grace
+    # is that she missed it.
+    assert missed["body"] == "Missed voice call"
+
+
+def test_an_answered_call_does_not_notify(client, make_user, monkeypatch):
+    """Only a call that was not picked up is worth an alert."""
+    calls: list[tuple[int, dict]] = []
+    monkeypatch.setattr(
+        "app.routers.realtime.push.schedule_notify",
+        lambda user_id, payload: calls.append((user_id, payload)) or True,
+    )
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(grace_socket, "grace", cid, "answer")
+        recv_frame(ada_socket, "call")
+        _call(ada_socket, "ada", cid, "hangup")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    assert calls == []

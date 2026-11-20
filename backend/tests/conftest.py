@@ -56,6 +56,7 @@ def client():
     )
     Base.metadata.create_all(bind=engine)
     TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    _sessions.append(TestingSession)
 
     def override_get_db():
         db = TestingSession()
@@ -75,6 +76,23 @@ def client():
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    _sessions.clear()
+
+
+# The session factory of the `client` fixture currently in scope, so a test can
+# read the same database the API wrote to without going through HTTP. Cleared
+# with the fixture so a test cannot reach a previous test's database.
+_sessions: list = []
+
+
+@pytest.fixture
+def db_session(client):
+    """A session on the same in-memory database the `client` fixture uses."""
+    session = _sessions[-1]()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 @pytest.fixture

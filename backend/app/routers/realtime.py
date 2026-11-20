@@ -2,13 +2,16 @@
 
 import json
 import logging
+from datetime import timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from ..deps import DbSession, forget_last_seen, touch_last_seen
-from ..models import ConversationParticipant, User
+from .. import push
+from ..models import Conversation, ConversationParticipant, Message, User, utcnow
 from ..realtime import MAX_FRAME_BYTES, authenticate, manager
+from .messages import CALL_RINGING, CALL_ACTIVE, serialize_messages
 
 logger = logging.getLogger("pulse.realtime")
 
@@ -205,13 +208,18 @@ MAX_CALL_PAYLOAD_CHARS = 12_000
 
 
 async def _relay_call(db: DbSession, user_id: int, frame: dict) -> None:
-    """Forward one call-control frame to the other member of a conversation.
+    """Forward one call-control frame, and keep the thread's call log in step.
 
-    The server is a relay, not a party to the call: it never parses the SDP or
-    the ICE candidates, it only checks that the sender belongs to the thread and
-    that the destination is the other participant. That keeps WebRTC signalling
-    free of media handling and out of the API's data model — a call leaves no
-    rows behind.
+    The server still never parses SDP or ICE: media stays peer to peer. What it
+    does now is record the *fact* of a call, because a call is part of the
+    conversation and both sides expect to find it there afterwards — a missed
+    call with no trace is the complaint this answers.
+
+    The log row is a message row, so it sorts into the history for free. It is
+    created on the offer, which is the first frame of any call, and updated by
+    the frames that decide how the call ended. Because the offer is recorded
+    before the callee answers, a call nobody picked up still leaves a "missed"
+    entry rather than vanishing.
 
     Membership is checked here rather than trusted from the client for the same
     reason as typing: otherwise the socket would be a way to ring a stranger.
@@ -225,8 +233,30 @@ async def _relay_call(db: DbSession, user_id: int, frame: dict) -> None:
     if isinstance(payload, str) and len(payload) > MAX_CALL_PAYLOAD_CHARS:
         return
 
+    mode = frame.get("mode") if frame.get("mode") in {"audio", "video"} else "audio"
+    call_ref = frame.get("call_id")
+    if not isinstance(call_ref, str) or not call_ref:
+        # Without an id the frames of one call cannot be told from another, so
+        # the log would be guesses. The signalling itself still works.
+        call_ref = None
+    elif len(call_ref) > 32:
+        call_ref = call_ref[:32]
+
+    # Bound before the try so a failed membership lookup leaves nothing to relay
+    # rather than raising on an unbound name below.
+    peers: list[int] = []
     try:
         peers = _typing_peers(db, user_id, conversation_id)
+        if not peers:
+            return
+        if call_ref is not None:
+            await _record_call(db, user_id, conversation_id, call_ref, action, mode)
+    except Exception:  # noqa: BLE001 - logging a call must not break signalling
+        logger.debug("could not record call for user %s", user_id, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
     finally:
         _release(db)
 
@@ -236,8 +266,144 @@ async def _relay_call(db: DbSession, user_id: int, frame: dict) -> None:
         "from": user_id,
         "action": action,
         "call_id": frame.get("call_id"),
-        "mode": frame.get("mode") if frame.get("mode") in {"audio", "video"} else "audio",
+        "mode": mode,
         "payload": payload if isinstance(payload, str) else None,
     }
     for peer_id in peers:
         await manager.publish(peer_id, outgoing)
+
+
+async def _record_call(
+    db: DbSession,
+    user_id: int,
+    conversation_id: int,
+    call_ref: str,
+    action: str,
+    mode: str,
+) -> None:
+    """Create or advance the log row for one call.
+
+    One row per call, keyed by `call_ref`. Which side writes which state is
+    decided by who sent the frame, not by who is asking: the offer is always the
+    caller's, the decline or the answer is always the callee's. That is what
+    makes the stored state a fact rather than a claim.
+    """
+    row = db.scalar(
+        select(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.call_ref == call_ref,
+        )
+    )
+
+    if action == "offer":
+        if row is not None:
+            # A repeated offer is a peer that reconnected mid-call. The call is
+            # already logged; re-logging it would put two entries in the thread.
+            return
+        row = Message(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            body="",
+            call_mode=mode,
+            call_state=CALL_RINGING,
+            call_ref=call_ref,
+        )
+        db.add(row)
+        conversation = db.get(Conversation, conversation_id)
+        if conversation is not None:
+            conversation.last_message_at = row.created_at or utcnow()
+        db.commit()
+        await _publish_call_entry(db, row, conversation_id)
+        return
+
+    if row is None:
+        # A frame for a call this process never saw start (a restart, or the
+        # offer arrived before the row was written). Nothing to advance.
+        return
+
+    # Only the callee can answer or decline; only either side can hang up.
+    caller_side = row.sender_id == user_id
+    changed = False
+
+    if action == "answer" and not caller_side:
+        if row.call_state == CALL_RINGING:
+            row.call_state = CALL_ACTIVE
+            row.call_connected_at = utcnow()
+            changed = True
+    elif action == "accept" and not caller_side:
+        if row.call_state == CALL_RINGING:
+            row.call_state = CALL_ACTIVE
+            row.call_connected_at = row.call_connected_at or utcnow()
+            changed = True
+    elif action == "decline" and not caller_side:
+        if row.call_state in (CALL_RINGING, CALL_ACTIVE):
+            row.call_state = "declined"
+            changed = True
+    elif action == "hangup":
+        # Either side hanging up ends the call. Which final state it lands in
+        # depends on how far it got: a call that never connected and was
+        # abandoned by the caller is "cancelled"; one that never connected and
+        # was dropped by the callee is "declined"; one that had media is
+        # "answered" with its duration.
+        if row.call_state == CALL_RINGING:
+            row.call_state = "cancelled" if caller_side else "declined"
+            changed = True
+        elif row.call_state == CALL_ACTIVE:
+            row.call_state = "answered"
+            row.call_seconds = _connected_seconds(row)
+            changed = True
+
+    if not changed:
+        return
+    db.commit()
+    await _publish_call_entry(db, row, conversation_id)
+
+
+def _connected_seconds(row: Message) -> int:
+    """Whole seconds of talk time, from when media connected to now."""
+    started = row.call_connected_at
+    if started is None:
+        return 0
+    if getattr(started, "tzinfo", None) is not None:
+        started = started.astimezone(timezone.utc).replace(tzinfo=None)
+    return max(0, int((utcnow().replace(tzinfo=None) - started).total_seconds()))
+
+
+async def _publish_call_entry(db: DbSession, row: Message, conversation_id: int) -> None:
+    """Push the call entry to both participants so it appears without a reload.
+
+    Serialized per reader like any message, because the wording of the entry is
+    relative: the same row is "Outgoing" to the caller and "Missed" to the
+    person who did not answer.
+    """
+    participant_ids = list(
+        db.scalars(
+            select(ConversationParticipant.user_id).where(
+                ConversationParticipant.conversation_id == conversation_id
+            )
+        ).all()
+    )
+    for participant_id in participant_ids:
+        viewer = db.get(User, participant_id)
+        if viewer is None:
+            continue
+        payload = serialize_messages(db, [row], viewer)[0].model_dump(mode="json")
+        await manager.publish(
+            participant_id,
+            {
+                "type": "message",
+                "conversation_id": conversation_id,
+                "message": payload,
+            },
+        )
+        # A call the recipient never picked up has to reach a closed browser:
+        # the socket above only covers a tab that is already open, which is
+        # exactly the case a missed call is not. The stored state is `cancelled`
+        # when the caller gave up while it rang, which is `missed` from the
+        # callee's side — the side this alert is for. A call the callee declined
+        # is not pushed back to them: they were there, and they know.
+        if participant_id != row.sender_id and row.call_state == "cancelled":
+            push.schedule_notify(
+                participant_id,
+                push.message_payload(db, row, conversation_id, participant_id),
+            )

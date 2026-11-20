@@ -27,6 +27,7 @@ from app.stickers import STICKERS  # noqa: E402
 TARGET = ROOT / "frontend" / "src" / "lib" / "stickers.ts"
 
 HEADER = """import type { Message } from './types'
+import { callPreview } from './calls-format'
 
 /* Generated from `backend/app/stickers.py`. Edit the catalogue there and
    re-run the generator (`python3 scripts/gen_stickers.py`); do not hand-edit
@@ -39,6 +40,9 @@ FOOTER = """}
 
 /** The one-line text an inbox row shows for a message. */
 export function previewOf(message: Message): string {
+  // A call has no body, so it is named first: falling through would show an
+  // empty row for the one entry where the wording carries the whole message.
+  if (message.call) return callPreview(message.call)
   if (message.sticker) {
     const entry = STICKER_EMOJI[message.sticker]
     return entry ? `${entry.emoji} Sticker` : 'Sticker'
@@ -55,7 +59,9 @@ def render() -> str:
         # The emoji stays a literal rather than an escape: it has to read as an
         # emoji in an editor and in a diff, which is how the drift was spotted.
         label = sticker.label.replace("\\", "\\\\").replace("'", "\\'")
-        lines.append(f"  {sticker.id}: {{ emoji: '{sticker.emoji}', label: '{label}' }},\n")
+        # The key is quoted because an id such as `flag-ng` is not a valid
+        # JavaScript identifier and would not parse as a bare key.
+        lines.append(f"  '{sticker.id}': {{ emoji: '{sticker.emoji}', label: '{label}' }},\n")
     lines.append(FOOTER)
     return "".join(lines)
 

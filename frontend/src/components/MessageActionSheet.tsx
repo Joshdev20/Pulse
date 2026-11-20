@@ -8,6 +8,7 @@ import {
   ReplyIcon,
   TrashIcon,
 } from './Icons'
+import { callLabel } from '../lib/calls-format'
 import type { Message } from '../lib/types'
 
 export type MessageAction = 'reply' | 'like' | 'copy' | 'edit' | 'forward' | 'delete'
@@ -37,11 +38,21 @@ interface ActionItem {
  * Escape, on a backdrop press, and on scroll — a menu left floating over a
  * thread that has moved underneath it would point at the wrong message.
  */
-export function MessageActionSheet({ message, anchor, onAction, onClose }: Props) {
-  const cardRef = useRef<HTMLDivElement>(null)
-  const [placement, setPlacement] = useState<{ top: number; left: number } | null>(null)
-
-  const actions: ActionItem[] = [
+/**
+ * The menu for one message, in the order a reader reaches for them.
+ *
+ * A call entry records something that happened rather than something that was
+ * said, so it cannot be replied to, liked, edited or forwarded: only removal is
+ * offered, and only to whoever owns the row.
+ */
+function actionsFor(message: Message): ActionItem[] {
+  if (message.call) {
+    if (!message.mine) return []
+    return [
+      { action: 'delete', label: 'Delete call', icon: <TrashIcon size={18} />, danger: true },
+    ]
+  }
+  return [
     { action: 'reply', label: 'Reply', icon: <ReplyIcon size={18} /> },
     {
       action: 'like',
@@ -56,16 +67,16 @@ export function MessageActionSheet({ message, anchor, onAction, onClose }: Props
       : []),
     { action: 'forward', label: 'Forward', icon: <ForwardIcon size={18} /> },
     ...(message.mine
-      ? [
-          {
-            action: 'delete' as const,
-            label: 'Delete',
-            icon: <TrashIcon size={18} />,
-            danger: true,
-          },
-        ]
+      ? [{ action: 'delete' as const, label: 'Delete', icon: <TrashIcon size={18} />, danger: true }]
       : []),
   ]
+}
+
+export function MessageActionSheet({ message, anchor, onAction, onClose }: Props) {
+  const cardRef = useRef<HTMLDivElement>(null)
+  const [placement, setPlacement] = useState<{ top: number; left: number } | null>(null)
+
+  const actions = actionsFor(message)
 
   // Placed after mount so the card's own height is known: a menu opened near
   // the bottom of the thread has to flip above the bubble instead of running
@@ -129,7 +140,7 @@ export function MessageActionSheet({ message, anchor, onAction, onClose }: Props
       >
         <div className="msg-sheet-head">
           <span className="msg-sheet-preview">
-            {message.body || (message.sticker ? 'Sticker' : 'Attachment')}
+            {message.body || (message.call ? callLabel(message.call) : message.sticker ? 'Sticker' : 'Attachment')}
           </span>
           <button type="button" className="icon-btn" aria-label="Close menu" onClick={onClose}>
             <CloseIcon size={15} />

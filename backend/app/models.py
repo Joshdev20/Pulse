@@ -432,6 +432,25 @@ class Message(Base):
     forwarded_from_id: Mapped[int | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # A call is recorded in the thread as a message row with no body, so the
+    # history reads in order and needs no second table to page through. These
+    # three fields are what that row needs to describe itself: which kind of
+    # call, how it ended, and how long it lasted. All null on an ordinary
+    # message, and `call_state` is what marks a row as a call at all.
+    call_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    call_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Seconds of connected talk time. Null rather than 0 when the call never
+    # connected: "no duration" and "connected for no time" are different facts.
+    call_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The call this row logs, so the frames that follow the offer update the
+    # same row instead of appending a second entry for one call. Also makes a
+    # duplicated offer (a peer that reconnected mid-call) a no-op.
+    call_ref: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # When media actually connected. Ringing time is not talk time, so the
+    # duration is measured from here rather than from `created_at`.
+    call_connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")

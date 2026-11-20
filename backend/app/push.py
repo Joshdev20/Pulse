@@ -390,7 +390,45 @@ def _deliver(user_id: int, payload: dict[str, Any]) -> None:
         db.close()
 
 
-def message_payload(db: Session, message, conversation_id: int) -> dict[str, Any]:
+def _call_preview(message, recipient_id: int | None = None) -> str:
+    """The one-line wording for a call row in an alert.
+
+    Worded for ``recipient_id`` where one is known, because the stored state is
+    neutral: a call the caller abandoned while it rang is `cancelled` on the row
+    and reads as "missed" to the person whose phone was ringing. Sending them
+    "Voice call cancelled" would describe the caller's action rather than the
+    thing that happened to them.
+    """
+    state = getattr(message, "call_state", None)
+    if state is None:
+        return ""
+    kind = "Video call" if getattr(message, "call_mode", None) == "video" else "Voice call"
+    is_recipient = recipient_id is not None and getattr(message, "sender_id", None) != recipient_id
+    if state == "cancelled" and is_recipient:
+        return f"Missed {kind.lower()}"
+    if state == "missed":
+        return f"Missed {kind.lower()}"
+    if state == "declined":
+        return f"{kind} declined"
+    if state == "cancelled":
+        return f"{kind} cancelled"
+    seconds = getattr(message, "call_seconds", None)
+    if seconds is not None:
+        return f"{kind} · {_duration_text(seconds)}"
+    return kind
+
+
+def _duration_text(seconds: int) -> str:
+    """A duration as "4m 05s" or "12s", for a line that has to stay short."""
+    minutes, rest = divmod(max(0, int(seconds)), 60)
+    if minutes:
+        return f"{minutes}m {rest:02d}s"
+    return f"{rest}s"
+
+
+def message_payload(
+    db: Session, message, conversation_id: int, recipient_id: int | None = None
+) -> dict[str, Any]:
     """The payload a service worker needs to render a message alert.
 
     Shaped like the realtime ``message`` frame so the service worker can reuse
@@ -400,8 +438,15 @@ def message_payload(db: Session, message, conversation_id: int) -> dict[str, Any
     sender = db.get(User, message.sender_id)
     name = sender.display_name if sender is not None else "Someone"
     # A sticker has no body, so it is named rather than falling through to the
-    # attachment wording: "Sent a sticker" tells the reader what arrived.
-    body = message.body or stickers.preview_text(message.sticker) or "Sent an attachment"
+    # attachment wording: "Sent a sticker" tells the reader what arrived. A call
+    # row is named the same way, and is the one alert where the wording matters
+    # most: "Missed call" is the reason the notification exists.
+    body = (
+        message.body
+        or stickers.preview_text(message.sticker)
+        or _call_preview(message, recipient_id)
+        or "Sent an attachment"
+    )
     return {
         "type": "message",
         "title": name,

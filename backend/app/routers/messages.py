@@ -26,6 +26,7 @@ from ..models import (
 from .. import push, storage, stickers
 from ..realtime import manager
 from ..schemas import (
+    CallLog,
     ConversationOut,
     ConversationStart,
     MessageCreate,
@@ -39,7 +40,9 @@ router = APIRouter(prefix="/api/conversations", tags=["messages"])
 MAX_PAGE_SIZE = 100
 
 
-def _quotes_for(db: Session, messages: list[Message]) -> dict[int, MessageQuote]:
+def _quotes_for(
+    db: Session, messages: list[Message], viewer: User | None = None
+) -> dict[int, MessageQuote]:
     """Resolve the messages that these messages reply to, in two queries.
 
     Returned as a map from the *quoting* message id to its quote, so the caller
@@ -73,12 +76,34 @@ def _quotes_for(db: Session, messages: list[Message]) -> dict[int, MessageQuote]
         sender = senders.get(target.sender_id)
         quotes[message.id] = MessageQuote(
             id=target.id,
-            body=target.body,
+            # A call row has no body, so quoting one would draw an empty line.
+            # Naming it keeps the quote readable without a second field.
+            body=target.body or _call_quote_text(target, viewer),
             sender_username=sender.username if sender else "",
             sender_display_name=sender.display_name if sender else "",
             has_media=bool(target.media),
         )
     return quotes
+
+
+def _call_quote_text(message: Message, viewer: User | None = None) -> str:
+    """How a quoted call entry reads, since it has no body of its own.
+
+    Worded through the same per-reader resolution as the entry itself, so a
+    quote cannot call a call "cancelled" in a thread where the entry above it
+    says "Missed".
+    """
+    call = _call_log(message, viewer)
+    if call is None:
+        return ""
+    kind = "Video call" if call.mode == "video" else "Voice call"
+    if call.state == "missed":
+        return f"{kind} (missed)"
+    if call.state == "declined":
+        return f"{kind} (declined)"
+    if call.state == "answered" and call.seconds is not None:
+        return f"{kind} ({call.seconds}s)"
+    return kind
 
 
 def _like_state(
@@ -154,7 +179,7 @@ def serialize_messages(
     if not messages:
         return []
     authors = serialize_users(db, [m.sender for m in messages], viewer)
-    quotes = _quotes_for(db, messages)
+    quotes = _quotes_for(db, messages, viewer)
     like_counts, liked_ids = _like_state(db, messages, viewer)
     if partner_read is None:
         partner_read = _partner_read_state(
@@ -175,12 +200,72 @@ def serialize_messages(
             liked_by_me=m.id in liked_ids,
             edited_at=m.edited_at,
             forwarded=m.forwarded_from_id is not None,
+            call=_call_log(m, viewer),
             read_by_partner=_read_by_partner(
                 m, partner_read.get(m.conversation_id), viewer
             ),
         )
         for m in messages
     ]
+
+
+# How long an unanswered call rings before it is treated as missed. The client
+# gives up after 45s and announces a hangup, but that frame can be lost with the
+# socket, so the stored row is also read as missed once this has passed. Kept
+# generous so a slow round trip cannot mark a call missed while it still rings.
+RING_EXPIRY_SECONDS = 90
+
+# A row left `active` past this cannot be a live call: nothing stays connected
+# for six hours, so the final hangup was lost. Reading it as a finished call
+# stops a stale row from showing "in progress" forever.
+ACTIVE_EXPIRY_SECONDS = 6 * 60 * 60
+
+CALL_RINGING = "ringing"
+CALL_ACTIVE = "active"
+_CALL_MODES = ("audio", "video")
+_FINAL_CALL_STATES = ("answered", "missed", "declined", "cancelled")
+
+
+def _call_log(message: Message, viewer: User | None) -> CallLog | None:
+    """Describe a call row from one reader's point of view, or None.
+
+    The row stores who placed the call and how it ended, which is enough for
+    every wording but not the wording itself: "missed" and "no answer" are the
+    same stored fact seen from the two sides. That translation happens here so a
+    stored row stays neutral and the client only has to pick a label.
+    """
+    if message.call_state is None or message.call_mode is None:
+        return None
+
+    state = message.call_state
+    # A transient row whose call is long over: the hangup never arrived, or the
+    # process restarted mid-call. Resolving it on read is what keeps the thread
+    # honest without a sweeper job running against every conversation.
+    created = _as_naive_utc(message.created_at)
+    if created is not None:
+        age = (utcnow().replace(tzinfo=None) - created).total_seconds()
+        if state == CALL_RINGING and age > RING_EXPIRY_SECONDS:
+            state = "missed"
+        elif state == CALL_ACTIVE and age > ACTIVE_EXPIRY_SECONDS:
+            state = "answered"
+    if state not in _FINAL_CALL_STATES and state not in (CALL_RINGING, CALL_ACTIVE):
+        state = "missed"
+
+    # A call the caller abandoned before it connected is "cancelled" to them and
+    # "missed" to the person whose phone was ringing. Resolving it here rather
+    # than in the client keeps one mapping for one fact: two places translating
+    # the same stored state is how they drift apart.
+    if state == "cancelled" and (viewer is None or message.sender_id != viewer.id):
+        state = "missed"
+
+    return CallLog(
+        mode="video" if message.call_mode == "video" else "audio",
+        state=state,
+        by_me=viewer is not None and message.sender_id == viewer.id,
+        # A call that is still ringing or still connected has no final duration
+        # yet, so it carries none rather than a misleading zero.
+        seconds=message.call_seconds if state in _FINAL_CALL_STATES else None,
+    )
 
 
 def _read_by_partner(message: Message, partner_read_at, viewer: User | None) -> bool:
@@ -274,6 +359,7 @@ def _summarize(db: Session, user: User) -> list[ConversationOut]:
                 sticker=last.sticker,
                 edited_at=last.edited_at,
                 forwarded=last.forwarded_from_id is not None,
+                call=_call_log(last, user),
                 read_by_partner=_read_by_partner(last, partner_read_at, user),
             )
         out.append(
@@ -516,7 +602,10 @@ async def _broadcast_new_message(db: Session, message: Message, user: User) -> M
         # socket above covers an open tab. The sender is skipped: they already
         # know what they wrote.
         if participant_id != user.id:
-            push.schedule_notify(participant_id, push.message_payload(db, message, conversation_id))
+            push.schedule_notify(
+                participant_id,
+                push.message_payload(db, message, conversation_id, participant_id),
+            )
     return serialized
 
 
@@ -589,6 +678,8 @@ async def edit_message(
     history rather than correct a typo.
     """
     message = _require_message(db, conversation_id, message_id, user)
+    if message.call_state is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A call entry cannot be edited")
     if message.sender_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only edit your own messages")
 
@@ -707,6 +798,8 @@ async def forward_message(
     """
     _require_participant(db, target_conversation_id, user)
     source = _require_message(db, conversation_id, message_id, user)
+    if source.call_state is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A call entry cannot be forwarded")
 
     attachments = _rehome_media(db, source, user)
     message = Message(

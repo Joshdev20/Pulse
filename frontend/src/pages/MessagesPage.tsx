@@ -4,6 +4,7 @@ import { Avatar, DisplayName } from '../components/Avatar'
 import { MediaPicker } from '../components/MediaPicker'
 import { VoiceRecorderButton, voiceNoteFilename } from '../components/VoiceRecorderButton'
 import { MessageBubble } from '../components/MessageBubble'
+import { CallEntry } from '../components/CallEntry'
 import { MessageActionSheet } from '../components/MessageActionSheet'
 import type { MessageAction } from '../components/MessageActionSheet'
 import { StickerPicker } from '../components/StickerPicker'
@@ -358,9 +359,16 @@ function Thread({
     () =>
       subscribe((event) => {
         if (event.type === 'message' && event.message?.conversation_id === conversation.id) {
+          const incoming = event.message
           setMessages((current) => {
-            if (current.some((item) => item.id === event.message!.id)) return current
-            const next = [...current, event.message!]
+            // A call entry is created when the call starts and updated when it
+            // ends, so the same id arrives more than once. Replacing it in
+            // place is what turns "Calling…" into a duration without a reload.
+            const existing = current.findIndex((item) => item.id === incoming.id)
+            const next =
+              existing === -1
+                ? [...current, incoming]
+                : current.map((item, index) => (index === existing ? incoming : item))
             queryCache.write(historyKey, next)
             return next
           })
@@ -819,8 +827,13 @@ function Thread({
   const rendered = useMemo(() => {
     return messages.map((message, index) => {
       const previous = messages[index - 1]
+      // A call entry is a centred event, not a bubble, so nothing groups with
+      // it: a message that followed one would otherwise draw without an avatar
+      // and read as a continuation of the call.
       const grouped = Boolean(
         previous &&
+          !previous.call &&
+          !message.call &&
           previous.sender.id === message.sender.id &&
           new Date(message.created_at).getTime() - new Date(previous.created_at).getTime() <
             GROUP_WINDOW_MS,
@@ -899,14 +912,21 @@ function Thread({
                 <span>{dayLabel(message.created_at, now)}</span>
               </div>
             )}
-            <MessageBubble
-              message={message}
-              grouped={grouped}
-              partnerOnline={Boolean(partner.is_online)}
-              onReply={startReply}
-              onToggleLike={toggleLike}
-              onOpenMenu={(target, anchor) => setMenu({ message: target, anchor })}
-            />
+            {message.call ? (
+              <CallEntry
+                message={message}
+                onOpenMenu={(target, anchor) => setMenu({ message: target, anchor })}
+              />
+            ) : (
+              <MessageBubble
+                message={message}
+                grouped={grouped}
+                partnerOnline={Boolean(partner.is_online)}
+                onReply={startReply}
+                onToggleLike={toggleLike}
+                onOpenMenu={(target, anchor) => setMenu({ message: target, anchor })}
+              />
+            )}
           </div>
         ))}
 

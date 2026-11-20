@@ -123,6 +123,24 @@ export interface Message {
   forwarded: boolean
   /** The partner has read past this message. Only set on your own messages. */
   read_by_partner: boolean
+  /** Set when this row is a call rather than a message. */
+  call: CallLog | null
+}
+
+/**
+ * A call recorded in the thread.
+ *
+ * `state` is resolved by the server from the reader's point of view, so the
+ * same call is `missed` to the person who did not answer and `cancelled` to the
+ * caller who gave up. `ringing` and `active` are live: they carry no duration
+ * and the entry shows a timer instead.
+ */
+export interface CallLog {
+  mode: 'audio' | 'video'
+  state: 'ringing' | 'active' | 'answered' | 'missed' | 'declined' | 'cancelled'
+  /** True when you placed this call, which decides Incoming vs Outgoing. */
+  by_me: boolean
+  seconds: number | null
 }
 
 /** One entry in the sticker catalogue the server publishes. */
