@@ -946,6 +946,21 @@ the official account returns `400` while it is on.
   clean up after any prod probe. Removing a subscription in the browser alone leaves the
   server row behind; POST `/api/push/unsubscribe` with the endpoint first, or the row is
   orphaned until some future send to it returns 410 and prunes it.
+- `josh` is the admin account but its password is not the demo one, so a probe that needs
+  two live parties should use the official `pulse` account instead (credentials are the
+  ones the announcement workflow already uses) — `ada` holds a thread with it (26 at the
+  time of writing). Offering into that thread while `pulse` holds no socket is the
+  two-party test: the offer and the caller's ICE must come back on the next `pulse`
+  connect, which is what proves ringing-call replay is deployed.
+- Call signalling (offer SDP + caller ICE) lives only in process memory
+  (`_ringing_calls` in `routers/realtime.py`), like presence. That is what lets a callee
+  who opens the app from a ring notification still answer, and it is why a restart drops
+  calls in flight rather than half-restoring them. The call *row* is in the database and
+  decides whether a call is still live; the buffer only supplies the signalling, so a row
+  the sweeper has finalised is never replayed.
+- Ringing pushes go only to a callee with no socket in *this* worker, because an open tab
+  already rings in-app. With more than one worker a callee on another worker is pushed to
+  as well — the harmless direction, and the same single-node caveat presence already has.
 
 ## Feed ordering and rate-limit budgets
 
