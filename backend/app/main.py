@@ -94,6 +94,57 @@ def _backfill_official_follows() -> None:
         db.close()
 
 
+def _close_calls_left_open_by_a_restart(db=None) -> None:
+    """Finalise call rows that were still live when the process last stopped.
+
+    A restart ends every call: the peers' sockets drop with it, and nothing
+    survives to send the hangup that would normally close the row. Without this
+    a crash left rows reading as "Ongoing" until the six-hour backstop expired,
+    which is what a user saw as a call that never ended.
+
+    Only transient states are touched, so it is idempotent: a finished call is
+    already final and is left alone.
+
+    A session may be passed in so a test can reconcile the database it controls.
+    """
+    from sqlalchemy import select
+
+    from .database import SessionLocal
+    from .models import Message
+    from .routers.realtime import CALL_ACTIVE, CALL_RINGING, _connected_seconds
+
+    own_session = db is None
+    if db is None:
+        db = SessionLocal()
+    try:
+        rows = list(
+            db.scalars(
+                select(Message).where(
+                    Message.call_ref.is_not(None),
+                    Message.call_state.in_((CALL_RINGING, CALL_ACTIVE)),
+                )
+            ).all()
+        )
+        for row in rows:
+            if row.call_state == CALL_ACTIVE:
+                row.call_state = "answered"
+                row.call_seconds = _connected_seconds(row)
+            else:
+                row.call_state = "cancelled"
+        if rows:
+            db.commit()
+            logger.info("Closed %d call(s) left open by the previous process", len(rows))
+    except Exception:  # noqa: BLE001 - a boot must not fail over old call rows
+        logger.debug("could not reconcile open calls", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        if own_session:
+            db.close()
+
+
 def _backfill_like_views() -> None:
     """Treat a like as proof of a view.
 
@@ -183,6 +234,9 @@ async def lifespan(_app: FastAPI):
     # Join the cross-process realtime bus so a socket held by one worker still
     # receives events published by another.
     await manager.start()
+    # Before the sweeper: no call can outlive the process that was relaying it,
+    # so anything still marked live at boot is already over.
+    _close_calls_left_open_by_a_restart()
     # Finalise calls whose end frame never arrived, so an abandoned call cannot
     # sit as "Calling…" in a thread that is already open.
     sweeper = asyncio.create_task(_sweep_calls_forever())

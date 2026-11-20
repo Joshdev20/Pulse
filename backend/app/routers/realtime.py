@@ -1,7 +1,9 @@
 """Realtime WebSocket endpoint."""
 
+import asyncio
 import json
 import logging
+import time
 from datetime import timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -49,6 +51,8 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
     await manager.connect(user_id, socket)
     if not was_online:
         await _announce_presence(db, user_id, online=True)
+    # Per-socket, so it dies with the connection it describes.
+    peer_cache: dict[int, tuple[float, list[int]]] = {}
     try:
         await socket.send_text(json.dumps({"type": "ready", "user_id": user_id}))
         while True:
@@ -65,9 +69,9 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
             if kind == "ping":
                 await socket.send_text(json.dumps({"type": "pong"}))
             elif kind == "typing":
-                await _relay_typing(db, user_id, frame)
+                await _relay_typing(db, user_id, frame, peer_cache)
             elif kind == "call":
-                await _relay_call(db, user_id, frame)
+                await _relay_call(db, user_id, frame, peer_cache)
             elif kind == "read":
                 await socket.send_text(json.dumps({"type": "ack", "for": "read"}))
             elif kind not in ALLOWED_INBOUND:
@@ -156,7 +160,12 @@ def _release(db: DbSession) -> None:
     db.close()
 
 
-async def _relay_typing(db: DbSession, user_id: int, frame: dict) -> None:
+async def _relay_typing(
+    db: DbSession,
+    user_id: int,
+    frame: dict,
+    cache: dict[int, tuple[float, list[int]]] | None = None,
+) -> None:
     """Forward a typing indicator to the other member of the conversation.
 
     Membership is checked here rather than trusting the client's claim, so a
@@ -167,7 +176,7 @@ async def _relay_typing(db: DbSession, user_id: int, frame: dict) -> None:
         return
 
     try:
-        peers = _typing_peers(db, user_id, conversation_id)
+        peers = _cached_peers(db, user_id, conversation_id, cache)
     finally:
         _release(db)
 
@@ -180,23 +189,52 @@ async def _relay_typing(db: DbSession, user_id: int, frame: dict) -> None:
 
 def _typing_peers(db: DbSession, user_id: int, conversation_id: int) -> list[int]:
     """Other participants of `conversation_id`, or [] if the sender is not in it."""
-    mine = db.scalar(
-        select(ConversationParticipant.id).where(
-            ConversationParticipant.conversation_id == conversation_id,
-            ConversationParticipant.user_id == user_id,
-        )
-    )
-    if mine is None:
-        return []
-
-    return list(
+    # One query rather than two. This runs on the path of every relayed frame,
+    # and a call sends a dozen ICE frames: on a hosted Postgres each extra round
+    # trip is real latency added to call setup, which is the "Connecting…" that
+    # lingers.
+    members = list(
         db.scalars(
             select(ConversationParticipant.user_id).where(
-                ConversationParticipant.conversation_id == conversation_id,
-                ConversationParticipant.user_id != user_id,
+                ConversationParticipant.conversation_id == conversation_id
             )
         ).all()
     )
+    if user_id not in members:
+        return []
+    return [member for member in members if member != user_id]
+
+
+# How long a resolved peer list is reused for one socket. A typing indicator
+# fires on every keystroke and a call sends a dozen ICE frames, so without this
+# each of those was a database round trip on the event loop — hundreds of them
+# for one message, all of it blocking every other request. Membership cannot
+# change mid-call in this app, and the window is short enough that a revoked
+# member is cut off promptly.
+PEERS_CACHE_TTL_SECONDS = 10.0
+_PEERS_CACHE_MAX = 16
+
+
+def _cached_peers(
+    db: DbSession,
+    user_id: int,
+    conversation_id: int,
+    cache: dict[int, tuple[float, list[int]]] | None,
+) -> list[int]:
+    """`_typing_peers`, memoised for one socket for a few seconds."""
+    if cache is not None:
+        hit = cache.get(conversation_id)
+        if hit is not None and (time.monotonic() - hit[0]) < PEERS_CACHE_TTL_SECONDS:
+            return hit[1]
+    peers = _typing_peers(db, user_id, conversation_id)
+    if cache is not None:
+        if len(cache) >= _PEERS_CACHE_MAX:
+            # Oldest out. A socket only ever types or calls in a handful of
+            # threads, so this bounds the dict without an LRU structure.
+            oldest = min(cache, key=lambda key: cache[key][0])
+            cache.pop(oldest, None)
+        cache[conversation_id] = (time.monotonic(), peers)
+    return peers
 
 
 # The call lifecycle as relayed frames. A "signal" carries an opaque SDP or ICE
@@ -208,7 +246,12 @@ CALL_ACTIONS = {"offer", "answer", "ice", "accept", "decline", "hangup"}
 MAX_CALL_PAYLOAD_CHARS = 12_000
 
 
-async def _relay_call(db: DbSession, user_id: int, frame: dict) -> None:
+async def _relay_call(
+    db: DbSession,
+    user_id: int,
+    frame: dict,
+    cache: dict[int, tuple[float, list[int]]] | None = None,
+) -> None:
     """Forward one call-control frame, and keep the thread's call log in step.
 
     The server still never parses SDP or ICE: media stays peer to peer. What it
@@ -247,10 +290,13 @@ async def _relay_call(db: DbSession, user_id: int, frame: dict) -> None:
     # rather than raising on an unbound name below.
     peers: list[int] = []
     try:
-        peers = _typing_peers(db, user_id, conversation_id)
+        peers = _cached_peers(db, user_id, conversation_id, cache)
         if not peers:
             return
-        if call_ref is not None:
+        # ICE candidates only ever pass through: they are the bulk of a call's
+        # frames and none of them changes the logged state, so looking the row up
+        # for each one is a round trip spent to learn nothing.
+        if call_ref is not None and action != "ice":
             await _record_call(db, user_id, conversation_id, call_ref, action, mode)
     except Exception:  # noqa: BLE001 - logging a call must not break signalling
         logger.debug("could not record call for user %s", user_id, exc_info=True)
@@ -377,6 +423,22 @@ async def _publish_call_entry(db: DbSession, row: Message, conversation_id: int)
     relative: the same row is "Outgoing" to the caller and "Missed" to the
     person who did not answer.
     """
+    for participant_id, payload in _call_entry_frames(db, row, conversation_id):
+        await manager.publish(participant_id, payload)
+
+
+def _call_entry_frames(
+    db: Session, row: Message, conversation_id: int
+) -> list[tuple[int, dict]]:
+    """Build the per-reader frames for a call entry, without sending them.
+
+    Split from the publish so the blocking part can run in a worker thread and
+    the awaiting part on the event loop: the sweeper calls this from a thread
+    and hands the result back to publish. Queuing the push alert also happens
+    here, because `schedule_notify` only appends to a queue and is safe to call
+    from either.
+    """
+    frames: list[tuple[int, dict]] = []
     participant_ids = list(
         db.scalars(
             select(ConversationParticipant.user_id).where(
@@ -389,13 +451,15 @@ async def _publish_call_entry(db: DbSession, row: Message, conversation_id: int)
         if viewer is None:
             continue
         payload = serialize_messages(db, [row], viewer)[0].model_dump(mode="json")
-        await manager.publish(
-            participant_id,
-            {
-                "type": "message",
-                "conversation_id": conversation_id,
-                "message": payload,
-            },
+        frames.append(
+            (
+                participant_id,
+                {
+                    "type": "message",
+                    "conversation_id": conversation_id,
+                    "message": payload,
+                },
+            )
         )
         # A call the recipient never picked up has to reach a closed browser:
         # the socket above only covers a tab that is already open, which is
@@ -408,6 +472,7 @@ async def _publish_call_entry(db: DbSession, row: Message, conversation_id: int)
                 participant_id,
                 push.message_payload(db, row, conversation_id, participant_id),
             )
+    return frames
 
 
 # How stale a transient call row may be before it is finalised.
@@ -439,6 +504,32 @@ async def sweep_stale_calls(db: Session | None = None) -> int:
 
     A session may be passed in so a test can sweep the database it controls;
     the running app passes nothing and gets its own.
+
+    The database work runs in a worker thread. SQLAlchemy is synchronous, and
+    this is called from a background task on the event loop: a query against a
+    remote Postgres takes tens of milliseconds at best and seconds when the
+    pool is busy, and every one of those milliseconds is time the loop is not
+    answering anything else. A sweep that ran inline stalled `/api/health` long
+    enough for Render's health check to fail and restart the service.
+
+    The two halves need different threads: the queries are blocking and belong
+    off the event loop, the sends are `await`ing and belong on it.
+    """
+    resolved, frames = await asyncio.to_thread(_sweep_stale_calls_sync, db)
+    for participant_id, payload in frames:
+        try:
+            await manager.publish(participant_id, payload)
+        except Exception:  # noqa: BLE001 - one bad peer must not stop the rest
+            logger.debug("could not publish resolved call to %s", participant_id, exc_info=True)
+    return resolved
+
+
+def _sweep_stale_calls_sync(db: Session | None = None) -> tuple[int, list[tuple[int, dict]]]:
+    """The blocking half of `sweep_stale_calls`; see it for the contract.
+
+    Returns the number of rows resolved and the frames that announce them. The
+    caller publishes those; this function never awaits, so it is safe to run in
+    a worker thread.
     """
     own_session = db is None
     if db is None:
@@ -446,7 +537,11 @@ async def sweep_stale_calls(db: Session | None = None) -> int:
 
         db = SessionLocal()
     resolved = 0
+    frames: list[tuple[int, dict]] = []
     try:
+        # One bounded read. The rows this can match are the calls that are
+        # ringing or connected *right now*, which is a handful at most, so the
+        # scan stays small even on a busy day.
         stale = list(
             db.scalars(
                 select(Message).where(
@@ -476,12 +571,16 @@ async def sweep_stale_calls(db: Session | None = None) -> int:
             db.commit()
             resolved += 1
             try:
-                await _publish_call_entry(db, row, row.conversation_id)
+                frames.extend(_call_entry_frames(db, row, row.conversation_id))
             except Exception:  # noqa: BLE001 - publishing must not stop the sweep
-                logger.debug("could not publish resolved call %s", row.id, exc_info=True)
+                logger.debug("could not build frame for resolved call %s", row.id, exc_info=True)
     except Exception:  # noqa: BLE001 - a sweep failure must not kill the loop
         logger.debug("call sweep failed", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
     finally:
         if own_session:
             db.close()
-    return resolved
+    return resolved, frames

@@ -202,6 +202,20 @@ the public URL returns 502 until the dev server is bound to 12000.
   baseline. If the text message is also seconds late, the delay is the platform, not the
   call code. Use waits of 20-25 s when driving production.
 
+- The realtime relay must not do per-frame database work on the event loop. Three fixes
+  came out of the "call sticks on Connecting, then the server restarts" report, and each
+  is guarded by a test in `tests/test_messages.py`:
+  - `sweep_stale_calls` runs its queries through `asyncio.to_thread`. It used to call
+    SQLAlchemy inline every 15 s, which on a hosted database stalled the loop long enough
+    for Render's `/api/health` check to fail and restart the service mid-call.
+  - The peer list for a socket is cached for `PEERS_CACHE_TTL_SECONDS`. Typing fires per
+    keystroke and a call sends a dozen ICE frames; each was a membership query.
+  - `ice` frames skip the call-row lookup entirely. They are most of a call's frames and
+    none of them changes the logged state.
+  `_close_calls_left_open_by_a_restart` also runs at boot: no call outlives the process
+  relaying it, so a row still `ringing`/`active` at startup is already over. Without it a
+  crash left rows reading as "Ongoing" for the six-hour backstop.
+
 - Presence is a *transition*, not a per-socket fact. `routers/realtime.py` announces it only
   when the first socket for a user connects and the last one disconnects, so a second tab
   does not flicker the status. It fans out to conversation partners only (`_announce_presence`

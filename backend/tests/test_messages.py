@@ -1801,3 +1801,173 @@ def test_the_sweeper_leaves_a_call_that_is_still_ringing_alone(client, make_user
     row = db_session.query(Message).filter(Message.call_ref == "c1").one()
     assert row.call_state == "ringing"
     assert _call_entries(client, grace, cid)[0]["call"]["state"] == "ringing"
+
+
+def test_the_sweeper_runs_its_queries_off_the_event_loop():
+    """A sweep must not block the loop that answers every other request.
+
+    The sweeper used to call SQLAlchemy straight from a background task, so each
+    pass occupied the event loop for the length of several queries. Against a
+    hosted database that is long enough for the platform's health check to time
+    out, which is what restarted the service mid-call.
+
+    Guarded structurally rather than by timing a real query: a blocking call
+    would have to appear inside the coroutine itself, and this fails if one does.
+    """
+    import inspect as _inspect
+
+    from app.routers import realtime
+
+    source = _inspect.getsource(realtime.sweep_stale_calls)
+    # The coroutine must hand the blocking work to a worker thread...
+    assert "to_thread" in source
+    # ...rather than doing it itself, which would stall the loop.
+    for blocking in ("db.scalars", "db.commit", "db.get("):
+        assert blocking not in source
+    # And the function it delegates to must not be a coroutine, or `to_thread`
+    # would return an un-awaited coroutine instead of a result.
+    assert not _inspect.iscoroutinefunction(realtime._sweep_stale_calls_sync)
+
+
+def test_the_sweeper_still_finalises_a_stale_row_through_its_threaded_path(
+    client, make_user, db_session
+):
+    """The threaded path must return the count and still push the finished entry."""
+    from datetime import timedelta
+
+    from app.models import Message, utcnow
+    from app.routers.realtime import CALL_RING_STALE_SECONDS, sweep_stale_calls
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        row = db_session.query(Message).filter(Message.call_ref == "c1").one()
+        row.created_at = utcnow() - timedelta(seconds=CALL_RING_STALE_SECONDS + 5)
+        db_session.commit()
+
+        assert asyncio.run(sweep_stale_calls(db_session)) == 1
+        pushed = _pushed_call_state(ada_socket, "cancelled")
+        assert pushed["message"]["call"]["state"] == "cancelled"
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+
+def test_a_call_still_marked_live_at_boot_is_closed(client, make_user, db_session):
+    """A restart ends every call, so nothing may read as live after one.
+
+    The process that was relaying a call cannot outlive it: its sockets drop and
+    the hangup frame that would close the row is never sent. Before this the row
+    stayed `active` until the six-hour backstop, which showed as a call that had
+    ended still reading as ongoing in the thread and the inbox.
+    """
+    from app.main import _close_calls_left_open_by_a_restart
+    from app.models import Message
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+        _call(grace_socket, "grace", cid, "answer")
+        recv_frame(ada_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    # The answer was recorded, so the row is `active` when the process dies.
+    row = db_session.query(Message).filter(Message.call_ref == "c1").one()
+    assert row.call_state == "active"
+
+    _close_calls_left_open_by_a_restart(db_session)
+
+    db_session.expire_all()
+    row = db_session.query(Message).filter(Message.call_ref == "c1").one()
+    assert row.call_state == "answered"
+    assert row.call_seconds is not None
+    assert _call_entries(client, ada, cid)[0]["call"]["state"] == "answered"
+
+
+def test_a_ringing_row_left_at_boot_reads_as_missed(client, make_user, db_session):
+    """A call that was still ringing when the process died was never answered."""
+    from app.main import _close_calls_left_open_by_a_restart
+    from app.models import Message
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    ada_socket, grace_socket = _two_sockets(client, ada, grace)
+    try:
+        _call(ada_socket, "ada", cid, "offer")
+        recv_frame(grace_socket, "call")
+    finally:
+        _close(ada_socket)
+        _close(grace_socket)
+
+    _close_calls_left_open_by_a_restart(db_session)
+
+    db_session.expire_all()
+    assert _call_entries(client, ada, cid)[0]["call"]["state"] == "cancelled"
+    assert _call_entries(client, grace, cid)[0]["call"]["state"] == "missed"
+
+
+def test_a_burst_of_call_frames_does_not_query_the_database_each_time(
+    client, make_user, db_session
+):
+    """A call's frames must not each pay a membership query.
+
+    Trickle ICE sends a dozen frames per call, and typing fires per keystroke.
+    Every one of those used to run a membership lookup on the event loop, which
+    is what made call setup crawl on a hosted database.
+    """
+    from sqlalchemy import event as sa_event
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    cid = start(client, ada, "grace").json()["id"]
+
+    queries = 0
+
+    def count(conn, cursor, statement, params, context, executemany):
+        nonlocal queries
+        # Only the peer lookup the relay path makes, not the unrelated
+        # participant queries the HTTP endpoints run around it.
+        flat = " ".join(statement.split())
+        if flat.startswith("SELECT conversation_participants.user_id FROM") and (
+            "conversation_id = ?" in flat
+        ):
+            queries += 1
+
+    # The engine the API is actually writing to in this test, not the app's
+    # configured one, which the fixture has overridden.
+    test_engine = db_session.get_bind()
+
+    sa_event.listen(test_engine, "before_cursor_execute", count)
+    try:
+        ada_socket, grace_socket = _two_sockets(client, ada, grace)
+        try:
+            _call(ada_socket, "ada", cid, "offer")
+            recv_frame(grace_socket, "call")
+            # A burst of ICE frames, as a real call sends.
+            for i in range(12):
+                _call(ada_socket, "ada", cid, "ice", payload=f'{{"candidate":{i}}}')
+            for _ in range(12):
+                recv_frame(grace_socket, "call")
+        finally:
+            _close(ada_socket)
+            _close(grace_socket)
+    finally:
+        sa_event.remove(test_engine, "before_cursor_execute", count)
+
+    # One lookup per socket for the whole burst; without the cache this is one
+    # per frame, so 26 rather than 2.
+    assert queries <= 2, f"expected the peer list to be cached, saw {queries} queries"

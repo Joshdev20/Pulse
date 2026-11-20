@@ -95,6 +95,9 @@ export function callPreview(call: CallLog): string {
  * server still considers live is not shown as missed here first.
  */
 const RING_STALE_MS = 90_000
+// Matches the server's `ACTIVE_EXPIRY_SECONDS`. Both are a backstop for a row
+// whose final hangup was lost, so they only need to be longer than any call
+// that could really still be running.
 const ACTIVE_STALE_MS = 6 * 60 * 60 * 1000
 
 /**

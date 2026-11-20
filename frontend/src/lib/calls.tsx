@@ -49,8 +49,16 @@ const RTC_CONFIG: RTCConfiguration = {
  */
 const INCOMING_TIMEOUT_MS = RING_TIMEOUT_MS + 10_000
 
-/** How long a call can sit in `connecting` before it is treated as failed. */
-const CONNECT_TIMEOUT_MS = 20_000
+/**
+ * How long a call can sit in `connecting` before it is treated as failed.
+ *
+ * Generous on purpose. Signalling frames are relayed through the server, and on
+ * a slow link an answer plus a couple of ICE candidates can take longer than a
+ * snappy local test ever shows; a bound that fires first turns a call that was
+ * about to connect into "Connecting… then it ended". This is a backstop for a
+ * call that is genuinely dead, not a target.
+ */
+const CONNECT_TIMEOUT_MS = 45_000
 
 export type CallMode = 'audio' | 'video'
 
@@ -272,7 +280,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
           }, 1000)
           setState((current) => ({ ...current, phase: 'active' }))
         }
-        if (pc.connectionState === 'failed') end('failed')
+        // Announce it: a call that dies here leaves a row the server still
+        // believes is ringing, which is the "Calling…" that never clears. The
+        // hangup is what finalises it for both sides.
+        if (pc.connectionState === 'failed') end('failed', true)
       }
 
       return pc
@@ -569,7 +580,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
       return
     }
     if (disconnectTimer.current !== null) return
-    disconnectTimer.current = window.setTimeout(() => end('failed'), DISCONNECT_GRACE_MS)
+    disconnectTimer.current = window.setTimeout(
+      () => end('failed', true),
+      DISCONNECT_GRACE_MS,
+    )
   }, [connected, end, state.phase])
 
   // Leaving the page ends the call rather than leaving the peer waiting.
