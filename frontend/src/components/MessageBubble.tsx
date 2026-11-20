@@ -111,6 +111,10 @@ export function MessageBubble({
       pressTimer.current = null
       longPressed.current = true
       setPressing(false)
+      // A selection can already be in progress by the time the hold completes,
+      // if the browser started one before the CSS could stop it. Dropping it
+      // here means the sheet never opens over a half-highlighted message.
+      window.getSelection()?.removeAllRanges()
       // A short haptic tick confirms the menu opened, on devices that have one.
       navigator.vibrate?.(12)
       openMenu()

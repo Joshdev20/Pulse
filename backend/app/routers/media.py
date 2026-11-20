@@ -47,7 +47,7 @@ def _poster_from(data: bytes | None) -> tuple[str, bytes] | None:
 
 
 def _duration_ms(value: int | None) -> int | None:
-    """A sane video length, or None.
+    """A sane clip length, or None.
 
     Clamped rather than rejected: the number only drives a badge, and a client
     reporting a nonsense length should not lose its upload over it.
@@ -128,7 +128,12 @@ async def upload(
         blob=data,
         poster_content_type=poster_data[0] if poster_data else None,
         poster_blob=poster_data[1] if poster_data else None,
-        duration_ms=_duration_ms(duration_ms) if sniffed.kind == "video" else None,
+        # Audio carries a length too: a voice note shows it before the reader
+        # plays anything, so dropping it for anything but video left every
+        # voice bubble with no duration until its metadata was fetched.
+        duration_ms=_duration_ms(duration_ms)
+        if sniffed.kind in ("video", "audio")
+        else None,
         alt_text=alt_text.strip()[:280],
     )
     db.add(media)

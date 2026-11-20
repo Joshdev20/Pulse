@@ -360,6 +360,41 @@ def test_audio_upload_is_accepted(client, make_user):
     assert body["url"] == f"/api/media/{body['id']}"
 
 
+def test_audio_upload_keeps_its_duration(client, make_user):
+    """A voice note shows its length before it is played, so it must be stored.
+
+    The length used to be kept only for video, which left every voice bubble
+    showing nothing until the reader fetched the clip's metadata — and nothing
+    at all when that fetch never happened.
+    """
+    headers, _ = make_user("ada")
+    response = client.post(
+        "/api/media",
+        headers=headers,
+        files={"file": ("note.wav", io.BytesIO(wav_bytes()), "audio/wav")},
+        data={"alt_text": "voice note", "duration_ms": "7000"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["duration_ms"] == 7000
+
+
+def test_audio_duration_is_clamped_like_video(client, make_user):
+    """One clamp serves both kinds, so a nonsense length is dropped either way."""
+    headers, _ = make_user("ada")
+
+    def upload(duration: str):
+        return client.post(
+            "/api/media",
+            headers=headers,
+            files={"file": ("note.wav", io.BytesIO(wav_bytes()), "audio/wav")},
+            data={"alt_text": "voice note", "duration_ms": duration},
+        ).json()["duration_ms"]
+
+    assert upload("0") is None
+    assert upload("-5") is None
+    assert upload("99999999999") == 24 * 60 * 60 * 1000
+
+
 def test_audio_upload_rejects_html_disguised_as_audio(client, make_user):
     """The sniff decides, not the declared content type or the file name."""
     headers, _ = make_user("ada")

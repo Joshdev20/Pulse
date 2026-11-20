@@ -25,12 +25,20 @@ import { api } from '../lib/api'
 import { formatCount } from '../lib/format'
 import type { Stats, TrendingTag, User } from '../lib/types'
 
+/**
+ * `label` is the sidebar wording; `short` is what the bottom bar shows.
+ *
+ * Six tabs share a phone's width, so a label has about 60px. "Notifications"
+ * cannot fit in that, and the bar used to drop every label rather than
+ * truncate one — which left the mobile navigation as six unlabelled icons.
+ * Short words fit, so every tab keeps a name.
+ */
 const NAV = [
-  { to: '/', label: 'Home', icon: HomeIcon, end: true, badge: null },
-  { to: '/explore', label: 'Explore', icon: CompassIcon, end: false, badge: null },
-  { to: '/notifications', label: 'Notifications', icon: BellIcon, end: false, badge: 'notifications' },
-  { to: '/messages', label: 'Messages', icon: MailIcon, end: false, badge: 'messages' },
-  { to: '/search', label: 'Search', icon: SearchIcon, end: false, badge: null },
+  { to: '/', label: 'Home', short: 'Home', icon: HomeIcon, end: true, badge: null },
+  { to: '/explore', label: 'Explore', short: 'Explore', icon: CompassIcon, end: false, badge: null },
+  { to: '/notifications', label: 'Notifications', short: 'Alerts', icon: BellIcon, end: false, badge: 'notifications' },
+  { to: '/messages', label: 'Messages', short: 'Chats', icon: MailIcon, end: false, badge: 'messages' },
+  { to: '/search', label: 'Search', short: 'Search', icon: SearchIcon, end: false, badge: null },
 ] as const
 
 /** Live counts for the sidebar badges, driven by realtime events. */
@@ -195,7 +203,7 @@ export function MobileNav() {
 
   return (
     <nav className="mobile-bar" aria-label="Primary">
-      {NAV.map(({ to, label, icon: Icon, end, badge }) => (
+      {NAV.map(({ to, short, icon: Icon, end, badge }) => (
         <NavLink
           key={to}
           to={to}
@@ -206,7 +214,7 @@ export function MobileNav() {
             <Icon size={21} />
             {badge && <Badge value={badges[badge]} className="mobile-nav-badge" />}
           </span>
-          <span>{label}</span>
+          <span>{short}</span>
         </NavLink>
       ))}
       {user && (
@@ -214,7 +222,11 @@ export function MobileNav() {
           to={`/u/${user.username}`}
           className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
         >
-          <UserIcon size={21} />
+          {/* Wrapped like every other tab so the icons share one baseline; the
+              bare icon sat a few pixels lower than its neighbours. */}
+          <span className="mobile-nav-icon">
+            <UserIcon size={21} />
+          </span>
           <span>Profile</span>
         </NavLink>
       )}
@@ -223,7 +235,9 @@ export function MobileNav() {
           to="/admin"
           className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
         >
-          <ShieldIcon size={21} />
+          <span className="mobile-nav-icon">
+            <ShieldIcon size={21} />
+          </span>
           <span>Admin</span>
         </NavLink>
       )}

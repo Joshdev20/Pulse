@@ -22,6 +22,11 @@
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.16);
 
+  /* A bubble's edge. Transparent in the dark theme, where the fill alone reads
+     against the page; the light theme fills this in, because there the fill and
+     the background are too close to tell apart without a hairline. */
+  --bubble-ring: transparent;
+
   /* Accents */
   --accent: #b8f24a;
   --accent-ink: #10160a;
@@ -83,6 +88,9 @@
   --sidebar-w: 248px;
   --rail-w: 320px;
   --shell-max: 1260px;
+  /* The bottom navigation bar's content height, shared so the conversation
+     pane can reserve exactly as much space as the bar occupies. */
+  --mobile-bar-h: 56px;
 
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
@@ -111,6 +119,9 @@
 
   --border: rgba(16, 20, 32, 0.1);
   --border-strong: rgba(16, 20, 32, 0.18);
+  /* Needed here: `--surface-2` sits too close to `--bg` on a light page for the
+     fill alone to show where one bubble ends. */
+  --bubble-ring: rgba(16, 20, 32, 0.07);
 
   /* A lime accent cannot carry dark text on white, so the light theme uses a
      deeper olive for the accent and keeps white as the ink on top of it. */
@@ -318,6 +329,10 @@ h4 {
   flex-direction: column;
   min-height: 100vh;
   min-height: 100dvh;
+  /* The pane already fills the viewport and scrolls internally, so the page's
+     own bottom padding would only be dead space under the composer. The bar's
+     height is added back below, and only where the bar exists. */
+  padding-bottom: 0;
 }
 
 .main:has(> .messages) > .page-head {
@@ -2897,8 +2912,9 @@ h4 {
 }
 
 .inbox-name {
-  font-weight: 650;
-  font-size: 14.5px;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.005em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2907,12 +2923,14 @@ h4 {
 .inbox-time {
   margin-left: auto;
   flex: none;
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 550;
   color: var(--text-faint);
 }
 
 .inbox-preview {
   font-size: 13.5px;
+  font-weight: 450;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2962,16 +2980,36 @@ h4 {
 }
 
 .thread-name {
-  font-weight: 650;
-  font-size: 15px;
+  font-weight: 700;
+  font-size: 15.5px;
+  letter-spacing: -0.005em;
 }
 
 .thread-handle {
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
+/* Typing and presence are the two live states worth colouring, so they read
+   before the static timestamp does. */
+.thread-handle.online {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.thread-handle.typing {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .thread-back {
+  display: none;
+}
+
+/* The copy inside the thread's own header. It only exists for the phone
+   layout, where the page header — and the back button in it — is hidden. */
+.thread-back-inline {
   display: none;
 }
 
@@ -3007,29 +3045,42 @@ h4 {
 }
 
 .bubble {
-  padding: 10px 14px;
-  border-radius: 18px 18px 18px 6px;
+  padding: 9px 13px;
+  border-radius: 20px 20px 20px 7px;
+  /* A ring rather than a border: it does not add to the box, so a bubble keeps
+     the same width in either theme, and it is transparent wherever the fill
+     already separates the bubble from the page. */
+  box-shadow: inset 0 0 0 1px var(--bubble-ring);
   background: var(--surface-2);
-  border: 1px solid var(--border);
   min-width: 0;
 }
 
 .bubble.mine {
-  border-radius: 18px 18px 6px 18px;
+  border-radius: 20px 20px 7px 20px;
   background: var(--accent-soft);
-  border-color: var(--accent-line);
 }
 
 .bubble p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 14.5px;
+  font-size: 15px;
+  /* A touch heavier and looser than body copy: at this size the extra weight
+     is what makes a message readable at a glance on a phone. */
+  font-weight: 450;
+  line-height: 1.45;
+  letter-spacing: 0.002em;
+}
+
+.bubble.mine p {
+  color: var(--text);
 }
 
 .bubble-time {
   display: block;
-  margin-top: 4px;
-  font-size: 11.5px;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
   color: var(--text-faint);
 }
 
@@ -3515,8 +3566,6 @@ h4 {
   }
 
   .main:has(> .messages) {
-    /* Leave room for the fixed bottom bar, which overlays the page. */
-    padding-bottom: 76px;
     /* Claim a definite height, not just a minimum. With only `min-height` the
        pane is free to grow, so a long thread makes `.messages` taller than the
        viewport, `.thread-body` never overflows its own box, and the page
@@ -3527,6 +3576,14 @@ h4 {
     height: 100vh;
     height: 100dvh;
     min-height: 0;
+  }
+
+  /* The conversation fills the phone: no rounded card, no side margin. A
+     floating card on a 390px screen spends its border and radius on chrome the
+     thread needs for messages. */
+  .main:has(> .messages) > .messages {
+    border: 0;
+    border-radius: 0;
   }
 
   .messages-inbox {
@@ -3547,6 +3604,21 @@ h4 {
 
   .thread-back {
     display: grid;
+  }
+
+  .thread-back-inline {
+    display: grid;
+    margin-left: -6px;
+  }
+
+  /* An open conversation already names the partner in its own header. The page
+     header above it would repeat that name and, worse, spend 67px of a phone
+     screen on the repetition — which is what pushed the thread down and left
+     the message list with room for only a few bubbles. The thread's own header
+     carries the back control, the presence line and the call buttons, so
+     nothing is lost by dropping this one. */
+  .main:has(> .messages.show-thread) > .page-head {
+    display: none;
   }
 
   .thread-body {
@@ -3577,6 +3649,41 @@ h4 {
     padding: 0 0 96px;
   }
 
+  /* The bar is fixed and drawn over the page, so the pane reserves exactly its
+     height. Reserving it here rather than at the 900px breakpoint keeps the
+     space tied to the breakpoint that actually shows the bar. */
+  .main:has(> .messages) {
+    padding-bottom: calc(var(--mobile-bar-h) + env(safe-area-inset-bottom));
+  }
+
+  /* An open conversation takes the whole screen: no bottom bar, and no space
+     reserved for one. A chat is a place you are in, and a tab bar under the
+     composer only ever competes with the send button for the thumb. Leaving is
+     the thread header's back control, so the bar is not needed to get out.
+     Scoped with `:has` from `.app`, because the bar is a sibling of the shell
+     rather than a child of the page. */
+  .app:has(.messages.show-thread) .mobile-bar {
+    display: none;
+  }
+
+  .main:has(> .messages.show-thread) {
+    padding-bottom: 0;
+  }
+
+  /* The floating compose button would sit where the bar used to be, over the
+     thread's own composer. */
+  .app:has(.messages.show-thread) .mobile-compose {
+    display: none;
+  }
+
+  /* With the bar gone the composer is the last thing on the screen, so it has
+     to clear the home indicator itself. The bar used to provide that inset by
+     sitting underneath; without this the send button sat under the gesture
+     area on a notched phone. */
+  .app:has(.messages.show-thread) .thread-composer {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
   .mobile-bar {
     display: flex;
     position: fixed;
@@ -3584,10 +3691,15 @@ h4 {
     left: 0;
     right: 0;
     z-index: 70;
+    /* An explicit height, so the conversation pane can reserve exactly this
+       much space and the composer lands flush on top of the bar instead of
+       floating above a strip of dead background. */
+    height: calc(var(--mobile-bar-h) + env(safe-area-inset-bottom));
+    align-items: center;
     background: var(--glass);
     backdrop-filter: blur(16px) saturate(160%);
     border-top: 1px solid var(--border);
-    padding: 7px 6px calc(7px + env(safe-area-inset-bottom));
+    padding: 0 6px env(safe-area-inset-bottom);
   }
 
   .mobile-nav-item {
@@ -3595,12 +3707,15 @@ h4 {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 3px;
-    padding: 7px 2px;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 2px;
     border-radius: var(--radius-sm);
     color: var(--text-faint);
-    font-size: 10.5px;
-    font-weight: 600;
+    font-size: 10px;
+    line-height: 1.15;
+    font-weight: 650;
+    letter-spacing: 0.01em;
     position: relative;
     min-width: 0;
   }
@@ -3734,13 +3849,11 @@ h4 {
     gap: 14px;
     font-size: 13.5px;
   }
-  /* Five labelled items cannot fit across a phone this narrow. The icons carry
-     the meaning and each link keeps its accessible name. */
-  .mobile-nav-item > span:last-child {
-    display: none;
-  }
+  /* Labels stay. They are short enough to fit (see the `short` field on NAV),
+     and an icon-only bar makes the reader guess at six unlabelled glyphs. */
   .mobile-nav-item {
-    padding: 8px 2px;
+    padding: 5px 1px;
+    font-size: 9.5px;
   }
 
   .composer {
@@ -4333,15 +4446,20 @@ h4 {
   margin-top: 6px;
 }
 
+/* A voice note: a filled play control, a waveform that fills as it plays, and
+   the length. The waveform is the progress bar, so there is one element where
+   there used to be a track and a separate fill. */
 .voice-note {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 190px;
-  padding: 7px 12px 7px 7px;
+  gap: 11px;
+  min-width: 208px;
+  padding: 6px 14px 6px 6px;
   border-radius: 999px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
+  /* A tint rather than an outlined pill: inside an already-tinted bubble a
+     second ring would read as a nested box. The fill alone separates the
+     controls from the message text. */
+  background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
 .voice-note.failed {
@@ -4349,13 +4467,14 @@ h4 {
 }
 
 .bubble.mine .voice-note {
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
+  /* Deeper than the bubble it sits in, so the note reads as one object on the
+     accent fill instead of a patch of the same colour. */
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
 .voice-play {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   flex: none;
   display: grid;
   place-items: center;
@@ -4364,38 +4483,96 @@ h4 {
   background: var(--accent);
   color: var(--accent-ink);
   cursor: pointer;
+  /* A soft shadow lifts the control off the track without drawing an outline,
+     which is what keeps the bubble reading as one object rather than a form. */
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 34%, transparent);
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.voice-play:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 44%, transparent);
+}
+
+.voice-play:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .voice-play:disabled {
   background: var(--surface-2);
   color: var(--text-muted);
+  box-shadow: none;
   cursor: default;
 }
 
 .voice-track {
   flex: 1;
-  height: 5px;
-  min-width: 70px;
-  border-radius: 999px;
-  background: var(--border-strong);
+  height: 30px;
+  min-width: 96px;
+  display: flex;
+  align-items: center;
   cursor: pointer;
-  overflow: hidden;
 }
 
-.voice-fill {
-  display: block;
+.voice-wave {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  width: 100%;
   height: 100%;
+}
+
+.voice-bar {
+  flex: 1;
+  min-width: 2px;
+  max-width: 3px;
   border-radius: 999px;
+  background: var(--border-strong);
+  transition: background 0.12s linear;
+}
+
+.voice-bar.played {
   background: var(--accent);
-  transition: width 0.12s linear;
+}
+
+.voice-note.playing .voice-bar:not(.played) {
+  /* A slow shimmer on the unplayed remainder is the only motion the bubble
+     needs; it says "running" without a spinner. */
+  animation: voice-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes voice-shimmer {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .voice-time {
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
-  min-width: 32px;
+  min-width: 36px;
   text-align: right;
+  letter-spacing: 0.01em;
+}
+
+.bubble.mine .voice-time {
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-note.playing .voice-bar:not(.played) {
+    animation: none;
+  }
+  .voice-play {
+    transition: none;
+  }
 }
 
 
@@ -4998,6 +5175,14 @@ h4 {
 
 .inbox-row.unread .inbox-preview {
   color: var(--text);
+  font-weight: 550;
+}
+
+/* The time is the third cue that a row is unread, after the bar and the
+   brighter preview. It is the one that survives a glance down the list. */
+.inbox-row.unread .inbox-time {
+  color: var(--accent);
+  font-weight: 650;
 }
 
 .inbox-avatar {
@@ -5188,14 +5373,22 @@ h4 {
   user-select: none;
 }
 
-/* Selecting text is a desktop gesture. Enabling it on touch would make a long
-   press start a selection instead of opening the action menu, so it is limited
-   to devices with a real pointer. */
-@media (hover: hover) and (pointer: fine) {
-  .bubble p {
-    -webkit-user-select: text;
-    user-select: text;
-  }
+/* A long press is the bubble's own gesture, so nothing inside it may start a
+   text selection or raise the iOS callout menu — either one turns a hold into a
+   half-selected message with the action sheet on top of it.
+   
+   This used to be lifted on devices reporting a fine pointer, so desktop
+   readers could select text with the mouse. That leaked: some touch devices
+   report `hover: hover` (Samsung Internet, a tablet with a trackpad, Android
+   with a paired mouse), so the rule re-enabled selection on exactly the
+   screens where the long press matters. Text is still reachable through the
+   menu's Copy action, which works everywhere and copies the whole message
+   rather than a fiddly partial selection. */
+.bubble,
+.bubble * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .bubble.dragging {

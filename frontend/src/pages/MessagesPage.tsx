@@ -793,7 +793,10 @@ function Thread({
       // it, and the server sniffs the bytes, so the name only has to carry the
       // right container.
       const file = new File([note.blob], voiceNoteFilename(note), { type: note.mimeType })
-      const media = await api.upload(file, 'Voice note')
+      // The recorder already knows how long the clip is. Sending it means the
+      // bubble can show the length immediately, instead of waiting for the
+      // audio element to decode metadata it may never fetch.
+      const media = await api.upload(file, 'Voice note', undefined, null, note.duration * 1000)
       const sent = await api.sendMessage(
         conversation.id,
         '',
@@ -847,6 +850,13 @@ function Thread({
   return (
     <div className="thread">
       <header className="thread-head">
+        {/* On a phone the thread owns the screen, so it carries its own way
+            back rather than leaving that to the page header above it, which is
+            hidden while a thread is open. On a desktop the page header keeps
+            its own back button and this one stays out of the way. */}
+        <Link to="/messages" className="icon-btn thread-back-inline" aria-label="Back to inbox">
+          <ChevronLeftIcon size={20} />
+        </Link>
         <Link to={`/u/${partner.username}`} className="thread-partner">
           <span className="thread-avatar">
             <Avatar

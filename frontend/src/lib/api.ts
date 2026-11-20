@@ -321,7 +321,8 @@ export const api = {
     altText = '',
     onProgress?: (percent: number) => void,
     poster?: { blob: Blob; durationMs: number } | null,
-  ) => uploadWithProgress<Media>('/api/media', file, altText, onProgress, poster),
+    durationMs?: number | null,
+  ) => uploadWithProgress<Media>('/api/media', file, altText, onProgress, poster, durationMs),
 
   conversations: () => request<Conversation[]>('/api/conversations'),
 
@@ -450,6 +451,7 @@ function uploadWithProgress<T>(
   altText: string,
   onProgress?: (percent: number) => void,
   poster?: { blob: Blob; durationMs: number } | null,
+  durationMs?: number | null,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const form = new FormData()
@@ -461,6 +463,12 @@ function uploadWithProgress<T>(
     if (poster) {
       form.append('poster', poster.blob, 'poster.jpg')
       form.append('duration_ms', String(poster.durationMs))
+    } else if (durationMs && durationMs > 0) {
+      // A voice note has a length but no poster frame. Sending the length up
+      // front is what lets the bubble show "0:07" before anything is played;
+      // the element's own metadata arrives a round trip later, or not at all
+      // when the clip is still uploading to the reader's cache.
+      form.append('duration_ms', String(Math.round(durationMs)))
     }
 
     const xhr = new XMLHttpRequest()
