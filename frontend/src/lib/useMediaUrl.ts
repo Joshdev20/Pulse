@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react'
-import { MediaError, dropMedia, refMedia, unrefMedia, type Entry, type MediaAsset } from './mediaCache'
+import {
+  MediaError,
+  dropMedia,
+  peekMedia,
+  refMedia,
+  unrefMedia,
+  type Entry,
+  type MediaAsset,
+} from './mediaCache'
 
 export type { MediaAsset } from './mediaCache'
 
@@ -46,7 +54,10 @@ export function useMediaStatus(
   failed: boolean
   loading: boolean
 } {
-  const [asset, setAsset] = useState<MediaAsset | null>(null)
+  // Seeded from the cache so a return to a page paints its media on the first
+  // render. Without this the effect has to run and resolve before anything
+  // shows, which is the blank-then-appear flicker on every navigation.
+  const [asset, setAsset] = useState<MediaAsset | null>(() => peekMedia(path))
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
@@ -67,7 +78,7 @@ export function useMediaStatus(
     // one starts so a retry loop does not pile up references on a failed path.
     let held: Entry | null = null
 
-    setAsset(null)
+    setAsset(peekMedia(path))
     setFailed(false)
 
     const start = () => {

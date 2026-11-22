@@ -22,6 +22,7 @@ import logging
 import os
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -45,6 +46,30 @@ PROCESS_ID = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
 # Redis outage does not turn into a once-per-second log storm.
 BUS_RETRY_MIN_SECONDS = 1.0
 BUS_RETRY_MAX_SECONDS = 30.0
+
+
+def frame_json(payload: dict[str, Any]) -> str:
+    """Serialize a realtime frame, keeping timestamps unambiguous.
+
+    A frame is built from ORM values, and on SQLite a `datetime` read back is
+    naive even though it was written as UTC. Plain `json.dumps(default=str)`
+    renders that as "2026-11-22 19:29:29" with no offset, and the browser parses
+    an offsetless string as *local* time — so a partner seen a minute ago read as
+    "1h ago" anywhere east of UTC. The REST schemas already prevent this with
+    `UTCDatetime`; this applies the same rule to frames so the two transports
+    cannot disagree about what a timestamp means.
+
+    Anything else non-serializable still falls back to `str`, as before.
+    """
+    return json.dumps(payload, default=_frame_default)
+
+
+def _frame_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    return str(value)
 
 
 class ConnectionManager:
@@ -137,7 +162,7 @@ class ConnectionManager:
             targets = list(self._sockets.get(user_id, ()))
         if not targets:
             return
-        message = json.dumps(payload, default=str)
+        message = frame_json(payload)
         stale: list[WebSocket] = []
         for socket in targets:
             try:
@@ -158,9 +183,8 @@ class ConnectionManager:
             try:
                 await client.publish(
                     BUS_CHANNEL,
-                    json.dumps(
-                        {"origin": PROCESS_ID, "user_id": user_id, "payload": payload},
-                        default=str,
+                    frame_json(
+                        {"origin": PROCESS_ID, "user_id": user_id, "payload": payload}
                     ),
                 )
             finally:

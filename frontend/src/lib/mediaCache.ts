@@ -20,6 +20,8 @@ export type Entry = {
   refs: number
   asset: MediaAsset | null
   released: boolean
+  /** When the last consumer let go, for idle eviction. Undefined while held. */
+  idleSince?: number
 }
 
 /** A failed download, carrying enough for the caller to decide when to retry. */
@@ -89,6 +91,7 @@ function release(entry: Entry) {
  * should set it: every other consumer wants the cached copy.
  */
 export function refMedia(path: string, revalidate = false): Entry {
+  evictIdle()
   let entry = cache.get(path)
   if (!entry) {
     const created: Entry = {
@@ -114,6 +117,7 @@ export function refMedia(path: string, revalidate = false): Entry {
     entry = created
   }
   entry.refs += 1
+  entry.idleSince = undefined
   return entry
 }
 
@@ -128,9 +132,46 @@ export function unrefMedia(path: string, entry: Entry) {
   // again — the ref goes straight back to 1 before the microtask runs.
   queueMicrotask(() => {
     if (entry.refs > 0 || cache.get(path) !== entry) return
+    // Deliberately *not* deleted. Dropping the last reference used to evict the
+    // entry and revoke its object URL, which meant every navigation back to a
+    // thread downloaded its images and videos again: the bytes were already on
+    // this machine and were thrown away for nothing. The entry is kept, marked
+    // idle, and reused by the next consumer; `clearMediaCache` still releases
+    // everything when the credentials change, and the idle sweep below bounds
+    // how long an unused download stays resident.
+    entry.idleSince = Date.now()
+  })
+}
+
+/** How long an unused download is kept before its memory is handed back. */
+const IDLE_EVICTION_MS = 5 * 60_000
+/** Upper bound on retained entries, so a long session cannot grow without end. */
+const MAX_ENTRIES = 300
+
+/**
+ * Release entries nobody has held for a while, or the oldest if there are too
+ * many. Called on `refMedia`, so the cost is spread across real usage.
+ */
+function evictIdle() {
+  const now = Date.now()
+  for (const [path, entry] of cache) {
+    if (entry.refs > 0) continue
+    if (entry.idleSince === undefined) continue
+    if (now - entry.idleSince > IDLE_EVICTION_MS) {
+      cache.delete(path)
+      release(entry)
+    }
+  }
+  if (cache.size <= MAX_ENTRIES) return
+  // Still over budget: drop the least recently used idle entries first.
+  const idle = [...cache.entries()]
+    .filter(([, entry]) => entry.refs === 0 && entry.idleSince !== undefined)
+    .sort((a, b) => (a[1].idleSince ?? 0) - (b[1].idleSince ?? 0))
+  for (const [path, entry] of idle) {
+    if (cache.size <= MAX_ENTRIES) break
     cache.delete(path)
     release(entry)
-  })
+  }
 }
 
 /**
@@ -163,26 +204,38 @@ export function dropMedia(path: string) {
 }
 
 /**
+ * The bytes already held for `path`, if any.
+ *
+ * Lets a component paint a cached image on its first render instead of showing
+ * a placeholder for a frame while an effect runs. Reading is not a reference:
+ * the caller still has to `refMedia` to keep the entry alive.
+ */
+export function peekMedia(path: string | null | undefined): MediaAsset | null {
+  if (!path) return null
+  return cache.get(path)?.asset ?? null
+}
+
+/**
  * Start a download before anything renders it.
  *
  * This is what lets the browser begin fetching feed media as soon as the feed
  * payload arrives, rather than waiting for each cell to mount and run an
- * effect. The entry is left unclaimed: a consumer that mounts while the fetch
- * is still in flight picks it up, and one that never arrives leaves the result
- * to be discarded rather than leaking an object URL.
+ * effect. The entry is left unclaimed, so a consumer that mounts while the
+ * fetch is still in flight picks it up, and one that never arrives leaves an
+ * entry that the idle sweep will release.
  */
 export function primeMedia(path: string | null | undefined) {
   if (!path || cache.has(path)) return
   const created: Entry = { promise: fetchAsset(path), refs: 0, asset: null, released: false }
   created.promise
     .then((result) => {
-      if (created.refs <= 0) {
-        URL.revokeObjectURL(result.url)
-        cache.delete(path)
-      } else {
-        created.asset = result
-      }
+      created.asset = result
+      // Unclaimed, so it is a candidate for the idle sweep — but kept, so a
+      // consumer that mounts just after the download lands still gets it free.
+      if (created.refs <= 0) created.idleSince = Date.now()
     })
-    .catch(() => cache.delete(path))
+    .catch(() => {
+      if (cache.get(path) === created) cache.delete(path)
+    })
   cache.set(path, created)
 }

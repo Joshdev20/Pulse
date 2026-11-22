@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..deps import DbSession, forget_last_seen, touch_last_seen
 from .. import push
 from ..models import Conversation, ConversationParticipant, Message, User, utcnow
-from ..realtime import MAX_FRAME_BYTES, authenticate, manager
+from ..realtime import MAX_FRAME_BYTES, authenticate, frame_json, manager
 from .messages import CALL_RINGING, CALL_ACTIVE, serialize_messages
 
 logger = logging.getLogger("pulse.realtime")
@@ -54,22 +54,19 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
     # Per-socket, so it dies with the connection it describes.
     peer_cache: dict[int, tuple[float, list[int]]] = {}
     try:
-        # Resolved before `ready` is sent: a socket that has announced itself is
-        # idle, and a query still in flight at that moment is a pooled connection
-        # held for a socket the client already believes is up.
-        replay: list[dict] = []
-        try:
-            replay = ringing_call_frames(db, user_id)
-        except Exception:  # noqa: BLE001 - a failed replay must not kill the socket
-            logger.debug("could not replay ringing calls for %s", user_id, exc_info=True)
-        finally:
-            _release(db)
-        await socket.send_text(json.dumps({"type": "ready", "user_id": user_id}))
+        # Answered from memory, not the database. This used to run a query on
+        # every connect, which is a round trip against a remote database for
+        # every tab, reconnect and navigation — it blocked the event loop for
+        # 1.3s per connect and dragged ordinary reads from 2.3s to 7.8s, which
+        # read as slow sends, late message rendering and media that appeared to
+        # reload. Nothing here may touch the database on the connect path.
+        replay = ringing_call_frames(user_id)
+        await socket.send_text(frame_json({"type": "ready", "user_id": user_id}))
         # A callee who opened the app from a ring notification missed the offer:
         # it was relayed while no socket was open. Replaying it now is what lets
         # that notification lead to an answer rather than a dead call.
         for frame in replay:
-            await socket.send_text(json.dumps(frame))
+            await socket.send_text(frame_json(frame))
         while True:
             raw = await socket.receive_text()
             if len(raw) > MAX_FRAME_BYTES:
@@ -82,13 +79,13 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
                 continue
             kind = frame.get("type")
             if kind == "ping":
-                await socket.send_text(json.dumps({"type": "pong"}))
+                await socket.send_text(frame_json({"type": "pong"}))
             elif kind == "typing":
                 await _relay_typing(db, user_id, frame, peer_cache)
             elif kind == "call":
                 await _relay_call(db, user_id, frame, peer_cache)
             elif kind == "read":
-                await socket.send_text(json.dumps({"type": "ack", "for": "read"}))
+                await socket.send_text(frame_json({"type": "ack", "for": "read"}))
             elif kind not in ALLOWED_INBOUND:
                 logger.debug("Ignoring unknown frame type %r from user %s", kind, user_id)
     except WebSocketDisconnect:
@@ -324,6 +321,7 @@ async def _relay_call(
                 _remember_ringing_call(
                     call_ref, conversation_id, user_id, mode,
                     payload if isinstance(payload, str) else None,
+                    peers,
                 )
             elif action == "ice":
                 if _ringing_calls.get(call_ref, {}).get("caller_id") == user_id:
@@ -372,7 +370,12 @@ _ringing_calls: dict[str, dict] = {}
 
 
 def _remember_ringing_call(
-    call_ref: str, conversation_id: int, caller_id: int, mode: str, payload: str | None
+    call_ref: str,
+    conversation_id: int,
+    caller_id: int,
+    mode: str,
+    payload: str | None,
+    callee_ids: list[int],
 ) -> None:
     """Hold the offer for a ringing call so it can be replayed on connect."""
     if len(_ringing_calls) >= RINGING_CALLS_MAX:
@@ -381,6 +384,7 @@ def _remember_ringing_call(
     _ringing_calls[call_ref] = {
         "conversation_id": conversation_id,
         "caller_id": caller_id,
+        "callee_ids": [cid for cid in callee_ids if cid != caller_id],
         "mode": mode,
         "payload": payload,
         "ice": [],
@@ -407,65 +411,39 @@ def _remember_ringing_ice(call_ref: str, payload: str | None) -> None:
         held["ice"].append(payload)
 
 
-def ringing_call_frames(db: Session, user_id: int) -> list[dict]:
+def ringing_call_frames(user_id: int) -> list[dict]:
     """The frames to replay to ``user_id`` for calls still ringing at them.
 
-    Read from the call log rather than the buffer, so the buffer only supplies
-    the signalling: the row is what decides that a call is live, and a call the
-    sweeper has already finalised is not replayed. Bounded by the same ring
-    window the sweeper uses, so a stale row cannot ring a phone minutes late.
+    Answered from the in-memory buffer alone, with no database read. That is
+    deliberate: this runs on every socket connect, and a query here meant every
+    tab open, every reconnect and every navigation paid a round trip against a
+    database an ocean away. Measured on production, that stalled the event loop
+    for 1.3s per connect and stretched ordinary reads from 2.3s to 7.8s, because
+    the query blocked the loop that every other socket and request shares.
+
+    The buffer is a complete record of what can be replayed: a call is only
+    rememberable when this process relayed its offer, and it is forgotten the
+    moment the call is decided. So "held and fresh" is exactly "live", with no
+    need to confirm against the log. A row the sweeper finalised belongs to a
+    call this process has already dropped.
     """
-    rows = list(
-        db.scalars(
-            select(Message)
-            .where(
-                Message.call_ref.is_not(None),
-                Message.call_state == CALL_RINGING,
-                Message.sender_id != user_id,
-                Message.conversation_id.in_(
-                    select(ConversationParticipant.conversation_id).where(
-                        ConversationParticipant.user_id == user_id
-                    )
-                ),
-            )
-            .order_by(Message.id.desc())
-            .limit(4)
-        ).all()
-    )
     frames: list[dict] = []
-    for row in rows:
-        held = _ringing_calls.get(row.call_ref)
-        # No signalling held means this process never saw the offer (another
-        # worker, or a restart), and ringing without it would be a call the
-        # callee cannot answer.
-        if held is None:
+    for call_ref, held in list(_ringing_calls.items()):
+        if user_id not in held["callee_ids"]:
             continue
         if time.monotonic() - held["at"] > CALL_RING_STALE_SECONDS:
-            _ringing_calls.pop(row.call_ref, None)
+            _ringing_calls.pop(call_ref, None)
             continue
-        frames.append(
-            {
-                "type": "call",
-                "conversation_id": row.conversation_id,
-                "from": row.sender_id,
-                "action": "offer",
-                "call_id": row.call_ref,
-                "mode": row.call_mode or "audio",
-                "payload": held["payload"],
-            }
-        )
+        base = {
+            "type": "call",
+            "conversation_id": held["conversation_id"],
+            "from": held["caller_id"],
+            "call_id": call_ref,
+            "mode": held["mode"],
+        }
+        frames.append({**base, "action": "offer", "payload": held["payload"]})
         for candidate in held["ice"]:
-            frames.append(
-                {
-                    "type": "call",
-                    "conversation_id": row.conversation_id,
-                    "from": row.sender_id,
-                    "action": "ice",
-                    "call_id": row.call_ref,
-                    "mode": row.call_mode or "audio",
-                    "payload": candidate,
-                }
-            )
+            frames.append({**base, "action": "ice", "payload": candidate})
     return frames
 
 

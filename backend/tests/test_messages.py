@@ -782,6 +782,94 @@ def test_partner_presence_is_announced_to_the_conversation(client, make_user):
         assert offline["last_seen_at"] is not None
 
 
+def test_presence_frame_timestamp_carries_a_utc_offset(client, make_user):
+    """The "last seen" frame must not hand the browser a bare local time.
+
+    SQLite returns naive datetimes, and the frame used to be serialized with
+    `default=str`, which produced "2026-11-22 19:29:29" with no offset. A
+    browser parses an offsetless timestamp as *local* time, so a partner seen a
+    minute ago was rendered as "1h ago" for anyone east of UTC — the reported
+    "we just chatted but it says an hour ago" bug.
+
+    The API already guarantees this through `UTCDatetime`; frames must agree.
+    """
+    from datetime import datetime, timezone
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+    start(client, ada, "grace")
+
+    with client.websocket_connect("/api/ws") as ada_socket:
+        ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+        ada_socket.receive_text()
+        with client.websocket_connect("/api/ws") as grace_socket:
+            grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+            grace_socket.receive_text()
+
+        # Grace connecting announces her online first, then offline on close.
+        online = recv_frame(ada_socket, "presence")
+        assert online["is_online"] is True
+        offline = recv_frame(ada_socket, "presence")
+        assert offline["is_online"] is False
+
+    stamp = offline["last_seen_at"]
+    assert stamp is not None
+    # An ISO-8601 string the browser can parse unambiguously: either a "Z" or a
+    # "+00:00" offset. A bare "YYYY-MM-DD HH:MM:SS" is the bug.
+    assert "T" in stamp, f"expected an ISO timestamp, got {stamp!r}"
+    assert stamp.endswith("Z") or stamp.endswith("+00:00"), stamp
+    parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None
+    # And it must be the real moment, not hours off.
+    age = abs((datetime.now(timezone.utc) - parsed).total_seconds())
+    assert age < 120, f"last seen was {age:.0f}s away from now"
+
+
+def test_socket_connect_does_not_query_the_database(client, make_user):
+    """Opening a socket must not cost a database round trip.
+
+    The ring replay used to read the call log on every connect. On production
+    that blocked the event loop for ~1.3s per connect and stretched ordinary
+    reads from 2.3s to 7.8s, which users saw as slow sends, late message
+    rendering and media that appeared to reload. The replay is answered from
+    the in-memory buffer, so a connect should issue no statements at all.
+    """
+    from sqlalchemy import event as sa_event
+
+    from app.database import get_db
+
+    ada, _ = make_user("ada")
+    token = ada["Authorization"].split(" ", 1)[1]
+
+    statements: list[str] = []
+
+    def count(conn, cursor, statement, *args):
+        statements.append(statement)
+
+    override = client.app.dependency_overrides[get_db]
+    session = next(override())
+    engine = session.get_bind()
+    session.close()
+
+    sa_event.listen(engine, "before_cursor_execute", count)
+    try:
+        with client.websocket_connect("/api/ws") as socket:
+            socket.send_text(json.dumps({"type": "auth", "token": token}))
+            assert json.loads(socket.receive_text())["type"] == "ready"
+            socket.send_text(json.dumps({"type": "ping"}))
+            assert json.loads(socket.receive_text())["type"] == "pong"
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", count)
+
+    # Authenticating and announcing presence legitimately read the user row and
+    # the participant list. The call log must not be read: that is the query
+    # this test exists to keep off the connect path.
+    call_log_reads = [sql for sql in statements if "FROM messages" in sql]
+    assert call_log_reads == [], f"connect read the call log: {call_log_reads}"
+
+
 def _user_id(headers, client):
     """The authenticated user's id, read back from the API."""
     return client.get("/api/auth/me", headers=headers).json()["id"]

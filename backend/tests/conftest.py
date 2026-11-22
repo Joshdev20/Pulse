@@ -35,15 +35,22 @@ def isolated_cache(monkeypatch):
     The last-seen throttle is reset for the same reason: it is keyed by user id
     and lives for the life of the process, so a user stamped by an earlier test
     would suppress the write in a later one and leave `last_seen_at` null.
+
+    The ringing-call buffer is process-global too, and it is what a socket
+    replays on connect. A call left in it by an earlier test would be replayed
+    to the next test's socket, which reads as a call nobody made.
     """
     from app import deps
+    from app.routers import realtime as realtime_router
 
     monkeypatch.setattr(settings, "redis_url", None)
     reset_store()
     deps.reset_last_seen_tracking()
+    realtime_router._ringing_calls.clear()
     yield
     reset_store()
     deps.reset_last_seen_tracking()
+    realtime_router._ringing_calls.clear()
 
 
 @pytest.fixture
