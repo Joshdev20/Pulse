@@ -265,10 +265,17 @@ export const MailIcon = (p: IconProps) => (
   </Base>
 )
 
+/**
+ * The send plane: an arrowhead with a V tail and a fold across its middle.
+ *
+ * Two tones rather than one silhouette, because a single filled triangle at
+ * 19px is indistinguishable from a play button. The crease is what makes it
+ * read as a folded paper plane.
+ */
 export const SendIcon = (p: IconProps) => (
-  <Base {...p}>
-    <path d="M4.3 11.3 20 4l-7.3 15.7-2-6.4z" />
-    <path d="m10.7 13.3 4.4-4.4" />
+  <Base {...p} fill="currentColor" stroke="none">
+    <path d="M2.6 3.9 21.6 12 9.9 12z" opacity="0.6" />
+    <path d="M9.9 12 21.6 12 2.6 20.1z" />
   </Base>
 )
 

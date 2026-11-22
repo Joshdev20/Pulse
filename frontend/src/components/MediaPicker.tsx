@@ -45,13 +45,22 @@ export function MediaPicker({
   items,
   onChange,
   disabled,
+  onError,
   showThumbsOnly = false,
+  showTriggerOnly = false,
 }: {
   items: Media[]
   onChange: (items: Media[]) => void
   disabled?: boolean
+  /**
+   * Told about an upload failure as well as the inline line, so a composer
+   * that hides the inline error still reports it somewhere the user looks.
+   */
+  onError?: (message: string) => void
   /** Render only the thumbnail strip; the trigger button lives elsewhere. */
   showThumbsOnly?: boolean
+  /** Render only the trigger button; the thumbnails are drawn elsewhere. */
+  showTriggerOnly?: boolean
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(0)
@@ -60,14 +69,19 @@ export function MediaPicker({
 
   const full = items.length >= MAX_ATTACHMENTS
 
+  function report(message: string | null) {
+    setError(message)
+    if (message) onError?.(message)
+  }
+
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return
-    setError(null)
+    report(null)
 
     const room = MAX_ATTACHMENTS - items.length
     const chosen = Array.from(files).slice(0, room)
     if (chosen.length < files.length) {
-      setError(`Up to ${MAX_ATTACHMENTS} attachments per post`)
+      report(`Up to ${MAX_ATTACHMENTS} attachments per post`)
     }
 
     const uploaded: Media[] = []
@@ -81,7 +95,7 @@ export function MediaPicker({
         const poster = file.type.startsWith('video/') ? await capturePoster(file) : null
         uploaded.push(await api.upload(file, file.name, setProgress, poster))
       } catch (caught) {
-        setError(caught instanceof ApiError ? caught.message : 'Upload failed')
+        report(caught instanceof ApiError ? caught.message : 'Upload failed')
       } finally {
         setUploading((count) => count - 1)
       }
@@ -96,30 +110,33 @@ export function MediaPicker({
 
   return (
     <div className="media-picker">
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/ogg,audio/wav,audio/mpeg,audio/mp4,audio/webm,application/pdf"
-        multiple
-        hidden
-        onChange={(event) => void handleFiles(event.target.files)}
-      />
+      {!showThumbsOnly && (
+        <>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/ogg,audio/wav,audio/mpeg,audio/mp4,audio/webm,application/pdf"
+            multiple
+            hidden
+            onChange={(event) => void handleFiles(event.target.files)}
+          />
 
-      <button
-        type="button"
-        className="icon-btn media-trigger"
-        disabled={disabled || full || uploading > 0}
-        onClick={() => inputRef.current?.click()}
-        title={full ? `Up to ${MAX_ATTACHMENTS} attachments` : 'Add photo, video or file'}
-        aria-label="Add attachment"
-        hidden={showThumbsOnly}
-      >
-        {uploading > 0 ? <Spinner size={17} /> : <UploadIcon size={18} />}
-      </button>
+          <button
+            type="button"
+            className="icon-btn media-trigger"
+            disabled={disabled || full || uploading > 0}
+            onClick={() => inputRef.current?.click()}
+            title={full ? `Up to ${MAX_ATTACHMENTS} attachments` : 'Add photo, video or file'}
+            aria-label="Add attachment"
+          >
+            {uploading > 0 ? <Spinner size={17} /> : <UploadIcon size={18} />}
+          </button>
 
-      {uploading > 0 && <span className="media-progress">{progress}%</span>}
+          {uploading > 0 && <span className="media-progress">{progress}%</span>}
+        </>
+      )}
 
-      {items.length > 0 && (
+      {!showTriggerOnly && items.length > 0 && (
         <div className="media-thumbs">
           {items.map((item) => (
             <Thumb key={item.id} item={item} onRemove={() => remove(item.id)} />
@@ -127,7 +144,7 @@ export function MediaPicker({
         </div>
       )}
 
-      {error && <p className="field-error">{error}</p>}
+      {!showTriggerOnly && error && <p className="field-error">{error}</p>}
     </div>
   )
 }

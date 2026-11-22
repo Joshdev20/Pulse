@@ -341,9 +341,13 @@ function Thread({
   )
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraftState] = useState('')
+  // The draft is mirrored here because a send clears it outside React's
+  // render: a second Enter in the same tick would otherwise still see the old
+  // text and send it twice.
+  const draftRef = useRef('')
   const [attachments, setAttachments] = useState<Media[]>([])
-  const [sending, setSending] = useState(false)
+  const [savingEdit, setSavingEdit] = useState(false)
   const [partnerTyping, setPartnerTyping] = useState(false)
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [editing, setEditing] = useState<Message | null>(null)
@@ -697,6 +701,24 @@ function Thread({
   }, [pending])
 
   const pendingSeq = useRef(0)
+  // Object URLs belonging to pending bubbles, so they are released when the
+  // confirmed row replaces them. A voice note is drawn from the local
+  // recording until its upload lands.
+  const pendingUrls = useRef(new Map<number, string>())
+
+  function setDraft(value: string) {
+    draftRef.current = value
+    setDraftState(value)
+  }
+
+  // Grow the field to fit a long draft, up to a cap, so the line being typed
+  // stays visible instead of scrolling out of a one-line box.
+  useEffect(() => {
+    const element = inputRef.current
+    if (!element) return
+    element.style.height = 'auto'
+    element.style.height = `${Math.min(element.scrollHeight, 140)}px`
+  }, [draft])
 
   /**
    * The bubble drawn while a send is in flight.
@@ -741,6 +763,11 @@ function Thread({
   }
 
   function dropPending(id: number) {
+    const url = pendingUrls.current.get(id)
+    if (url) {
+      pendingUrls.current.delete(id)
+      URL.revokeObjectURL(url)
+    }
     setPending((current) => current.filter((item) => item.id !== id))
   }
 
@@ -888,10 +915,10 @@ function Thread({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
-    const body = draft.trim()
+    const body = draftRef.current.trim()
     if (editing) {
-      if (!body || sending) return
-      setSending(true)
+      if (!body || savingEdit) return
+      setSavingEdit(true)
       setError(null)
       try {
         const updated = await api.editMessage(conversation.id, editing.id, body)
@@ -902,18 +929,17 @@ function Thread({
       } catch (caught) {
         setError(caught instanceof ApiError ? caught.message : 'Could not save the edit')
       } finally {
-        setSending(false)
+        setSavingEdit(false)
       }
       return
     }
 
-    if ((!body && attachments.length === 0) || sending) return
+    if (!body && attachments.length === 0) return
 
     const media = attachments
     const quoting = replyTo
     const optimistic = optimisticMessage({ body, media, sticker: null, replyTo: quoting })
 
-    setSending(true)
     setError(null)
     if (optimistic) setPending((current) => [...current, optimistic])
     // The composer empties at once: the message is already on screen, and
@@ -943,8 +969,6 @@ function Thread({
         setReplyTo(quoting)
       }
       setError(caught instanceof ApiError ? caught.message : 'Message not sent')
-    } finally {
-      setSending(false)
     }
   }
 
@@ -956,11 +980,9 @@ function Thread({
    * behaves this way. The tray stays open so several can follow in a row.
    */
   async function sendSticker(sticker: Sticker) {
-    if (sending) return
     const quoting = replyTo
     const optimistic = optimisticMessage({ body: '', media: [], sticker: sticker.id, replyTo: quoting })
 
-    setSending(true)
     setError(null)
     if (optimistic) setPending((current) => [...current, optimistic])
     setReplyTo(null)
@@ -975,26 +997,54 @@ function Thread({
         setReplyTo(quoting)
       }
       setError(caught instanceof ApiError ? caught.message : 'Sticker not sent')
-    } finally {
-      setSending(false)
     }
   }
 
+  // Only content decides whether send is available. A message in flight must
+  // never disable it: the next one is allowed to leave while the last is still
+  // being confirmed, and each bubble carries its own status.
   const canSend = editing
-    ? draft.trim().length > 0 && !sending
-    : (draft.trim().length > 0 || attachments.length > 0) && !sending
+    ? draft.trim().length > 0 && !savingEdit
+    : draft.trim().length > 0 || attachments.length > 0
 
   /**
    * Upload a finished recording and send it as the next message.
    *
    * The clip is uploaded first and then referenced by id, which is the same
    * path an attached file takes, so a voice note needs no separate storage or
-   * delivery route.
+   * delivery route. The bubble goes up before the upload starts, playing from
+   * the local recording, so the sender can hear it while the bytes travel.
    */
   async function sendVoiceNote(note: VoiceNote) {
-    if (sending) return
-    setSending(true)
+    const quoting = replyTo
+    const localUrl = URL.createObjectURL(note.blob)
+    const local: Media = {
+      id: -Date.now(),
+      kind: 'audio',
+      content_type: note.mimeType,
+      size_bytes: note.blob.size,
+      width: null,
+      height: null,
+      alt_text: 'Voice note',
+      url: localUrl,
+      poster_url: null,
+      duration_ms: Math.round(note.duration * 1000),
+    }
+    const optimistic = optimisticMessage({
+      body: '',
+      media: [local],
+      sticker: null,
+      replyTo: quoting,
+    })
+
     setError(null)
+    if (optimistic) {
+      pendingUrls.current.set(optimistic.id, localUrl)
+      setPending((current) => [...current, optimistic])
+    } else {
+      URL.revokeObjectURL(localUrl)
+    }
+    setReplyTo(null)
     try {
       // A `File` rather than the raw blob: the upload path names the part from
       // it, and the server sniffs the bytes, so the name only has to carry the
@@ -1008,15 +1058,17 @@ function Thread({
         conversation.id,
         '',
         [media.id],
-        replyTo?.id ?? null,
+        quoting?.id ?? null,
       )
       appendMessage(sent)
-      setReplyTo(null)
+      if (optimistic) dropPending(optimistic.id)
       onSent()
     } catch (caught) {
+      if (optimistic && pendingRef.current.some((item) => item.id === optimistic.id)) {
+        dropPending(optimistic.id)
+        setReplyTo(quoting)
+      }
       setError(caught instanceof ApiError ? caught.message : 'Voice note not sent')
-    } finally {
-      setSending(false)
     }
   }
 
@@ -1138,7 +1190,6 @@ function Thread({
               <MessageBubble
                 message={message}
                 grouped={grouped}
-                partnerOnline={Boolean(partner.is_online)}
                 onReply={startReply}
                 onToggleLike={toggleLike}
                 onOpenMenu={(target, anchor) => setMenu({ message: target, anchor })}
@@ -1201,55 +1252,65 @@ function Thread({
 
       <StickerPicker
         open={stickersOpen}
-        disabled={sending}
         onPick={sendSticker}
         onClose={() => setStickersOpen(false)}
       />
 
-      <form className="composer-inline thread-composer" onSubmit={submit}>
-        {!editing && (
-          <MediaPicker items={attachments} onChange={setAttachments} disabled={sending} />
+      <form className="thread-composer" onSubmit={submit}>
+        {!editing && attachments.length > 0 && (
+          <div className="composer-strip">
+            <MediaPicker items={attachments} onChange={setAttachments} showThumbsOnly />
+          </div>
         )}
-        {!editing && (
+
+        <div className={`composer-shell${editing ? ' editing' : ''}`}>
+          {!editing && (
+            <div className="thread-actions">
+              <MediaPicker
+                items={attachments}
+                onChange={setAttachments}
+                onError={setError}
+                showTriggerOnly
+              />
+              <button
+                type="button"
+                className={`icon-btn sticker-toggle${stickersOpen ? ' active' : ''}`}
+                aria-label={stickersOpen ? 'Hide stickers' : 'Show stickers'}
+                aria-expanded={stickersOpen}
+                onClick={() => setStickersOpen((open) => !open)}
+              >
+                <StickerIcon size={19} />
+              </button>
+              <VoiceRecorderButton onRecorded={sendVoiceNote} onError={setError} />
+            </div>
+          )}
+          <textarea
+            ref={inputRef}
+            className="input thread-input"
+            placeholder={editing ? 'Edit your message' : `Message @${conversation.partner.username}`}
+            value={draft}
+            rows={1}
+            onChange={(event) => onDraftChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                void submit(event)
+              }
+              if (event.key === 'Escape' && editing) {
+                cancelComposeMode()
+              }
+            }}
+            aria-label={editing ? 'Edit message' : 'Message'}
+          />
           <button
-            type="button"
-            className={`icon-btn sticker-toggle${stickersOpen ? ' active' : ''}`}
-            aria-label={stickersOpen ? 'Hide stickers' : 'Show stickers'}
-            aria-expanded={stickersOpen}
-            onClick={() => setStickersOpen((open) => !open)}
+            type="submit"
+            className="composer-send"
+            disabled={!canSend}
+            aria-label={editing ? 'Save edit' : 'Send message'}
           >
-            <StickerIcon size={19} />
+            <SendIcon size={20} />
           </button>
-        )}
-        {!editing && (
-          <VoiceRecorderButton disabled={sending} onRecorded={sendVoiceNote} onError={setError} />
-        )}
-        <textarea
-          ref={inputRef}
-          className="input thread-input"
-          placeholder={editing ? 'Edit your message' : `Message @${conversation.partner.username}`}
-          value={draft}
-          rows={1}
-          onChange={(event) => onDraftChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault()
-              void submit(event)
-            }
-            if (event.key === 'Escape' && editing) {
-              cancelComposeMode()
-            }
-          }}
-          aria-label={editing ? 'Edit message' : 'Message'}
-        />
-        <button
-          type="submit"
-          className="btn btn-primary btn-icon"
-          disabled={!canSend}
-          aria-label={editing ? 'Save edit' : 'Send message'}
-        >
-          {sending ? <Spinner size={16} /> : <SendIcon size={18} />}
-        </button>
+        </div>
       </form>
 
       {menu && (

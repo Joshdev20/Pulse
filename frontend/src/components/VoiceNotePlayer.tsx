@@ -58,7 +58,7 @@ export function VoiceNotePlayer({ item }: { item: Media }) {
   // The stored length in seconds, or null when the upload predates it.
   const stored = item.duration_ms ? item.duration_ms / 1000 : 0
   const duration = loaded || stored
-  const heights = useMemo(() => barHeights(item.id), [item.id])
+  const heights = useMemo(() => barHeights(Math.abs(item.id)), [item.id])
   const undecodable = Boolean(asset && undecodableSrc === asset.url)
   const unplayable = failed || undecodable
 

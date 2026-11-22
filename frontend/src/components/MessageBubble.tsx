@@ -40,8 +40,6 @@ export interface BubbleProps {
   onToggleLike: (message: Message) => void
   /** Open the long-press menu, anchored to this bubble. */
   onOpenMenu: (message: Message, anchor: DOMRect) => void
-  /** The partner is online, so a delivered message can be marked seen. */
-  partnerOnline: boolean
   /** Grouped with the message above it, so the avatar is drawn once. */
   grouped: boolean
 }
@@ -59,7 +57,6 @@ export function MessageBubble({
   onReply,
   onToggleLike,
   onOpenMenu,
-  partnerOnline,
   grouped,
 }: BubbleProps) {
   const [offset, setOffset] = useState(0)
@@ -201,7 +198,11 @@ export function MessageBubble({
     .join(' ')
 
   return (
-    <div className={`bubble-row${message.mine ? ' mine' : ''}${grouped ? ' grouped' : ''}`}>
+    <div
+      className={`bubble-row${message.mine ? ' mine' : ''}${grouped ? ' grouped' : ''}${
+        message.pending ? ' pending' : ''
+      }`}
+    >
       {!message.mine &&
         (grouped ? (
           <span className="bubble-avatar-spacer" aria-hidden="true" />
@@ -273,11 +274,7 @@ export function MessageBubble({
               </span>
             )}
             {message.mine && (
-              <DeliveryTick
-                read={message.read_by_partner}
-                online={partnerOnline}
-                pending={message.pending}
-              />
+              <DeliveryTick read={message.read_by_partner} pending={message.pending} />
             )}
           </div>
         </div>
@@ -287,27 +284,22 @@ export function MessageBubble({
 }
 
 /**
- * The delivery mark on your own message: one tick when the message has reached
- * the server, two once the partner has read it.
+ * The delivery mark on your own message: a clock while it is on its way to the
+ * server, one tick once the server has it, two blue ticks once the partner has
+ * read it.
+ *
+ * A tick means the server accepted the message. It must not be held back until
+ * the partner happens to be online: that is what made a send look like it had
+ * failed while it had in fact been delivered and stored.
  *
  * Read state comes from the server, not from a guess: `read_by_partner` is
  * derived from the partner's own read stamp, so a message never shows "seen"
  * because this side happened to be looking at the thread.
  */
-function DeliveryTick({
-  read,
-  online,
-  pending,
-}: {
-  read: boolean
-  online: boolean
-  pending?: boolean
-}) {
-  // Still on its way to the server: a clock says so, and it must not claim
-  // "Delivered" just because the partner happens to be online.
+function DeliveryTick({ read, pending }: { read: boolean; pending?: boolean }) {
   if (pending) {
     return (
-      <span className="bubble-tick pending" aria-label="Sending" title="Sending">
+      <span className="bubble-tick sending" aria-label="Sending" title="Sending">
         <ClockIcon size={12} />
       </span>
     )
@@ -321,12 +313,8 @@ function DeliveryTick({
     )
   }
   return (
-    <span
-      className={`bubble-tick${online ? '' : ' pending'}`}
-      aria-label={online ? 'Delivered' : 'Sent'}
-      title={online ? 'Delivered' : 'Sent'}
-    >
-      {online ? <CheckIcon size={13} /> : <ClockIcon size={12} />}
+    <span className="bubble-tick sent" aria-label="Sent" title="Sent">
+      <CheckIcon size={13} />
     </span>
   )
 }

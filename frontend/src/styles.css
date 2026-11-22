@@ -3125,21 +3125,159 @@ h4 {
   font-size: 13px;
 }
 
+/* The composer is one rounded field. The attach, sticker and record controls
+   sit inside its left edge and send sits inside its right edge, so the whole
+   thing reads as a single input rather than a row of buttons beside one. */
 .thread-composer {
   display: flex;
-  align-items: flex-end;
-  gap: 9px;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px 16px 16px;
   border-top: 1px solid var(--border);
 }
 
+.composer-strip {
+  display: flex;
+  min-width: 0;
+}
+
+.composer-shell {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 5px 5px 5px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 26px;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.composer-shell:focus-within {
+  border-color: var(--accent-line);
+  background: var(--surface-3);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.thread-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+}
+
+.thread-actions .icon-btn,
+.thread-actions .media-trigger {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.thread-actions .icon-btn:hover:not(:disabled),
+.thread-actions .media-trigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover-wash-strong);
+}
+
+.thread-actions .sticker-toggle.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.thread-actions .media-progress {
+  font-size: 11px;
+  padding: 0 2px;
+}
+
 .thread-input {
   flex: 1;
+  min-width: 0;
   resize: none;
   max-height: 140px;
-  min-height: 44px;
-  padding: 11px 14px;
-  border-radius: var(--radius);
+  min-height: 34px;
+  padding: 7px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.thread-input:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.composer-send {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  transition: transform 0.14s ease, background 0.16s ease, color 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.composer-send svg {
+  /* The plane is drawn nose-right; a hair of offset centres its mass in the
+     circle, since the tail is heavier than the point. */
+  transform: translateX(0.5px);
+}
+
+.composer-send:disabled {
+  background: var(--surface-3);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.composer-send:not(:disabled):hover {
+  transform: scale(1.06);
+}
+
+.composer-send:not(:disabled):active {
+  transform: scale(0.94);
+}
+
+/* While a note is being recorded the field becomes the recorder: the text,
+   the pickers and send step aside so the timer and stop control own it. */
+.composer-shell:has(.voice-recording) .thread-actions .media-trigger,
+.composer-shell:has(.voice-recording) .thread-actions .sticker-toggle,
+.composer-shell:has(.voice-recording) .thread-actions .voice-trigger,
+.composer-shell:has(.voice-recording) .thread-input,
+.composer-shell:has(.voice-recording) .composer-send {
+  display: none;
+}
+
+.composer-shell:has(.voice-recording) .voice-recording {
+  flex: 1;
+  padding-left: 8px;
+  min-height: 36px;
+}
+
+@media (max-width: 480px) {
+  .thread-actions .icon-btn,
+  .thread-actions .media-trigger {
+    width: 30px;
+    height: 30px;
+  }
+
+  .composer-send {
+    width: 34px;
+    height: 34px;
+  }
+
+  .thread-input {
+    padding: 5px 2px;
+    font-size: 16px; /* 16px keeps iOS from zooming the page on focus. */
+  }
 }
 
 .btn-icon {
@@ -4341,9 +4479,15 @@ h4 {
 .bubble-tick {
   display: inline-flex;
   align-items: center;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
+/* Delivered: the server has the message. One tick, nothing more. */
+.bubble-tick.sent {
+  color: var(--text-muted);
+}
+
+/* Read: two blue ticks, the shape every chat app uses for "seen". */
 .bubble-tick.read {
   color: #38bdf8;
 }
@@ -4353,10 +4497,25 @@ h4 {
   margin-left: -7px;
 }
 
-/* A sent-but-undelivered message shows a clock, so it reads as "in flight"
-   rather than as a failed send. */
-.bubble-tick.pending {
-  opacity: 0.7;
+/* Still on its way to the server. A slow breath says "in progress" without
+   asking the reader to watch a spinner. */
+.bubble-tick.sending {
+  animation: tick-wait 1.6s ease-in-out infinite;
+}
+
+@keyframes tick-wait {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* A bubble that has not been confirmed yet reads as slightly provisional. */
+.bubble-row.pending .bubble {
+  opacity: 0.82;
 }
 
 .reply-preview {

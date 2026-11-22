@@ -35,6 +35,18 @@ export function useMediaUrl(path: string | null | undefined): MediaAsset | null 
 }
 
 /**
+ * A source the page already holds in memory.
+ *
+ * A voice note is drawn from the local recording while it uploads, so the
+ * bubble can be played the moment the user finishes speaking instead of after
+ * the round trip. Those URLs are not paths on this API and must not be fetched
+ * through it.
+ */
+function isLocalSource(path: string): boolean {
+  return path.startsWith('blob:') || path.startsWith('data:')
+}
+
+/**
  * `useMediaUrl` plus the state needed to render a placeholder honestly.
  *
  * A caller that shows a loading shimmer has to know the difference between
@@ -68,12 +80,13 @@ export function useMediaStatus(
   // element shows its placeholder until the promise callback runs, so a feed
   // that was already downloaded still appears to reload on every navigation.
   const key = path ?? ''
+  const local = path && isLocalSource(path) ? { url: path, filename: null } : null
   const own = loaded && loaded.path === key && loaded.attempt === attempt ? loaded.asset : null
-  const cached = path && attempt === 0 ? peekMedia(path) : null
-  const asset = own ?? cached
+  const cached = path && attempt === 0 && !local ? peekMedia(path) : null
+  const asset = local ?? own ?? cached
 
   useEffect(() => {
-    if (!path) {
+    if (!path || isLocalSource(path)) {
       setLoaded(null)
       setFailed(false)
       return
