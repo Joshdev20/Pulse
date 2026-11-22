@@ -341,6 +341,27 @@ the public URL returns 502 until the dev server is bound to 12000.
   duration and `paused: true` again, so sample playback shortly after pressing play rather
   than waiting — the fixture clips are about a second long.
 
+### The thread composer sends optimistically
+
+- Sending never waits on the request. `submit` puts a pending bubble into `visible` and
+  clears the field in the same tick; the server's row replaces it when the socket or the
+  response lands. Do not reintroduce a `sending` flag that gates the button — it greyed the
+  button out for the whole round trip, which is what made a send feel slow even when it was
+  not.
+- The pending row is keyed by a negative id from `pendingSeq`, so it can never collide with
+  a server id, and `dropPending` is the only place it goes away. A failed send drops the
+  bubble and puts the text back in the field; anything else loses the message.
+- Delivery state is per bubble (`DeliveryTick` in `MessageBubble`): clock while pending, one
+  tick once the server has it, two blue ticks once the partner has read it. It must not
+  depend on the partner being online — presence is a separate signal, and gating the tick on
+  it is what left delivered messages sitting on a single tick.
+- The composer is one `form.thread-composer` shell: attach, sticker and record buttons sit
+  inside its left edge, send inside its right edge, and the textarea has no border of its
+  own. The post composer keeps `.composer-actions`; the thread's rules are scoped to
+  `.thread-actions` so the two do not share styling.
+- `useMediaUrl` accepts blob sources so a voice note plays from the local recording while it
+  uploads. Those URLs belong to a pending bubble and are revoked in `dropPending`.
+
 ### Stickers
 
 - `backend/app/stickers.py` holds the single source of truth: `STICKERS` (id, emoji, label,
