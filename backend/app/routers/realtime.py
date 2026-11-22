@@ -20,6 +20,16 @@ logger = logging.getLogger("pulse.realtime")
 
 router = APIRouter(tags=["realtime"])
 
+# How long a socket may stay silent before it is treated as gone.
+#
+# A phone that sleeps, a laptop that changes network or a tab that is killed
+# commonly leaves a socket that never sends a close frame. Without a read
+# timeout that socket stays registered for as long as the process lives: the
+# user is shown as online forever and, because no transition is ever announced,
+# their partner's header keeps whatever "last seen" it happened to hold. The
+# client pings every ten seconds, so this much silence means the peer is gone.
+SOCKET_IDLE_TIMEOUT_SECONDS = 75.0
+
 # Frame types a client may send after authenticating. Anything else is ignored
 # rather than echoed, so the socket is not a general-purpose relay.
 ALLOWED_INBOUND = {"typing", "read", "ping", "call"}
@@ -50,6 +60,10 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
     was_online = manager.is_online(user_id)
     await manager.connect(user_id, socket)
     if not was_online:
+        # No write here on purpose: this is the connect path, and a database
+        # round trip per connect is what made connects cost seconds. The close
+        # below stamps last seen, and the idle timeout means a socket that dies
+        # silently still reaches it.
         await _announce_presence(db, user_id, online=True)
     # Per-socket, so it dies with the connection it describes.
     peer_cache: dict[int, tuple[float, list[int]]] = {}
@@ -68,7 +82,14 @@ async def realtime_socket(socket: WebSocket, db: DbSession) -> None:
         for frame in replay:
             await socket.send_text(frame_json(frame))
         while True:
-            raw = await socket.receive_text()
+            try:
+                raw = await asyncio.wait_for(
+                    socket.receive_text(), timeout=SOCKET_IDLE_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                # Dropping out of the loop runs the `finally` below, which
+                # stamps last seen and announces the transition to offline.
+                break
             if len(raw) > MAX_FRAME_BYTES:
                 continue
             try:
@@ -138,6 +159,8 @@ async def _announce_presence(db: DbSession, user_id: int, *, online: bool) -> No
         "type": "presence",
         "user_id": user_id,
         "is_online": online,
+        # Serialized by `frame_json` on the way out, which attaches UTC to the
+        # naive value SQLite hands back.
         "last_seen_at": last_seen_at,
     }
     for peer_id in peer_ids:

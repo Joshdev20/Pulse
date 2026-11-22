@@ -21,6 +21,7 @@ import {
   StickerIcon,
   VideoIcon,
 } from '../components/Icons'
+import { useAuth } from '../context/AuthContext'
 import { useRealtime } from '../context/RealtimeContext'
 import { useCall } from '../lib/calls'
 import { api, ApiError } from '../lib/api'
@@ -37,6 +38,17 @@ const INBOX_KEY = 'conversations'
 
 /** How long after opening a thread to keep it pinned to the newest message. */
 const PIN_WINDOW_MS = 2500
+
+/**
+ * How long a cached thread is painted without asking the server again.
+ *
+ * Short on purpose. A thread is where a missing message is most visible, and
+ * the cache is filled by whoever last read it: stepping into a thread that a
+ * partner wrote to while the inbox was open must not show the version from
+ * before that message. Cached messages still paint immediately — this only
+ * decides when the background re-read runs.
+ */
+const HISTORY_TTL_MS = 5_000
 
 /** A `scrollHeight` change smaller than this is not worth re-pinning for. */
 const GROWTH_TOLERANCE_PX = 2
@@ -64,6 +76,49 @@ function dayLabel(iso: string, now: number): string {
     month: 'short',
     year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
   })
+}
+
+/**
+ * Fold a freshly read page into the thread already on screen.
+ *
+ * A message can arrive over the socket while the history request is in flight,
+ * and the response — read before it existed — would drop it from the list.
+ * Anything newer than the page's last row is kept; older rows the page does not
+ * mention are dropped, so a message deleted elsewhere does not come back.
+ */
+function mergeHistory(current: Message[], fetched: Message[]): Message[] {
+  if (current.length === 0) return fetched
+  const known = new Set(fetched.map((item) => item.id))
+  const newest = fetched.length
+    ? new Date(fetched[fetched.length - 1].created_at).getTime()
+    : 0
+  const conversationId = fetched[0]?.conversation_id
+  const arrivedMeanwhile = current.filter(
+    (item) =>
+      !known.has(item.id) &&
+      (conversationId === undefined || item.conversation_id === conversationId) &&
+      new Date(item.created_at).getTime() > newest,
+  )
+  if (arrivedMeanwhile.length === 0) return fetched
+  return [...fetched, ...arrivedMeanwhile].sort(
+    (left, right) =>
+      new Date(left.created_at).getTime() - new Date(right.created_at).getTime() ||
+      left.id - right.id,
+  )
+}
+
+/**
+ * Whether an optimistic bubble stands for the message that just arrived.
+ *
+ * Matched on what the sender chose — text, sticker, attachments and the message
+ * replied to — because the ids are only known once the server has answered.
+ */
+function sameDraft(sent: Message, incoming: Message): boolean {
+  if (sent.body !== incoming.body) return false
+  if ((sent.sticker ?? null) !== (incoming.sticker ?? null)) return false
+  if ((sent.reply_to?.id ?? null) !== (incoming.reply_to?.id ?? null)) return false
+  if (sent.media.length !== incoming.media.length) return false
+  return sent.media.every((item, index) => item.id === incoming.media[index]?.id)
 }
 
 /** Inbox: every conversation, newest activity first, searchable. */
@@ -250,13 +305,39 @@ function Thread({
   onSent: () => void
   onTyping: (conversationId: number, typing: boolean) => void
 }) {
-  const { subscribe, sendTyping } = useRealtime()
+  const { subscribe, sendTyping, connectionEpoch } = useRealtime()
+  const { user } = useAuth()
   const call = useCall()
-  const [messages, setMessages] = useState<Message[]>(
-    () => queryCache.read<Message[]>(`messages:${conversation.id}`) ?? [],
-  )
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const cached = queryCache.read<Message[]>(`messages:${conversation.id}`) ?? []
+    // The inbox row carries the newest message the server has for this thread.
+    // When it is newer than the cached history, a message arrived after this
+    // thread was last read, and painting the cache alone would show a thread
+    // missing it until the re-read lands.
+    const newest = conversation.last_message
+    if (!newest || cached.length === 0) return cached
+    if (cached.some((item) => item.id === newest.id)) return cached
+    if (newest.id < cached[cached.length - 1].id) return cached
+    return [...cached, newest]
+  })
   const [loading, setLoading] = useState(
     () => queryCache.read<Message[]>(`messages:${conversation.id}`) === undefined,
+  )
+  // Bubbles for messages this device has sent that the server has not confirmed
+  // yet. They are kept out of `messages` on purpose: the history cache must only
+  // ever hold confirmed rows, or a pending bubble would come back after a
+  // navigation and never resolve.
+  const [pending, setPending] = useState<Message[]>([])
+
+  /**
+   * What the thread draws: confirmed history plus anything still in flight.
+   *
+   * The pending rows are last because they are the newest by definition, and
+   * they are not in the cache, so a navigation cannot resurrect them.
+   */
+  const visible = useMemo(
+    () => (pending.length > 0 ? [...messages, ...pending] : messages),
+    [messages, pending],
   )
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -292,24 +373,48 @@ function Thread({
   // about that often rather than on every tick.
   const now = useNow(30_000)
 
-  // A thread reopened in this session paints its history at once. Re-reading 50
-  // messages costs seconds here, and a reader who steps back into a thread has
-  // not asked for anything new: the socket already delivers anything that
-  // arrived while they were away.
+  // A thread reopened in this session paints its history at once, then
+  // revalidates in the background. Painting only the cache is what left a
+  // partner's latest message invisible until the cache expired: the socket
+  // delivers messages that arrive while this page is mounted, but not one sent
+  // while the reader was on another screen.
   const historyKey = `messages:${conversation.id}`
-  const load = useCallback(() => {
-    setLoading(true)
-    queryCache
-      .load(historyKey, () => api.messages(conversation.id, 50), 30_000)
-      .then((data) => {
-        setMessages(data)
-        setError(null)
-      })
-      .catch((caught) =>
-        setError(caught instanceof ApiError ? caught.message : 'Could not load messages'),
-      )
-      .finally(() => setLoading(false))
-  }, [conversation.id, historyKey])
+  const load = useCallback(
+    (force = false) => {
+      if (!force && queryCache.read<Message[]>(historyKey) === undefined) setLoading(true)
+      queryCache
+        .load(historyKey, () => api.messages(conversation.id, 50), HISTORY_TTL_MS, force)
+        .then((data) => {
+          setMessages((current) => {
+            const merged = mergeHistory(current, data)
+            queryCache.write(historyKey, merged)
+            return merged
+          })
+          setError(null)
+        })
+        .catch((caught) =>
+          setError(caught instanceof ApiError ? caught.message : 'Could not load messages'),
+        )
+        .finally(() => setLoading(false))
+    },
+    [conversation.id, historyKey],
+  )
+
+  // The inbox re-read can land after the thread is open, and it carries the
+  // newest message the server has. Folding it in is what makes a message sent
+  // while the reader was on another screen appear at once, without waiting for
+  // the history request.
+  useEffect(() => {
+    const newest = conversation.last_message
+    if (!newest) return
+    setMessages((current) => {
+      if (current.length === 0 || current.some((item) => item.id === newest.id)) return current
+      if (newest.id < current[current.length - 1].id) return current
+      const next = [...current, newest]
+      queryCache.write(historyKey, next)
+      return next
+    })
+  }, [conversation.last_message, historyKey])
 
   // A receipt that arrived while the history was loading would be overwritten
   // by the fetch, so the loaded page is reconciled with it here.
@@ -357,12 +462,29 @@ function Thread({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id, load, markRead, onSent])
 
+  // A socket that was down may have missed messages entirely, so the open
+  // thread is re-read as soon as the connection is back.
+  useEffect(() => {
+    if (connectionEpoch === 0) return
+    load(true)
+  }, [connectionEpoch, load])
+
   // Live messages, edits, deletions, likes and typing for this thread only.
   useEffect(
     () =>
       subscribe((event) => {
         if (event.type === 'message' && event.message?.conversation_id === conversation.id) {
           const incoming = event.message
+          // Our own message comes back over the socket too. When it does, the
+          // optimistic bubble standing in for it is dropped here; the row that
+          // follows is the confirmed one, so the thread never shows both.
+          if (incoming.mine) {
+            setPending((current) => {
+              const index = current.findIndex((item) => sameDraft(item, incoming))
+              if (index === -1) return current
+              return current.filter((_, position) => position !== index)
+            })
+          }
           setMessages((current) => {
             // A call entry is created when the call starts and updated when it
             // ends, so the same id arrives more than once. Replacing it in
@@ -453,7 +575,7 @@ function Thread({
   useLayoutEffect(() => {
     const node = scrollRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [messages, partnerTyping, replyTo, conversation.id])
+  }, [visible, partnerTyping, replyTo, conversation.id])
 
   // Whether the newest message should still be kept in view, and the last
   // content height seen. Both outlive the re-subscription below, so a reader
@@ -549,7 +671,7 @@ function Thread({
       node.removeEventListener('touchstart', stop)
       node.removeEventListener('keydown', stop)
     }
-  }, [conversation.id, messages, partnerTyping, replyTo, armPin])
+  }, [conversation.id, visible, partnerTyping, replyTo, armPin])
 
   /**
    * Add a message the server has confirmed, keeping the cached history in step.
@@ -565,6 +687,61 @@ function Thread({
       queryCache.write(historyKey, next)
       return next
     })
+  }
+
+  // Mirrors `pending` so an async failure can tell whether the bubble it is
+  // about to remove is still there, or whether the socket already confirmed it.
+  const pendingRef = useRef<Message[]>([])
+  useEffect(() => {
+    pendingRef.current = pending
+  }, [pending])
+
+  const pendingSeq = useRef(0)
+
+  /**
+   * The bubble drawn while a send is in flight.
+   *
+   * The server's row replaces it the moment it lands. Until then this is what
+   * makes the send feel instant instead of waiting on the round trip.
+   */
+  function optimisticMessage(input: {
+    body: string
+    media: Media[]
+    sticker: string | null
+    replyTo: Message | null
+  }): Message | null {
+    if (!user) return null
+    pendingSeq.current += 1
+    return {
+      id: -pendingSeq.current,
+      conversation_id: conversation.id,
+      body: input.body,
+      created_at: new Date().toISOString(),
+      sender: user,
+      media: input.media,
+      mine: true,
+      sticker: input.sticker,
+      reply_to: input.replyTo
+        ? {
+            id: input.replyTo.id,
+            body: input.replyTo.body,
+            sender_username: input.replyTo.sender.username,
+            sender_display_name: input.replyTo.sender.display_name,
+            has_media: input.replyTo.media.length > 0,
+          }
+        : null,
+      like_count: 0,
+      liked_by_me: false,
+      edited_at: null,
+      forwarded: false,
+      read_by_partner: false,
+      call: null,
+      pending: true,
+    }
+  }
+
+  function dropPending(id: number) {
+    setPending((current) => current.filter((item) => item.id !== id))
   }
 
   function replaceMessage(message: Message) {
@@ -732,21 +909,39 @@ function Thread({
 
     if ((!body && attachments.length === 0) || sending) return
 
+    const media = attachments
+    const quoting = replyTo
+    const optimistic = optimisticMessage({ body, media, sticker: null, replyTo: quoting })
+
     setSending(true)
     setError(null)
+    if (optimistic) setPending((current) => [...current, optimistic])
+    // The composer empties at once: the message is already on screen, and
+    // holding the text until the round trip finished is what made sending feel
+    // like it had stalled.
+    setDraft('')
+    setAttachments([])
+    setReplyTo(null)
     try {
       const sent = await api.sendMessage(
         conversation.id,
         body,
-        attachments.map((item) => item.id),
-        replyTo?.id ?? null,
+        media.map((item) => item.id),
+        quoting?.id ?? null,
       )
       appendMessage(sent)
-      setDraft('')
-      setAttachments([])
-      setReplyTo(null)
+      if (optimistic) dropPending(optimistic.id)
       onSent()
     } catch (caught) {
+      // Only give the text back if this bubble is still unsent: when the socket
+      // already delivered the message the request did land, and restoring the
+      // draft would duplicate it.
+      if (optimistic && pendingRef.current.some((item) => item.id === optimistic.id)) {
+        dropPending(optimistic.id)
+        setDraft(body)
+        setAttachments(media)
+        setReplyTo(quoting)
+      }
       setError(caught instanceof ApiError ? caught.message : 'Message not sent')
     } finally {
       setSending(false)
@@ -762,14 +957,23 @@ function Thread({
    */
   async function sendSticker(sticker: Sticker) {
     if (sending) return
+    const quoting = replyTo
+    const optimistic = optimisticMessage({ body: '', media: [], sticker: sticker.id, replyTo: quoting })
+
     setSending(true)
     setError(null)
+    if (optimistic) setPending((current) => [...current, optimistic])
+    setReplyTo(null)
     try {
-      const sent = await api.sendMessage(conversation.id, '', [], replyTo?.id ?? null, sticker.id)
+      const sent = await api.sendMessage(conversation.id, '', [], quoting?.id ?? null, sticker.id)
       appendMessage(sent)
-      setReplyTo(null)
+      if (optimistic) dropPending(optimistic.id)
       onSent()
     } catch (caught) {
+      if (optimistic && pendingRef.current.some((item) => item.id === optimistic.id)) {
+        dropPending(optimistic.id)
+        setReplyTo(quoting)
+      }
       setError(caught instanceof ApiError ? caught.message : 'Sticker not sent')
     } finally {
       setSending(false)
@@ -831,8 +1035,8 @@ function Thread({
 
   /** Grouping: same sender, and close enough in time to read as one turn. */
   const rendered = useMemo(() => {
-    return messages.map((message, index) => {
-      const previous = messages[index - 1]
+    return visible.map((message, index) => {
+      const previous = visible[index - 1]
       // A call entry is a centred event, not a bubble, so nothing groups with
       // it: a message that followed one would otherwise draw without an avatar
       // and read as a continuation of the call.
@@ -848,7 +1052,7 @@ function Thread({
         !previous || dayKey(previous.created_at) !== dayKey(message.created_at)
       return { message, grouped, showDay }
     })
-  }, [messages])
+  }, [visible])
 
   return (
     <div className="thread">
@@ -909,10 +1113,10 @@ function Thread({
 
       <div className="thread-body" ref={scrollRef}>
         {loading && <FeedSkeleton rows={3} />}
-        {!loading && error && messages.length === 0 && (
-          <ErrorState message={error} onRetry={load} />
+        {!loading && error && visible.length === 0 && (
+          <ErrorState message={error} onRetry={() => load(true)} />
         )}
-        {!loading && messages.length === 0 && (
+        {!loading && visible.length === 0 && (
           <p className="thread-empty">
             This is the beginning of your conversation with {conversation.partner.display_name}.
           </p>
@@ -955,7 +1159,7 @@ function Thread({
       </div>
 
       {notice && <p className="thread-notice">{notice}</p>}
-      {error && messages.length > 0 && <p className="thread-error">{error}</p>}
+      {error && visible.length > 0 && <p className="thread-error">{error}</p>}
 
       {replyTo && (
         <div className="reply-preview">
@@ -1102,7 +1306,7 @@ export function MessagesPage() {
   const { conversationId } = useParams()
   const navigate = useNavigate()
 
-  const { subscribe } = useRealtime()
+  const { subscribe, connectionEpoch } = useRealtime()
 
   const [conversations, setConversations] = useState<Conversation[]>(
     () => queryCache.read<Conversation[]>(INBOX_KEY) ?? [],
@@ -1128,8 +1332,11 @@ export function MessagesPage() {
       .finally(() => setLoading(false))
   }, [])
 
+  // Revalidated on mount rather than served from the cache: this list carries
+  // each thread's newest message, and the thread reads it to paint itself
+  // complete before its own history request lands.
   useEffect(() => {
-    load()
+    load(true)
   }, [load])
 
   // Stable identity: `Thread` calls this from a mount effect, so a new function
@@ -1148,19 +1355,37 @@ export function MessagesPage() {
     })
   }, [])
 
-  // Any incoming message reorders the inbox.
+  // Any incoming message reorders the inbox, and makes the cached copy of that
+  // thread wrong: it predates the message, so opening it would show a thread
+  // missing its newest row. The inbox is re-read rather than patched so the
+  // preview, order and unread count all come from the server.
   useEffect(
     () =>
       subscribe((event) => {
-        if (event.type === 'message') load()
+        if (event.type === 'message') {
+          const id = event.message?.conversation_id
+          // The open thread keeps its own copy in step; only the others are
+          // stale.
+          if (typeof id === 'number' && id !== activeId) {
+            queryCache.invalidate(`messages:${id}`)
+          }
+          load(true)
+        }
         if (event.type === 'typing' && typeof event.conversation_id === 'number') {
           const id = event.conversation_id
           setTyping(id, true)
           window.setTimeout(() => setTyping(id, false), 4000)
         }
       }),
-    [subscribe, load, setTyping],
+    [subscribe, load, setTyping, activeId],
   )
+
+  // A socket that was down delivered nothing, so the inbox is re-read from the
+  // server as soon as it is back rather than trusting what was cached.
+  useEffect(() => {
+    if (connectionEpoch === 0) return
+    load(true)
+  }, [connectionEpoch, load])
 
   const active = useMemo(
     () => conversations.find((conversation) => conversation.id === activeId),
@@ -1228,6 +1453,10 @@ export function MessagesPage() {
         <div className="messages-thread">
           {active ? (
             <Thread
+              // Remount per thread: the composer, the optimistic bubbles and the
+              // scroll position all belong to one conversation, and carrying
+              // them across would put a draft in front of the wrong person.
+              key={active.id}
               conversation={active}
               conversations={conversations}
               onSent={refreshInbox}

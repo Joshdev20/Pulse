@@ -221,6 +221,22 @@ the public URL returns 502 until the dev server is bound to 12000.
   does not flicker the status. It fans out to conversation partners only (`_announce_presence`
   resolves the peer ids), because presence is rendered in a thread header and broadcasting it
   to every socket would leak who is online to strangers.
+- A socket that never closes is not a socket that is gone. A sleeping phone or a killed
+  tab leaves the connection registered, so the user reads as "Online" for as long as the
+  process lives and no offline transition is ever announced. `/api/ws` therefore reads
+  with a timeout (`SOCKET_IDLE_TIMEOUT_SECONDS`, 75 s) and drops a silent socket through
+  the same `finally` as a clean close. The client pings every 10 s, and Chrome throttles
+  background timers to one a minute, so 75 s is the shortest window that does not cut a
+  healthy background tab. `tests/test_messages.py` covers it with the timeout patched down.
+- Every datetime in a realtime frame goes through `frame_json` (`app/realtime.py`). Frames
+  are plain dicts and never touch the `UTCDatetime` serializer, so a naive value reaches
+  the browser without an offset and is parsed as local time — which is how a partner who
+  had just gone offline showed "Last seen 1h ago" in UTC+1, and how a fresh notification
+  read as hours old. It is one choke point on purpose: a per-payload `isoformat()` call is
+  easy to forget, and `tests/test_messages.py` / `tests/test_social.py` assert the wire
+  format for presence, read receipts and notifications.
+- The connect path issues no writes. `last_seen` is stamped on close, not on connect, so a
+  socket that dies silently is covered by the idle timeout rather than by a write per tab.
 - A socket's `onclose` must ignore a socket that is no longer the current one
   (`if (socketRef.current !== socket) return`). React StrictMode mounts the effect twice in
   development, so the first socket is orphaned; letting its late close clear the ref and
@@ -229,6 +245,21 @@ the public URL returns 502 until the dev server is bound to 12000.
   `serialize_users`), and only the conversation partner payload passes it. Leaving it on by
   default would publish `is_online`/`last_seen_at` through search, follower lists and post
   authors, which is a different disclosure from the thread header that needs it.
+- A thread paints its cached history and then revalidates (`HISTORY_TTL_MS`, 5 s, in
+  `pages/MessagesPage.tsx`). The socket only delivers what arrives while the page is
+  mounted, so a thread cached before the partner wrote stayed stale until the cache
+  expired — a message could be missing from a thread the inbox had already reordered. The
+  inbox row's `last_message` is folded in too, so the newest row is on screen before the
+  history request lands, and the inbox revalidates on mount because it is what tells the
+  thread which row is newest. `mergeHistory` keeps a row that arrived while the request
+  was in flight; without it the response, read before that row existed, dropped it.
+- Sending is optimistic. `Thread` keeps pending bubbles in their own state, never in the
+  history cache, so a navigation cannot resurrect one; they are matched to the confirmed
+  row by content (`sameDraft`) because the id is only known once the server answers. A
+  failed send removes the bubble and puts the text and attachments back in the composer,
+  but only if that bubble is still unsent — when the socket already delivered the message,
+  restoring the draft would duplicate it. `Thread` is keyed by conversation id so a draft
+  or a pending bubble cannot cross into another thread.
 - The notification frame carries a small `actor` summary (`notification_event` in
   `routers/notifications.py`) so a backgrounded tab can name who acted without a fetch. Both
   `posts._notify` and `users.follow_user` publish through it — keep the two in step rather
@@ -236,6 +267,16 @@ the public URL returns 502 until the dev server is bound to 12000.
 
 ### Media and voice notes
 
+- Downloaded media is **retained** after its last consumer unmounts, in `lib/mediaCache.ts`:
+  idle entries are released after `IDLE_EVICTION_MS`, and the retained set is bounded by
+  `MAX_ENTRIES` and by `MAX_RETAINED_BYTES` (48 MB) because a handful of videos can be
+  hundreds of megabytes. Dropping the entry on unmount is what made every navigation
+  re-download the feed: the cells unmount on the way to a profile and the return visit
+  found an empty cache. An entry that something is showing is never evicted — revoking an
+  object URL on screen blanks a visible picture. `useMediaUrl` paints from `peekMedia`
+  during render and scopes the loaded asset to its path and retry attempt, so a retained
+  download is on screen on the first paint and a previous element's picture cannot linger
+  for a frame after `path` changes.
 - `app/storage.py` holds the single source of truth for accepted uploads: `ALLOWED_TYPES`
   maps each content type to its on-disk extension, and `sniff` builds its result *through*
   it (`_sniffed`), so a magic-byte signature cannot be added for a type the upload routes

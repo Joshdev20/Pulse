@@ -54,15 +54,27 @@ export function useMediaStatus(
   failed: boolean
   loading: boolean
 } {
-  // Seeded from the cache so a return to a page paints its media on the first
-  // render. Without this the effect has to run and resolve before anything
-  // shows, which is the blank-then-appear flicker on every navigation.
-  const [asset, setAsset] = useState<MediaAsset | null>(() => peekMedia(path))
+  // The asset is stored with the path and attempt it belongs to. Keeping it
+  // bare would let the previous element's picture stay on screen for a frame
+  // after `path` changes, and a stale one after a retry.
+  const [loaded, setLoaded] = useState<{
+    path: string
+    attempt: number
+    asset: MediaAsset
+  } | null>(null)
   const [failed, setFailed] = useState(false)
+
+  // A retained download is painted from the first render. Without this the
+  // element shows its placeholder until the promise callback runs, so a feed
+  // that was already downloaded still appears to reload on every navigation.
+  const key = path ?? ''
+  const own = loaded && loaded.path === key && loaded.attempt === attempt ? loaded.asset : null
+  const cached = path && attempt === 0 ? peekMedia(path) : null
+  const asset = own ?? cached
 
   useEffect(() => {
     if (!path) {
-      setAsset(null)
+      setLoaded(null)
       setFailed(false)
       return
     }
@@ -78,7 +90,7 @@ export function useMediaStatus(
     // one starts so a retry loop does not pile up references on a failed path.
     let held: Entry | null = null
 
-    setAsset(peekMedia(path))
+    setLoaded(null)
     setFailed(false)
 
     const start = () => {
@@ -88,7 +100,7 @@ export function useMediaStatus(
       held = entry
       entry.promise
         .then((result) => {
-          if (!cancelled) setAsset(result)
+          if (!cancelled) setLoaded({ path: key, attempt, asset: result })
         })
         .catch((error: unknown) => {
           if (cancelled) return
@@ -99,7 +111,7 @@ export function useMediaStatus(
           // failure are worth another attempt.
           const retryable = status === 0 || status === 429 || status >= 500
           if (!retryable) {
-            setAsset(null)
+            setLoaded(null)
             setFailed(true)
             return
           }
@@ -108,7 +120,7 @@ export function useMediaStatus(
           const fallback = schedule[attemptCount]
           attemptCount += 1
           if (fallback === undefined) {
-            setAsset(null)
+            setLoaded(null)
             setFailed(true)
             return
           }
@@ -125,7 +137,7 @@ export function useMediaStatus(
       if (timer !== undefined) window.clearTimeout(timer)
       if (held) unrefMedia(path, held)
     }
-  }, [path, attempt])
+  }, [path, attempt, key])
 
   return { asset, failed, loading: Boolean(path) && !asset && !failed }
 }

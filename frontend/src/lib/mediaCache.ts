@@ -22,6 +22,8 @@ export type Entry = {
   released: boolean
   /** When the last consumer let go, for idle eviction. Undefined while held. */
   idleSince?: number
+  /** Size of the downloaded blob, once it has landed. */
+  bytes: number
 }
 
 /** A failed download, carrying enough for the caller to decide when to retry. */
@@ -46,7 +48,10 @@ function filenameFrom(header: string | null): string | null {
   return match ? decodeURIComponent(match[1]) : null
 }
 
-async function fetchAsset(path: string, revalidate = false): Promise<MediaAsset> {
+async function fetchAsset(
+  path: string,
+  revalidate = false,
+): Promise<MediaAsset & { bytes: number }> {
   const token = getToken()
   const response = await fetch(apiUrl(path), {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -68,6 +73,7 @@ async function fetchAsset(path: string, revalidate = false): Promise<MediaAsset>
   return {
     url: URL.createObjectURL(blob),
     filename: filenameFrom(response.headers.get('content-disposition')),
+    bytes: blob.size,
   }
 }
 
@@ -94,16 +100,28 @@ export function refMedia(path: string, revalidate = false): Entry {
   evictIdle()
   let entry = cache.get(path)
   if (!entry) {
+    // Kept in a local so the wider type (with the blob size) survives the
+    // assignment to `Entry.promise`.
+    const download = fetchAsset(path, revalidate)
     const created: Entry = {
-      promise: fetchAsset(path, revalidate),
+      promise: download,
       refs: 0,
       asset: null,
       released: false,
+      bytes: 0,
     }
-    created.promise
+    download
       .then((result) => {
-        if (created.released) URL.revokeObjectURL(result.url)
-        else created.asset = result
+        if (created.released) {
+          URL.revokeObjectURL(result.url)
+          return
+        }
+        created.asset = result
+        created.bytes = result.bytes
+        retainedBytes += result.bytes
+        // A single video can be most of the budget, so the sweep runs when the
+        // bytes land rather than waiting for the next consumer to arrive.
+        evictIdle()
       })
       .catch(() => {
         // A failure is not a durable fact. Leaving the rejected entry cached
@@ -147,6 +165,27 @@ export function unrefMedia(path: string, entry: Entry) {
 const IDLE_EVICTION_MS = 5 * 60_000
 /** Upper bound on retained entries, so a long session cannot grow without end. */
 const MAX_ENTRIES = 300
+/**
+ * Upper bound on the bytes retained, which entries alone cannot express.
+ *
+ * A feed of videos is a handful of entries and hundreds of megabytes: 300
+ * retained clips would be more than a phone will give a tab before it discards
+ * it. The count cap and the idle sweep are kept because they bound different
+ * things — how many requests are re-made, and how long a stale copy lives.
+ */
+const MAX_RETAINED_BYTES = 48 * 1024 * 1024
+
+/** Bytes held by retained entries; kept in step with the map. */
+let retainedBytes = 0
+
+/** Drop one path, revoking its object URL and giving its budget back. */
+function evictPath(path: string) {
+  const entry = cache.get(path)
+  if (!entry) return
+  cache.delete(path)
+  retainedBytes -= entry.bytes
+  release(entry)
+}
 
 /**
  * Release entries nobody has held for a while, or the oldest if there are too
@@ -159,13 +198,14 @@ function evictIdle() {
     if (entry.idleSince === undefined) continue
     if (now - entry.idleSince > IDLE_EVICTION_MS) {
       cache.delete(path)
+      retainedBytes -= entry.bytes
       release(entry)
     }
   }
-  if (cache.size <= MAX_ENTRIES) return
+  if (cache.size <= MAX_ENTRIES && retainedBytes <= MAX_RETAINED_BYTES) return
   // Still over budget: drop the least recently used idle entries first.
   const idle = [...cache.entries()]
-    .filter(([, entry]) => entry.refs === 0 && entry.idleSince !== undefined)
+    .filter(([, entry]) => entry.refs === 0 && entry.idleSince !== undefined && entry.asset)
     .sort((a, b) => (a[1].idleSince ?? 0) - (b[1].idleSince ?? 0))
   for (const [path, entry] of idle) {
     if (cache.size <= MAX_ENTRIES) break
@@ -186,6 +226,7 @@ function evictIdle() {
 export function clearMediaCache() {
   for (const entry of cache.values()) release(entry)
   cache.clear()
+  retainedBytes = 0
 }
 
 /**
@@ -197,10 +238,7 @@ export function clearMediaCache() {
  * cache, so both have to be discarded for a retry to see anything new.
  */
 export function dropMedia(path: string) {
-  const entry = cache.get(path)
-  if (!entry) return
-  cache.delete(path)
-  release(entry)
+  evictPath(path)
 }
 
 /**
@@ -226,13 +264,23 @@ export function peekMedia(path: string | null | undefined): MediaAsset | null {
  */
 export function primeMedia(path: string | null | undefined) {
   if (!path || cache.has(path)) return
-  const created: Entry = { promise: fetchAsset(path), refs: 0, asset: null, released: false }
-  created.promise
+  const download = fetchAsset(path)
+  const created: Entry = {
+    promise: download,
+    refs: 0,
+    asset: null,
+    released: false,
+    bytes: 0,
+  }
+  download
     .then((result) => {
       created.asset = result
+      created.bytes = result.bytes
+      retainedBytes += result.bytes
       // Unclaimed, so it is a candidate for the idle sweep — but kept, so a
       // consumer that mounts just after the download lands still gets it free.
       if (created.refs <= 0) created.idleSince = Date.now()
+      evictIdle()
     })
     .catch(() => {
       if (cache.get(path) === created) cache.delete(path)

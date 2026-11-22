@@ -875,9 +875,11 @@ async def mark_read(conversation_id: int, db: DbSession, user: CurrentUser) -> d
             "type": "read",
             "conversation_id": conversation_id,
             "user_id": user.id,
-            "last_read_at": participant.last_read_at.isoformat()
-            if participant.last_read_at is not None
-            else None,
+            # The datetime itself, not `isoformat()`: SQLite hands it back
+            # naive, and pre-formatting here would bypass `frame_json`, which is
+            # what attaches the UTC offset. Without it the browser reads the
+            # receipt as local time and "Seen" lands an hour off in UTC+1.
+            "last_read_at": participant.last_read_at,
         },
     )
     return {"unread_count": 0}

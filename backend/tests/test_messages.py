@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import time
+from datetime import datetime
 
 from sqlalchemy import event
 
@@ -875,6 +877,47 @@ def _user_id(headers, client):
     return client.get("/api/auth/me", headers=headers).json()["id"]
 
 
+def test_silent_socket_is_dropped_and_presence_ends(client, make_user, monkeypatch):
+    """A socket that stops answering must not keep its user "online" forever.
+
+    A phone that sleeps or a tab that is killed leaves a socket the browser
+    never closed. Left alone it stays registered, so the partner keeps seeing
+    "Online" and no transition is ever announced.
+    """
+    from app.routers import realtime as realtime_router
+
+    monkeypatch.setattr(realtime_router, "SOCKET_IDLE_TIMEOUT_SECONDS", 0.5)
+
+    ada, _ = make_user("ada")
+    grace, _ = make_user("grace")
+    start(client, ada, "grace")
+    ada_token = ada["Authorization"].split(" ", 1)[1]
+    grace_token = grace["Authorization"].split(" ", 1)[1]
+
+    with client.websocket_connect("/api/ws") as ada_socket:
+        ada_socket.send_text(json.dumps({"type": "auth", "token": ada_token}))
+        recv_frame(ada_socket, "ready")
+
+        with client.websocket_connect("/api/ws") as grace_socket:
+            grace_socket.send_text(json.dumps({"type": "auth", "token": grace_token}))
+            recv_frame(grace_socket, "ready")
+            assert recv_frame(ada_socket, "presence")["is_online"] is True
+
+            # Grace goes silent. Ada keeps pinging so it is her that survives
+            # the idle window, and the offline frame arrives among the pongs.
+            offline = None
+            for _ in range(20):
+                ada_socket.send_text(json.dumps({"type": "ping"}))
+                frame = json.loads(ada_socket.receive_text())
+                if frame["type"] == "presence":
+                    offline = frame
+                    break
+                time.sleep(0.1)
+            assert offline is not None, "no offline presence frame arrived"
+            assert offline["is_online"] is False
+            assert offline["last_seen_at"] is not None
+
+
 def test_presence_is_not_announced_for_strangers(client, make_user, monkeypatch):
     """A user with no shared conversation is not told about the transition.
 
@@ -1281,6 +1324,10 @@ def test_read_receipt_reaches_the_sender_over_the_socket(client, make_user):
         frame = recv_frame(socket, "read")
         assert frame["conversation_id"] == cid
         assert frame["last_read_at"] is not None
+        # Same offset guarantee as presence: "Seen" is computed from this value,
+        # and a naive one is read by the browser as local time.
+        parsed = datetime.fromisoformat(frame["last_read_at"].replace("Z", "+00:00"))
+        assert parsed.tzinfo is not None
 
 
 def test_inbox_carries_partner_read_state(client, make_user):

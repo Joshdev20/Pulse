@@ -273,7 +273,11 @@ export function MessageBubble({
               </span>
             )}
             {message.mine && (
-              <DeliveryTick read={message.read_by_partner} online={partnerOnline} />
+              <DeliveryTick
+                read={message.read_by_partner}
+                online={partnerOnline}
+                pending={message.pending}
+              />
             )}
           </div>
         </div>
@@ -290,7 +294,24 @@ export function MessageBubble({
  * derived from the partner's own read stamp, so a message never shows "seen"
  * because this side happened to be looking at the thread.
  */
-function DeliveryTick({ read, online }: { read: boolean; online: boolean }) {
+function DeliveryTick({
+  read,
+  online,
+  pending,
+}: {
+  read: boolean
+  online: boolean
+  pending?: boolean
+}) {
+  // Still on its way to the server: a clock says so, and it must not claim
+  // "Delivered" just because the partner happens to be online.
+  if (pending) {
+    return (
+      <span className="bubble-tick pending" aria-label="Sending" title="Sending">
+        <ClockIcon size={12} />
+      </span>
+    )
+  }
   if (read) {
     return (
       <span className="bubble-tick read" aria-label="Seen" title="Seen">

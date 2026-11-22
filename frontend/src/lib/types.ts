@@ -125,6 +125,11 @@ export interface Message {
   read_by_partner: boolean
   /** Set when this row is a call rather than a message. */
   call: CallLog | null
+  /**
+   * Client-only: this bubble is waiting for the server to confirm the send.
+   * Never comes from the API and never enters the history cache.
+   */
+  pending?: boolean
 }
 
 /**

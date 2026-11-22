@@ -75,6 +75,14 @@ type Listener = (event: RealtimeEvent) => void
 
 interface RealtimeValue {
   connected: boolean
+  /**
+   * Bumped each time a socket comes back after having been connected before.
+   *
+   * A reconnect is the one moment events can have been missed: while the socket
+   * was down the server had nowhere to deliver them, so anything read from the
+   * cache in the meantime may be missing rows. Consumers re-read on this.
+   */
+  connectionEpoch: number
   subscribe: (listener: Listener) => () => void
   /** Ask the server to relay a typing indicator for this conversation. */
   sendTyping: (conversationId: number) => void
@@ -126,6 +134,10 @@ function socketUrl(): string {
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false)
+  const [connectionEpoch, setConnectionEpoch] = useState(0)
+  // Whether this effect has ever reached `ready`. The first one is not a
+  // resync: every screen has just mounted and loaded its own data.
+  const hasConnected = useRef(false)
   const socketRef = useRef<WebSocket | null>(null)
   const listenersRef = useRef(new Set<Listener>())
   const attemptsRef = useRef(0)
@@ -219,6 +231,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (event.type === 'ready') {
           attemptsRef.current = 0
           setConnected(true)
+          if (hasConnected.current) setConnectionEpoch((value) => value + 1)
+          hasConnected.current = true
           return
         }
         // Any frame is proof of life; a `pong` is the answer to our ping.
@@ -322,6 +336,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
     return () => {
       closedByUs.current = true
+      hasConnected.current = false
       window.clearInterval(heartbeat)
       for (const probe of probeTimers) window.clearTimeout(probe)
       probeTimers.clear()
@@ -337,8 +352,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   }, [emit, sessionEpoch])
 
   const value = useMemo<RealtimeValue>(
-    () => ({ connected, subscribe, sendTyping, sendCall }),
-    [connected, subscribe, sendTyping, sendCall],
+    () => ({ connected, connectionEpoch, subscribe, sendTyping, sendCall }),
+    [connected, connectionEpoch, subscribe, sendTyping, sendCall],
   )
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>
@@ -373,7 +388,7 @@ export function useRealtimeEvent(listener: Listener, deps: unknown[] = []) {
  */
 export function useUnreadMessages(): { count: number; refresh: () => void } {
   const count = useSyncExternalStore(subscribeCounts, () => readCounts().messages)
-  const { subscribe } = useRealtime()
+  const { subscribe, connectionEpoch } = useRealtime()
   const { user } = useAuth()
 
   const refresh = useCallback(() => {
@@ -391,6 +406,12 @@ export function useUnreadMessages(): { count: number; refresh: () => void } {
   useEffect(() => {
     refresh()
   }, [refresh])
+
+  // Messages that arrived while the socket was down were never counted, so the
+  // server's number is taken again once it is back.
+  useEffect(() => {
+    if (connectionEpoch > 0) refresh()
+  }, [connectionEpoch, refresh])
 
   useEffect(
     () =>

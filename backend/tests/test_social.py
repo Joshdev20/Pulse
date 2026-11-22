@@ -51,6 +51,44 @@ def test_follow_creates_notification_and_read_state(client, make_user):
     assert client.get("/api/notifications", headers=grace_headers, params={"unread_only": True}).json() == []
 
 
+def test_notification_frame_carries_a_utc_offset(client, make_user, monkeypatch):
+    """The socket frame must say which timezone its timestamp is in.
+
+    Frames are built as plain dicts, so they never pass through the response
+    schemas that attach UTC. A naive stamp there is read by the browser as local
+    time, which shows a notification that just arrived as hours old anywhere
+    ahead of UTC.
+    """
+    import json
+    from datetime import datetime
+
+    from app import realtime as realtime_module
+    from app.realtime import frame_json
+
+    ada_headers, _ = make_user("ada")
+    make_user("grace")
+
+    published: list[tuple[int, dict]] = []
+    real_publish = realtime_module.manager.publish
+
+    async def record(user_id: int, payload: dict) -> None:
+        published.append((user_id, payload))
+        await real_publish(user_id, payload)
+
+    monkeypatch.setattr(realtime_module.manager, "publish", record)
+    client.post("/api/users/grace/follow", headers=ada_headers)
+
+    frames = [payload for _, payload in published if payload.get("type") == "notification"]
+    assert frames, "no notification frame was published"
+    # Serialized the way the socket sends it, which is where the offset is
+    # attached — the payload dict itself still holds the ORM value.
+    sent = json.loads(frame_json(frames[0]))
+    stamp = sent["notification"]["created_at"]
+    assert "T" in stamp, f"expected an ISO timestamp, got {stamp!r}"
+    assert stamp.endswith("Z") or stamp.endswith("+00:00"), stamp
+    assert datetime.fromisoformat(stamp.replace("Z", "+00:00")).tzinfo is not None
+
+
 def test_cannot_read_another_users_notification(client, make_user):
     ada_headers, _ = make_user("ada")
     grace_headers, _ = make_user("grace")
