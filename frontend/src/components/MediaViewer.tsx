@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronLeftIcon, CloseIcon, DownloadIcon } from './Icons'
+import { ChevronLeftIcon, CloseIcon } from './Icons'
 import { useMediaStatus } from '../lib/useMediaUrl'
+import { VideoControls } from './VideoControls'
 import { primeMedia } from '../lib/mediaCache'
 import { useMediaReady } from '../lib/useMediaReady'
 import { useAutoplay } from '../lib/preferences'
@@ -13,6 +14,17 @@ const SWIPE_X = 55
 const SWIPE_DOWN = 110
 /** Double-tap window, in milliseconds. */
 const DOUBLE_TAP_MS = 280
+
+/**
+ * An upload with no description keeps its file name as the alt text, and a
+ * phone's name — `434B4A7C-14AF-4490-85A2-E4FC90905B2A.png` — tells the reader
+ * nothing, so it is not printed under the picture. A real description is.
+ */
+const FILE_NAME = /^[\w\-. ()]+\.(png|jpe?g|gif|webp|avif|heic|heif|bmp|tiff?|mp4|m4v|mov|webm|ogv|mkv|avi)$/i
+
+function isBareFileName(text: string): boolean {
+  return FILE_NAME.test(text)
+}
 
 /**
  * One attachment, full screen.
@@ -38,10 +50,6 @@ export function MediaViewer({
   const item = items[index]
   const many = items.length > 1
   const autoplay = useAutoplay()
-  // The download link needs a blob URL (the media endpoint wants the auth
-  // header, which a plain `href` cannot send). The stage holds the same
-  // subscription, and the cache dedupes, so this is one download.
-  const { asset: currentAsset } = useMediaStatus(item.poster_url ?? item.url)
   // Where the media sits while a gesture is in progress. Kept apart from the
   // committed state so a cancelled drag snaps back with a transition.
   const [drag, setDrag] = useState({ x: 0, y: 0, active: false })
@@ -197,17 +205,6 @@ export function MediaViewer({
           )}
         </span>
         <div className="viewer-bar-actions">
-          {item.kind === 'image' && currentAsset && (
-            <a
-              className="viewer-btn"
-              href={currentAsset.url}
-              download={currentAsset.filename ?? undefined}
-              aria-label="Download"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <DownloadIcon size={18} />
-            </a>
-          )}
           <button type="button" className="viewer-btn" onClick={close} aria-label="Close viewer">
             <CloseIcon size={20} />
           </button>
@@ -255,7 +252,9 @@ export function MediaViewer({
       )}
 
       <div className="viewer-foot" onClick={(event) => event.stopPropagation()}>
-        {item.alt_text && <p className="viewer-caption">{item.alt_text}</p>}
+        {item.alt_text && !isBareFileName(item.alt_text.trim()) && (
+          <p className="viewer-caption">{item.alt_text}</p>
+        )}
         <span className="viewer-hint">
           {many ? 'Swipe or use the arrows · Esc to close' : 'Esc or tap outside to close'}
         </span>
@@ -279,6 +278,10 @@ function ViewerStage({
 }) {
   const { asset, failed } = useMediaStatus(item.poster_url ?? item.url)
   const { asset: full } = useMediaStatus(item.url)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  // A swipe that pages the gallery ends with a click on whatever it started
+  // on, and that click must not also pause the clip.
+  const dragged = useRef(false)
   const { ref: mediaRef, ready, markReady } = useMediaReady(item.kind === 'video' ? full?.url : asset?.url)
   const showSkeleton = !ready && !failed
 
@@ -291,17 +294,33 @@ function ViewerStage({
       <div className="viewer-media-wrap" onClick={(event) => event.stopPropagation()}>
         {showSkeleton && <span className="viewer-skeleton skeleton" aria-hidden="true" />}
         <video
-          ref={mediaRef}
+          ref={(node) => {
+            videoRef.current = node
+            mediaRef(node)
+          }}
           className={`viewer-media${ready ? ' ready' : ''}`}
           src={full?.url}
           poster={asset?.url}
-          controls
           autoPlay={autoplay}
           playsInline
+          onTouchStart={() => {
+            dragged.current = false
+          }}
+          onTouchMove={() => {
+            dragged.current = true
+          }}
+          onClick={() => {
+            if (dragged.current) return
+            const video = videoRef.current
+            if (!video) return
+            if (video.paused) void video.play().catch(() => {})
+            else video.pause()
+          }}
           onLoadedMetadata={markReady}
           onLoadedData={markReady}
           onError={markReady}
         />
+        <VideoControls videoRef={videoRef} />
       </div>
     )
   }

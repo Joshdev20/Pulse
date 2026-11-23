@@ -6468,6 +6468,69 @@ body {
   letter-spacing: 0.01em;
 }
 
+/* The player's own controls, drawn over the bottom of the stage. They exist
+   because the browser's bar carries a download entry that cannot be removed
+   from the outside. */
+.vctl {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 26px 12px max(8px, env(safe-area-inset-bottom));
+  background: linear-gradient(to top, rgba(3, 4, 7, 0.86), rgba(3, 4, 7, 0.34) 62%, transparent);
+}
+
+.vctl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vctl-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  transition: background 0.16s ease;
+}
+
+.vctl-btn:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.vctl-time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.82);
+  letter-spacing: 0.01em;
+}
+
+.vctl-sep {
+  opacity: 0.45;
+  padding: 0 1px;
+}
+
+.vctl-gap {
+  flex: 1;
+}
+
+.vctl-seek {
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  accent-color: #fff;
+  cursor: pointer;
+}
+
 @media (max-width: 640px) {
   .viewer-media {
     max-height: calc(100vh - 168px);
