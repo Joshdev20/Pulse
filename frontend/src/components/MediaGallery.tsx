@@ -76,22 +76,29 @@ function MediaCell({
   const autoplay = useAutoplay()
   const cellRef = useRef<HTMLButtonElement | null>(null)
   const [inView, setInView] = useState(false)
+  const [nearby, setNearby] = useState(false)
   const playing = item.kind === 'video' && autoplay && inView && !paused
-  // The clip itself is fetched only for a tile that will actually play, so a
-  // feed with autoplay off still downloads posters and nothing more.
-  const { asset: clip } = useMediaStatus(playing ? item.url : null)
+  // The clip is fetched as the tile approaches the viewport rather than when it
+  // arrives: `/api/media` has no range support, so a clip can only start once
+  // the whole file is here, and starting the download on arrival means staring
+  // at a poster for as long as the download takes.
+  const { asset: clip } = useMediaStatus(
+    item.kind === 'video' && autoplay && (playing || nearby) ? item.url : null,
+  )
 
   useEffect(() => {
     if (item.kind !== 'video' || !autoplay) {
       setInView(false)
+      setNearby(false)
       return
     }
     const node = cellRef.current
     if (!node || typeof IntersectionObserver === 'undefined') {
       setInView(true)
+      setNearby(true)
       return
     }
-    const observer = new IntersectionObserver(
+    const play = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           setInView(entry.isIntersecting && entry.intersectionRatio >= 0.55)
@@ -99,8 +106,19 @@ function MediaCell({
       },
       { threshold: [0, 0.55, 1] },
     )
-    observer.observe(node)
-    return () => observer.disconnect()
+    // One viewport of warning is roughly the time it takes to scroll there.
+    const prefetch = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) setNearby(entry.isIntersecting)
+      },
+      { rootMargin: '100% 0px' },
+    )
+    play.observe(node)
+    prefetch.observe(node)
+    return () => {
+      play.disconnect()
+      prefetch.disconnect()
+    }
   }, [item.kind, autoplay])
 
   // Prefer the duration sent with the upload; it needs no video fetch. The
