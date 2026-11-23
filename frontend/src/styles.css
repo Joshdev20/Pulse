@@ -2572,6 +2572,18 @@ h4 {
   transform: scale(1.025);
 }
 
+/* A clip playing in its tile. It covers the poster frame and lets the click
+   through, so the tile still opens the viewer while it plays. */
+.media-inline {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.media-cell:hover .media-inline {
+  transform: none;
+}
+
 /* A tile whose download failed keeps its box but shows why, instead of the
    empty frame an `opacity: 0` element leaves behind. */
 .media-error {

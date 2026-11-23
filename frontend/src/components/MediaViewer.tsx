@@ -3,6 +3,7 @@ import { ChevronLeftIcon, CloseIcon, DownloadIcon, PlayIcon } from './Icons'
 import { useMediaStatus } from '../lib/useMediaUrl'
 import { primeMedia } from '../lib/mediaCache'
 import { useMediaReady } from '../lib/useMediaReady'
+import { useAutoplay } from '../lib/preferences'
 import { formatDuration } from '../lib/format'
 import type { Media } from '../lib/types'
 
@@ -36,6 +37,7 @@ export function MediaViewer({
 }) {
   const item = items[index]
   const many = items.length > 1
+  const autoplay = useAutoplay()
   // Where the media sits while a gesture is in progress. Kept apart from the
   // committed state so a cancelled drag snaps back with a transition.
   const [drag, setDrag] = useState({ x: 0, y: 0, active: false })
@@ -196,7 +198,13 @@ export function MediaViewer({
         className={`viewer-stage${drag.active ? ' dragging' : ''}${zoom > 1 ? ' zoomed' : ''}`}
         style={{ transform: `translate(${drag.x * 0.35}px, ${drag.y}px) scale(${1 - dismissProgress * 0.12})` }}
       >
-        <ViewerStage key={item.id} item={item} zoom={zoom} onToggleZoom={() => setZoom((v) => (v > 1 ? 1 : 2.2))} />
+        <ViewerStage
+          key={item.id}
+          item={item}
+          zoom={zoom}
+          autoplay={autoplay}
+          onToggleZoom={() => setZoom((v) => (v > 1 ? 1 : 2.2))}
+        />
       </div>
 
       {many && (
@@ -241,10 +249,13 @@ function ViewerStage({
   item,
   zoom,
   onToggleZoom,
+  autoplay,
 }: {
   item: Media
   zoom: number
   onToggleZoom: () => void
+  /** False when the reader turned autoplay off: the clip waits for a tap. */
+  autoplay: boolean
 }) {
   const { asset, failed } = useMediaStatus(item.poster_url ?? item.url)
   const { asset: full } = useMediaStatus(item.url)
@@ -265,7 +276,7 @@ function ViewerStage({
           src={full?.url}
           poster={asset?.url}
           controls
-          autoPlay
+          autoPlay={autoplay}
           playsInline
           onLoadedMetadata={markReady}
           onLoadedData={markReady}

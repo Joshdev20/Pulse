@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AccountList } from './AccountList'
-import { BellIcon, EditIcon, LogoutIcon, MenuIcon, MoonIcon, SunIcon } from './Icons'
+import { BellIcon, EditIcon, LogoutIcon, MenuIcon, MoonIcon, PlayIcon, SunIcon } from './Icons'
 import { Dropdown } from './UI'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { isSoundEnabled, playNotificationSound, setSoundEnabled } from '../lib/sound'
+import { setAutoplayEnabled, useAutoplay } from '../lib/preferences'
 import { disablePush, enablePush, initialPushState, pushChoiceOn, pushState } from '../lib/push'
 import type { PushState } from '../lib/push'
 import { useTheme } from '../lib/useTheme'
@@ -121,6 +122,7 @@ export function ProfileMenu() {
   const { user, logout } = useAuth()
   const { theme, setTheme } = useTheme()
   const [sound, setSound] = useState(() => isSoundEnabled())
+  const autoplay = useAutoplay()
 
   if (!user) return null
 
@@ -182,6 +184,24 @@ export function ProfileMenu() {
             />
             <span className="switch" aria-hidden="true">
               <BellIcon size={14} />
+            </span>
+          </label>
+
+          <label className="switch-row profile-menu-row">
+            <span className="switch-row-text">
+              <span className="profile-menu-label">Autoplay videos</span>
+              <span className="profile-menu-sub">
+                Play clips in the feed as they scroll into view. They start muted.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              className="switch-input"
+              checked={autoplay}
+              onChange={(event) => setAutoplayEnabled(event.target.checked)}
+            />
+            <span className="switch" aria-hidden="true">
+              <PlayIcon size={14} />
             </span>
           </label>
 

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DownloadIcon, FileIcon, PlayIcon } from './Icons'
 import { MediaViewer } from './MediaViewer'
 import { VoiceNotePlayer } from './VoiceNotePlayer'
 import { useMediaStatus, useMediaUrl } from '../lib/useMediaUrl'
+import { useAutoplay } from '../lib/preferences'
 import { primeMedia } from '../lib/mediaCache'
 import { useMediaReady } from '../lib/useMediaReady'
 import { useVideoPoster } from '../lib/videoPoster'
@@ -40,8 +41,21 @@ function Attachment({ item }: { item: Media }) {
   )
 }
 
-/** One tile in the grid. Owns its own fetch so hooks stay per-item. */
-function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
+/**
+ * One tile in the grid. Owns its own fetch so hooks stay per-item.
+ *
+ * `paused` is set while the full-screen viewer is open, so a clip that was
+ * playing in the feed does not keep decoding behind it.
+ */
+function MediaCell({
+  item,
+  onOpen,
+  paused = false,
+}: {
+  item: Media
+  onOpen: () => void
+  paused?: boolean
+}) {
   // A video with a stored poster needs no video download at all. The tile is an
   // image and the clip is fetched only when the lightbox opens, which is the
   // whole point of capturing the frame at upload: the previous path had to
@@ -56,6 +70,39 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
   const [measuredDuration, setMeasuredDuration] = useState<number | null>(null)
   const showSkeleton = !ready && !failed
 
+  // A clip plays by itself once most of its tile is on screen, unless the
+  // reader turned that off. It is always muted: sound on an unattended
+  // autoplay is the one thing every browser blocks and every reader hates.
+  const autoplay = useAutoplay()
+  const cellRef = useRef<HTMLButtonElement | null>(null)
+  const [inView, setInView] = useState(false)
+  const playing = item.kind === 'video' && autoplay && inView && !paused
+  // The clip itself is fetched only for a tile that will actually play, so a
+  // feed with autoplay off still downloads posters and nothing more.
+  const { asset: clip } = useMediaStatus(playing ? item.url : null)
+
+  useEffect(() => {
+    if (item.kind !== 'video' || !autoplay) {
+      setInView(false)
+      return
+    }
+    const node = cellRef.current
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setInView(true)
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          setInView(entry.isIntersecting && entry.intersectionRatio >= 0.55)
+        }
+      },
+      { threshold: [0, 0.55, 1] },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [item.kind, autoplay])
+
   // Prefer the duration sent with the upload; it needs no video fetch. The
   // measured value is the fallback for a clip uploaded without one.
   const duration =
@@ -67,6 +114,7 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
 
   return (
     <button
+      ref={cellRef}
       type="button"
       className="media-cell"
       onClick={(event) => {
@@ -86,7 +134,9 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
             src={asset?.url}
             muted
             playsInline
-            preload="metadata"
+            autoPlay={playing}
+            loop
+            preload={playing ? 'auto' : 'metadata'}
             /* `loadeddata` alone is not reliable under `preload="metadata"`:
                Safari (notably on iOS) fetches the header only, reports
                `readyState` 1 and never fires `loadeddata`, leaving the tile
@@ -102,21 +152,38 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
           />
           {/* The captured frame covers the video's own first frame, so the
               tile shows a real preview even where the element paints black. */}
-          {legacyPoster && !failed && (
+          {legacyPoster && !failed && !playing && (
             <img className="media-poster" src={legacyPoster} alt="" aria-hidden="true" />
           )}
         </>
       ) : (
-        <img
-          ref={mediaRef}
-          className={`media-el${ready ? ' ready' : ''}${failed ? ' failed' : ''}`}
-          src={asset?.url}
-          alt={item.alt_text}
-          loading="lazy"
-          decoding="async"
-          onLoad={markReady}
-          onError={markReady}
-        />
+        <>
+          <img
+            ref={mediaRef}
+            className={`media-el${ready ? ' ready' : ''}${failed ? ' failed' : ''}`}
+            src={asset?.url}
+            alt={item.alt_text}
+            loading="lazy"
+            decoding="async"
+            onLoad={markReady}
+            onError={markReady}
+          />
+          {/* The poster stays underneath while the clip plays over it, so the
+              tile never flashes black between the frame and the first video
+              frame. */}
+          {playing && clip && (
+            <video
+              className="media-el media-inline ready"
+              src={clip.url}
+              muted
+              loop
+              playsInline
+              autoPlay
+              preload="auto"
+              aria-hidden="true"
+            />
+          )}
+        </>
       )}
       {failed ? (
         <span className="media-error">
@@ -125,9 +192,11 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
       ) : (
         item.kind === 'video' && (
           <>
-            <span className="media-play">
-              <PlayIcon size={30} />
-            </span>
+            {!playing && (
+              <span className="media-play">
+                <PlayIcon size={30} />
+              </span>
+            )}
             {duration !== null && <span className="media-duration">{formatDuration(duration)}</span>}
           </>
         )
@@ -191,7 +260,12 @@ export function MediaGallery({
       {visuals.length > 0 && (
         <div className={`media-grid media-count-${Math.min(visuals.length, 4)} media-${variant}`}>
           {visuals.map((item, index) => (
-            <MediaCell key={item.id} item={item} onOpen={() => setOpenAt(index)} />
+            <MediaCell
+              key={item.id}
+              item={item}
+              paused={openAt !== null}
+              onOpen={() => setOpenAt(index)}
+            />
           ))}
         </div>
       )}
