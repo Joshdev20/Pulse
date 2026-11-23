@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { usePostFeed } from '../lib/usePostFeed'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 import { formatCount } from '../lib/format'
 import type { Post } from '../lib/types'
 
@@ -24,6 +25,18 @@ export function ExplorePage() {
   const tags = useAsync(() => api.trendingTags(20), [], 'trendingTags')
 
   const suggested = suggestions.data ?? []
+
+  usePullToRefresh(async () => {
+    if (tab === 'posts') {
+      await feed.reload()
+      return
+    }
+    if (tab === 'people') {
+      suggestions.refresh()
+      return
+    }
+    tags.refresh()
+  })
 
   return (
     <>

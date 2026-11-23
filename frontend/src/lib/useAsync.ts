@@ -39,6 +39,9 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = [], cach
   const [nonce, setNonce] = useState(0)
   const loaderRef = useRef(loader)
   loaderRef.current = loader
+  // A manual refresh means "go and ask", so it skips the copy the cache would
+  // otherwise serve for its full TTL — which is the whole point of pulling.
+  const forceNext = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -48,8 +51,9 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = [], cach
     setError(null)
 
     const request = cacheKey
-      ? queryCache.load(cacheKey, () => loaderRef.current())
+      ? queryCache.load(cacheKey, () => loaderRef.current(), undefined, forceNext.current)
       : loaderRef.current()
+    forceNext.current = false
 
     request
       .then((result) => {
@@ -67,7 +71,16 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = [], cach
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce, cacheKey])
 
-  return { data, setData: applyData, loading, error, refresh: () => setNonce((value) => value + 1) }
+  return {
+    data,
+    setData: applyData,
+    loading,
+    error,
+    refresh: () => {
+      forceNext.current = true
+      setNonce((value) => value + 1)
+    },
+  }
 }
 
 /** Suggestions for the sidebar-ish "who to follow" card. */

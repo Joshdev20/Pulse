@@ -26,6 +26,7 @@ import { formatCount, pluralize } from '../lib/format'
 import { useAsync } from '../lib/useAsync'
 import { useMetaDescription, usePageTitle } from '../lib/usePageTitle'
 import { usePostFeed } from '../lib/usePostFeed'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 import type { Post, User } from '../lib/types'
 
 type Tab = 'posts' | 'likes'
@@ -129,6 +130,11 @@ export function ProfilePage() {
     [username, tab, me?.id],
     `profile:${username}:${tab}:${me?.id}`,
   )
+
+  usePullToRefresh(async () => {
+    profile.refresh()
+    await feed.reload()
+  })
 
   const lists = useAsync(
     () =>

@@ -4,24 +4,39 @@ import { Avatar, DisplayName } from '../components/Avatar'
 import { MediaGallery } from '../components/MediaGallery'
 import { CommentNode } from '../components/CommentThread'
 import { EditPostModal } from '../components/EditPostModal'
+import { ReportDialog } from '../components/ReportDialog'
 import { EmptyState, ErrorState, FeedSkeleton, Spinner, Dropdown, RelativeTime } from '../components/UI'
 import {
   ArrowLeftIcon,
+  CloseIcon,
   CommentIcon,
+  EyeIcon,
   HeartIcon,
   LinkIcon,
   MoreIcon,
+  RepostIcon,
+  ShareIcon,
   TrashIcon,
   EditIcon,
+  WarningIcon,
 } from '../components/Icons'
 import { TranslatedText } from '../components/TranslatedText'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { api } from '../lib/api'
 import * as queryCache from '../lib/queryCache'
-import { formatCount, formatFullDate } from '../lib/format'
+import { formatCount, formatFullDate, pluralize } from '../lib/format'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 import type { Comment, Post } from '../lib/types'
 
+/**
+ * A post on its own, with its replies.
+ *
+ * This is the view a reader lands on after tapping a post, so it is built
+ * around the content rather than around the feed's compact row: the media is
+ * full width, the counts are spelled out, and every way out is one tap — the
+ * back arrow, a close button, Escape, or the browser's own back.
+ */
 export function PostDetailPage() {
   const { postId } = useParams()
   const id = Number(postId)
@@ -38,6 +53,7 @@ export function PostDetailPage() {
   const [busy, setBusy] = useState(false)
   const [pop, setPop] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [reporting, setReporting] = useState(false)
   const [replyingTo, setReplyingTo] = useState<Comment | null>(null)
 
   useEffect(() => {
@@ -82,6 +98,30 @@ export function PostDetailPage() {
     }
   }, [id])
 
+  // Pulling down re-reads the post and its replies, skipping the cached copy:
+  // the reader asked for the current counts, not what was there a minute ago.
+  usePullToRefresh(async () => {
+    if (!Number.isFinite(id)) return
+    const [postData, commentData] = await Promise.all([
+      queryCache.load(`post:${id}`, () => api.getPost(id), undefined, true),
+      queryCache.load(`comments:${id}`, () => api.comments(id), undefined, true),
+    ])
+    setPost(postData)
+    setComments(commentData)
+  })
+
+  // Escape leaves the post, but only when nothing is layered over it — the
+  // media viewer and the report dialog own the key while they are open.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (document.querySelector('.viewer, .modal-backdrop')) return
+      navigate(-1)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [navigate])
+
   async function toggleLike() {
     if (!post) return
     if (!user) {
@@ -107,6 +147,33 @@ export function PostDetailPage() {
     } finally {
       setBusy(false)
       window.setTimeout(() => setPop(false), 360)
+    }
+  }
+
+  async function toggleRepost() {
+    if (!post) return
+    if (!user) {
+      navigate('/login')
+      return
+    }
+    if (busy) return
+    setBusy(true)
+    setPost({
+      ...post,
+      reposted_by_me: !post.reposted_by_me,
+      repost_count: post.repost_count + (post.reposted_by_me ? -1 : 1),
+    })
+    try {
+      const updated = post.reposted_by_me
+        ? await api.unrepostPost(post.id)
+        : await api.repostPost(post.id)
+      setPost(updated)
+      queryCache.invalidate('post:')
+      queryCache.invalidate('feed:')
+    } catch {
+      setPost(post)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -195,9 +262,29 @@ export function PostDetailPage() {
     }
   }
 
+  async function share() {
+    if (!post) return
+    const url = `${window.location.origin}/p/${post.id}`
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: post.author.display_name,
+          text: post.body.slice(0, 140),
+          url,
+        })
+        return
+      } catch {
+        // Dismissed or unsupported; copying the link is the useful fallback.
+      }
+    }
+    await copyLink()
+  }
+
+  const isOwnPost = user?.id === post?.author.id
+
   return (
     <>
-      <header className="page-head">
+      <header className="page-head focus-bar">
         <div className="page-head-inner">
           <button type="button" className="icon-btn" onClick={() => navigate(-1)} aria-label="Go back">
             <ArrowLeftIcon size={20} />
@@ -205,6 +292,14 @@ export function PostDetailPage() {
           <div style={{ flex: 1 }}>
             <h1>Post</h1>
           </div>
+          <button
+            type="button"
+            className="icon-btn focus-close"
+            onClick={() => navigate('/')}
+            aria-label="Close post"
+          >
+            <CloseIcon size={20} />
+          </button>
         </div>
       </header>
 
@@ -213,16 +308,26 @@ export function PostDetailPage() {
 
       {!loading && !error && post && (
         <>
-          <article className="detail-post">
-            <div className="detail-head">
-              <Link to={`/u/${post.author.username}`}>
-                <Avatar name={post.author.display_name} color={post.author.avatar_color} url={post.author.avatar_url} size="lg" />
+          <article className="focus-post">
+            <div className="focus-author">
+              <Link to={`/u/${post.author.username}`} className="focus-avatar">
+                <Avatar
+                  name={post.author.display_name}
+                  color={post.author.avatar_color}
+                  url={post.author.avatar_url}
+                  size="lg"
+                />
               </Link>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <Link to={`/u/${post.author.username}`} className="detail-name">
+              <div className="focus-author-text">
+                <Link to={`/u/${post.author.username}`} className="focus-name">
                   <DisplayName user={post.author} />
                 </Link>
-                <div className="detail-handle">@{post.author.username}</div>
+                <div className="focus-handle">
+                  @{post.author.username}
+                  <span className="focus-sep">·</span>
+                  <RelativeTime iso={post.created_at} />
+                  {post.edited_at && <span className="focus-edited">edited</span>}
+                </div>
               </div>
               <Dropdown trigger={() => <MoreIcon size={18} />}>
                 {(close) => (
@@ -237,7 +342,7 @@ export function PostDetailPage() {
                     >
                       <LinkIcon size={16} /> Copy link
                     </button>
-                    {user?.id === post.author.id && (
+                    {isOwnPost ? (
                       <>
                         <button
                           type="button"
@@ -260,123 +365,147 @@ export function PostDetailPage() {
                           <TrashIcon size={16} /> Delete post
                         </button>
                       </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="menu-item danger"
+                        onClick={() => {
+                          close()
+                          setReporting(true)
+                        }}
+                      >
+                        <WarningIcon size={16} /> Report post
+                      </button>
                     )}
                   </>
                 )}
               </Dropdown>
             </div>
 
-            <TranslatedText post={post} className="detail-text" />
+            {post.body && <TranslatedText post={post} className="focus-text" />}
 
-            <MediaGallery items={post.media} />
+            <MediaGallery items={post.media} variant="focus" />
 
-            <div className="detail-time">
-              {formatFullDate(post.created_at)}
-              {post.edited_at && (
-                <>
-                  {' · '}
-                  <RelativeTime iso={post.edited_at} prefix="edited " suffix=" ago" />
-                </>
-              )}
+            <div className="focus-time">{formatFullDate(post.created_at)}</div>
+
+            <div className="focus-stats">
+              <span className="focus-stat">
+                <EyeIcon size={15} />
+                <strong>{formatCount(post.view_count)}</strong> {pluralize(post.view_count, 'view')}
+              </span>
+              <span className="focus-stat">
+                <RepostIcon size={15} />
+                <strong>{formatCount(post.repost_count)}</strong> {pluralize(post.repost_count, 'repost')}
+              </span>
+              <span className="focus-stat">
+                <HeartIcon size={15} />
+                <strong>{formatCount(post.like_count)}</strong> {pluralize(post.like_count, 'like')}
+              </span>
+              <span className="focus-stat">
+                <CommentIcon size={15} />
+                <strong>{formatCount(post.comment_count)}</strong> {pluralize(post.comment_count, 'reply')}
+              </span>
             </div>
 
-            <div className="detail-stats">
-              <span>
-                <strong>{formatCount(post.like_count)}</strong> likes
-              </span>
-              <span>
-                <strong>{formatCount(post.comment_count)}</strong> replies
-              </span>
-              {/* Views sit with the other counts, and read even at zero. */}
-              <span>
-                <strong>{formatCount(post.view_count)}</strong> views
-              </span>
+            <div className="focus-actions">
+              <button
+                type="button"
+                className="focus-action comment"
+                onClick={() => {
+                  setReplyingTo(null)
+                  document.getElementById('reply')?.focus()
+                }}
+              >
+                <CommentIcon size={19} />
+                <span>Reply</span>
+              </button>
+              <button
+                type="button"
+                className={`focus-action repost${post.reposted_by_me ? ' on' : ''}`}
+                onClick={toggleRepost}
+                aria-pressed={post.reposted_by_me}
+              >
+                <RepostIcon size={19} active={post.reposted_by_me} />
+                <span>{post.reposted_by_me ? 'Reposted' : 'Repost'}</span>
+              </button>
+              <button
+                type="button"
+                className={`focus-action like${post.liked_by_me ? ' on' : ''}`}
+                onClick={toggleLike}
+                aria-pressed={post.liked_by_me}
+              >
+                <span className={pop ? 'heart-pop' : undefined} style={{ display: 'grid' }}>
+                  <HeartIcon size={19} filled={post.liked_by_me} />
+                </span>
+                <span>{post.liked_by_me ? 'Liked' : 'Like'}</span>
+              </button>
+              <button type="button" className="focus-action share" onClick={share}>
+                <ShareIcon size={19} />
+                <span>Share</span>
+              </button>
             </div>
           </article>
 
-          <div className="detail-actions">
-            <button
-              type="button"
-              className={`action like${post.liked_by_me ? ' liked' : ''}`}
-              onClick={toggleLike}
-              aria-pressed={post.liked_by_me}
-            >
-              <span className={pop ? 'heart-pop' : undefined} style={{ display: 'grid' }}>
-                <HeartIcon size={19} filled={post.liked_by_me} />
-              </span>
-              {post.liked_by_me ? 'Liked' : 'Like'}
-            </button>
-            <button
-              type="button"
-              className="action comment"
-              onClick={() => {
-                // Answering the post itself, so clear any reply target and put
-                // the cursor in the main composer.
-                setReplyingTo(null)
-                document.getElementById('reply')?.focus()
-              }}
-            >
-              <CommentIcon size={19} /> Reply
-            </button>
-            {/* No share action: the same link is one tap away in the overflow
-                menu ("Copy link"), and a button that only duplicated it read as
-                broken. */}
-          </div>
+          <section className="focus-replies" aria-label="Replies">
+            <h2 className="focus-replies-head">
+              Replies <span>{formatCount(post.comment_count)}</span>
+            </h2>
 
-          {user ? (
-            <form className="comment-form" onSubmit={submitComment}>
-              <Avatar name={user.display_name} color={user.avatar_color} url={user.avatar_url} size="sm" />
-              <div className="comment-form-inner">
-                <textarea
-                  id="reply"
-                  value={draft}
-                  placeholder="Post your reply"
-                  maxLength={1000}
-                  onChange={(event) => setDraft(event.target.value)}
-                />
-                <div className="comment-form-actions">
-                  <button
-                    type="submit"
-                    className="btn btn-primary btn-sm"
-                    disabled={!draft.trim() || sending}
-                  >
-                    {sending ? <Spinner size={14} /> : 'Reply'}
-                  </button>
+            {user ? (
+              <form className="comment-form focus-comment-form" onSubmit={submitComment}>
+                <Avatar name={user.display_name} color={user.avatar_color} url={user.avatar_url} size="sm" />
+                <div className="comment-form-inner">
+                  <textarea
+                    id="reply"
+                    value={draft}
+                    placeholder="Post your reply"
+                    maxLength={1000}
+                    onChange={(event) => setDraft(event.target.value)}
+                  />
+                  <div className="comment-form-actions">
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-sm"
+                      disabled={!draft.trim() || sending}
+                    >
+                      {sending ? <Spinner size={14} /> : 'Reply'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            ) : (
+              <div className="comment-form">
+                <div className="comment-form-inner" style={{ color: 'var(--text-muted)', fontSize: 14.5 }}>
+                  <Link to="/login" style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                    Sign in
+                  </Link>{' '}
+                  to join the conversation.
                 </div>
               </div>
-            </form>
-          ) : (
-            <div className="comment-form">
-              <div className="comment-form-inner" style={{ color: 'var(--text-muted)', fontSize: 14.5 }}>
-                <Link to="/login" style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                  Sign in
-                </Link>{' '}
-                to join the conversation.
-              </div>
-            </div>
-          )}
+            )}
 
-          {comments.length === 0 ? (
-            <EmptyState
-              icon={<CommentIcon size={24} />}
-              title="No replies yet"
-              description="Be the first to respond to this post."
-            />
-          ) : (
-            comments.map((comment) => (
-              <CommentNode
-                key={comment.id}
-                comment={comment}
-                postId={post.id}
-                postAuthorId={post.author.id}
-                replyingTo={replyingTo?.id ?? null}
-                onReplyTarget={setReplyingTo}
-                onReplied={handleReplied}
-                onDeleted={handleCommentDeleted}
-                onLikeToggled={handleCommentLikeToggled}
+            {comments.length === 0 ? (
+              <EmptyState
+                icon={<CommentIcon size={24} />}
+                title="No replies yet"
+                description="Be the first to respond to this post."
               />
-            ))
-          )}
+            ) : (
+              comments.map((comment) => (
+                <CommentNode
+                  key={comment.id}
+                  comment={comment}
+                  postId={post.id}
+                  postAuthorId={post.author.id}
+                  replyingTo={replyingTo?.id ?? null}
+                  onReplyTarget={setReplyingTo}
+                  onReplied={handleReplied}
+                  onDeleted={handleCommentDeleted}
+                  onLikeToggled={handleCommentLikeToggled}
+                />
+              ))
+            )}
+          </section>
         </>
       )}
 
@@ -392,6 +521,8 @@ export function PostDetailPage() {
           }}
         />
       )}
+
+      {reporting && post && <ReportDialog postId={post.id} onClose={() => setReporting(false)} />}
     </>
   )
 }

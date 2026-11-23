@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { DownloadIcon, FileIcon, PlayIcon } from './Icons'
+import { MediaViewer } from './MediaViewer'
 import { VoiceNotePlayer } from './VoiceNotePlayer'
 import { useMediaStatus, useMediaUrl } from '../lib/useMediaUrl'
 import { primeMedia } from '../lib/mediaCache'
@@ -12,68 +13,6 @@ function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/** Full-screen viewer for a single image or video. */
-function Lightbox({ item, onClose }: { item: Media; onClose: () => void }) {
-  const { asset, failed } = useMediaStatus(item.url)
-  const { ref: mediaRef, ready, markReady } = useMediaReady(asset?.url)
-  const showSkeleton = !ready && !failed
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previous
-    }
-  }, [onClose])
-
-  return (
-    <div
-      className="lightbox"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-label={item.alt_text || 'Attachment'}
-    >
-      <button type="button" className="lightbox-close" onClick={onClose} aria-label="Close">
-        ✕
-      </button>
-      {showSkeleton && <span className="lightbox-skeleton skeleton" aria-hidden="true" />}
-      {failed && <p className="lightbox-error">This {item.kind} is no longer available.</p>}
-      {item.kind === 'video' ? (
-        <video
-          ref={mediaRef}
-          className={`lightbox-media${ready ? ' ready' : ''}`}
-          src={asset?.url}
-          controls
-          autoPlay
-          playsInline
-          /* See MediaCell: `loadedmetadata` fires under `preload="metadata"` on
-             every engine, `loadeddata` does not. */
-          onLoadedMetadata={markReady}
-          onLoadedData={markReady}
-          onError={markReady}
-        />
-      ) : (
-        <img
-          ref={mediaRef}
-          className={`lightbox-media${ready ? ' ready' : ''}`}
-          src={asset?.url}
-          alt={item.alt_text}
-          onLoad={markReady}
-          onError={markReady}
-        />
-      )}
-    </div>
-  )
 }
 
 function Attachment({ item }: { item: Media }) {
@@ -203,8 +142,19 @@ function MediaCell({ item, onOpen }: { item: Media; onOpen: () => void }) {
  * One attachment gets a large frame; several get a grid. Videos are muted and
  * click-to-play so a feed full of them does not start a wall of sound.
  */
-export function MediaGallery({ items }: { items: Media[] }) {
-  const [open, setOpen] = useState<Media | null>(null)
+export function MediaGallery({
+  items,
+  variant = 'feed',
+}: {
+  items: Media[]
+  /**
+   * `focus` is the post's own page, where the picture is the point: one frame
+   * gets the full column and the grid is taller than in a feed row.
+   */
+  variant?: 'feed' | 'focus'
+}) {
+  // The index, not the item: the viewer needs its neighbours to page through.
+  const [openAt, setOpenAt] = useState<number | null>(null)
 
   // Kick off the downloads the tiles actually need as soon as the gallery
   // mounts. Each cell would otherwise start its own fetch only once React runs
@@ -239,9 +189,9 @@ export function MediaGallery({ items }: { items: Media[] }) {
       )}
 
       {visuals.length > 0 && (
-        <div className={`media-grid media-count-${Math.min(visuals.length, 4)}`}>
-          {visuals.map((item) => (
-            <MediaCell key={item.id} item={item} onOpen={() => setOpen(item)} />
+        <div className={`media-grid media-count-${Math.min(visuals.length, 4)} media-${variant}`}>
+          {visuals.map((item, index) => (
+            <MediaCell key={item.id} item={item} onOpen={() => setOpenAt(index)} />
           ))}
         </div>
       )}
@@ -250,7 +200,14 @@ export function MediaGallery({ items }: { items: Media[] }) {
         <Attachment key={item.id} item={item} />
       ))}
 
-      {open && <Lightbox item={open} onClose={() => setOpen(null)} />}
+      {openAt !== null && visuals[openAt] && (
+        <MediaViewer
+          items={visuals}
+          index={openAt}
+          onIndexChange={setOpenAt}
+          onClose={() => setOpenAt(null)}
+        />
+      )}
     </>
   )
 }

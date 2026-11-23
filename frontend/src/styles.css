@@ -6016,3 +6016,774 @@ h4 {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ============================================================
+   Pull to refresh
+   ============================================================ */
+
+/* The browser's own overscroll refresh would fight the gesture below, so it is
+   contained: the page can still be scrolled, but a pull at the top no longer
+   reloads the tab behind our back. */
+html,
+body {
+  overscroll-behavior-y: contain;
+}
+
+.ptr {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 130;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(calc(-56px + var(--ptr-distance, 0px)));
+  /* Snapping back is eased; following the finger is not. */
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+}
+
+.ptr.armed,
+.ptr.refreshing {
+  opacity: 1;
+}
+
+.ptr:not(.refreshing):not(.armed) {
+  transition: transform 0.05s linear, opacity 0.12s ease;
+}
+
+.ptr-pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 15px 7px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 640;
+  letter-spacing: 0.01em;
+}
+
+.ptr-ring {
+  transform: rotate(-90deg);
+  flex: none;
+}
+
+.ptr-ring-track {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 2.4;
+}
+
+.ptr-ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 0.08s linear;
+}
+
+.ptr.armed .ptr-ring-fill {
+  stroke-dashoffset: 0;
+}
+
+.ptr.refreshing .ptr-ring {
+  animation: ptr-spin 0.85s linear infinite;
+}
+
+.ptr.refreshing .ptr-ring-fill {
+  stroke-dasharray: 0.32 0.68;
+}
+
+@keyframes ptr-spin {
+  from {
+    transform: rotate(-90deg);
+  }
+  to {
+    transform: rotate(270deg);
+  }
+}
+
+/* ============================================================
+   Post action bar
+   ============================================================ */
+
+/* Two groups in one row: what a reader can do on the left, how far the post has
+   travelled on the right. The gap between them is what stops the reach readout
+   from reading as a fifth button. */
+.post-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  margin-left: -8px;
+  min-width: 0;
+}
+
+.action-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-size: 12.75px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  transition: color 0.16s ease, background 0.16s ease;
+}
+
+.action svg {
+  transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.5);
+}
+
+.action:hover svg {
+  transform: scale(1.12);
+}
+
+.action:active svg {
+  transform: scale(0.9);
+}
+
+/* Reach is a readout, not a control: pushed to the far end, dimmer than the
+   buttons, and it never reacts to hover. */
+.action.views {
+  margin-left: auto;
+  padding: 7px 4px 7px 10px;
+  cursor: default;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  opacity: 0.85;
+}
+
+.action.views:hover {
+  background: none;
+  color: var(--text-faint);
+}
+
+.action.views svg {
+  opacity: 0.8;
+}
+
+.action.views:hover svg {
+  transform: none;
+}
+
+.action.share:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ============================================================
+   Media viewer
+   ============================================================ */
+
+/* The viewer is its own dark room whatever the app theme is, so its foreground
+   is fixed here rather than following `--text`: in the light theme those tokens
+   are near-black and would vanish against this backdrop. */
+.viewer {
+  --viewer-fg: #f3f5fa;
+  --viewer-fg-dim: rgba(243, 245, 250, 0.72);
+  --viewer-line: rgba(255, 255, 255, 0.18);
+  --viewer-chip: rgba(255, 255, 255, 0.1);
+  color: var(--viewer-fg);
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: radial-gradient(circle at 50% 26%, rgba(24, 28, 40, 0.94), rgba(3, 4, 7, 0.975) 68%);
+  backdrop-filter: blur(18px);
+  touch-action: none;
+  animation: viewer-in 0.22s ease both;
+}
+
+@keyframes viewer-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: max(14px, env(safe-area-inset-top)) 16px 6px;
+}
+
+.viewer-count {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--viewer-line);
+  background: var(--viewer-chip);
+  color: var(--viewer-fg-dim);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.viewer-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewer-btn {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--viewer-line);
+  background: var(--viewer-chip);
+  color: var(--viewer-fg);
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+
+.viewer-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: scale(1.04);
+}
+
+.viewer-stage {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: 0 14px;
+  will-change: transform;
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.viewer-stage.dragging {
+  transition: none;
+}
+
+.viewer-media-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  max-width: min(100%, 1180px);
+  max-height: 100%;
+}
+
+.viewer-media {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 190px);
+  max-height: calc(100dvh - 190px);
+  border-radius: 18px;
+  background: #000;
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.viewer-media.ready {
+  opacity: 1;
+}
+
+.viewer-stage.zoomed {
+  overflow: auto;
+}
+
+.viewer-skeleton {
+  position: absolute;
+  width: min(84vw, 720px);
+  height: min(62vh, 460px);
+  border-radius: 18px;
+}
+
+.viewer-error {
+  color: var(--viewer-fg-dim);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.viewer-nav {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  margin-top: -23px;
+  border-radius: 50%;
+  border: 1px solid var(--viewer-line);
+  background: rgba(8, 10, 16, 0.62);
+  backdrop-filter: blur(10px);
+  color: var(--viewer-fg);
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+
+.viewer-nav:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.viewer-nav.prev {
+  left: 16px;
+}
+
+.viewer-nav.next {
+  right: 16px;
+  transform: rotate(180deg);
+}
+
+.viewer-nav.next:hover {
+  transform: rotate(180deg) scale(1.05);
+}
+
+/* A phone pages with a swipe; arrows would only sit under the thumb. */
+@media (hover: none) {
+  .viewer-nav {
+    display: none;
+  }
+}
+
+.viewer-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 22px max(18px, env(safe-area-inset-bottom));
+  text-align: center;
+}
+
+.viewer-caption {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--viewer-fg);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.viewer-hint {
+  color: var(--viewer-fg-dim);
+  font-size: 11.5px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+}
+
+.viewer-download {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--viewer-line);
+  background: rgba(8, 10, 16, 0.55);
+  backdrop-filter: blur(8px);
+  color: var(--viewer-fg);
+  opacity: 0.75;
+  transition: opacity 0.16s ease, background 0.16s ease;
+}
+
+.viewer-download:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.viewer-duration {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(4, 5, 8, 0.6);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(6px);
+}
+
+@media (max-width: 640px) {
+  .viewer-media {
+    max-height: calc(100vh - 168px);
+    max-height: calc(100dvh - 168px);
+    border-radius: 14px;
+  }
+
+  .viewer-hint {
+    display: none;
+  }
+}
+
+/* ============================================================
+   Post focus view (one post, on its own page)
+   ============================================================ */
+
+.focus-bar .page-head-inner {
+  gap: 6px;
+}
+
+.focus-post {
+  padding: 8px 20px 6px;
+}
+
+.focus-author {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.focus-avatar {
+  flex: none;
+  border-radius: 50%;
+}
+
+.focus-author-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.focus-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.focus-name:hover {
+  text-decoration: underline;
+}
+
+.focus-handle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.focus-sep {
+  opacity: 0.6;
+}
+
+.focus-edited {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.focus-text {
+  margin-top: 16px;
+  color: var(--text-strong);
+  font-size: 18.5px;
+  line-height: 1.56;
+  letter-spacing: -0.005em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.focus-text .hashtag,
+.focus-text .mention {
+  color: var(--violet);
+  font-weight: 550;
+}
+
+.focus-text .hashtag:hover,
+.focus-text .mention:hover {
+  text-decoration: underline;
+}
+
+.focus-time {
+  margin-top: 16px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.focus-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.focus-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.focus-stat svg {
+  color: var(--text-faint);
+}
+
+.focus-stat strong {
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Four equal cells rather than a row of pills: on the post's own page there is
+   room for a label under each icon, which is what makes the actions obvious. */
+.focus-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0 6px;
+}
+
+.focus-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 4px 9px;
+  border-radius: 15px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 620;
+  transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.focus-action:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.focus-action:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.focus-action.comment:hover {
+  color: var(--violet);
+  background: var(--violet-soft);
+  border-color: var(--violet-line);
+}
+
+.focus-action.repost:hover,
+.focus-action.repost.on {
+  color: var(--repost);
+  background: var(--repost-soft);
+  border-color: var(--repost-line);
+}
+
+.focus-action.like:hover,
+.focus-action.like.on {
+  color: var(--rose);
+  background: var(--rose-soft);
+  border-color: var(--rose-line);
+}
+
+.focus-action.share:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.focus-replies {
+  margin-top: 14px;
+  padding: 0 20px;
+}
+
+.focus-replies-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.focus-replies-head span {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.focus-comment-form {
+  margin-top: 0;
+}
+
+/* The focus view gives the media more room than a feed row does: the picture is
+   the reason the reader opened the post. */
+.media-focus {
+  margin-top: 14px;
+  border-radius: 20px;
+}
+
+.media-focus .media-cell {
+  max-height: 560px;
+}
+
+.media-focus.media-count-1 .media-cell {
+  max-height: 640px;
+}
+
+/* A feed tile crops to keep the column even; a lone picture on the post's own
+   page is the point, so nothing of it is cut off — the box letterboxes
+   instead. A gallery keeps `cover`: two letterboxed tiles side by side read as
+   a layout mistake rather than a choice. */
+.media-focus.media-count-1 .media-el {
+  object-fit: contain;
+  background: var(--surface-3);
+}
+
+@media (max-width: 640px) {
+  .focus-post {
+    padding: 6px 15px 4px;
+  }
+
+  .focus-text {
+    font-size: 17px;
+    margin-top: 13px;
+  }
+
+  .focus-stats {
+    gap: 8px 14px;
+    font-size: 12.5px;
+  }
+
+  .focus-actions {
+    gap: 6px;
+  }
+
+  .focus-replies {
+    padding: 0 15px;
+  }
+}
+
+/* ============================================================
+   Report dialog
+   ============================================================ */
+
+.report-intro {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 11px 13px;
+  border-radius: 13px;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.09);
+}
+
+.report-intro svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+.report-intro p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.report-reasons {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+}
+
+.report-reason {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 550;
+  text-align: left;
+  transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.report-reason:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.report-reason.selected {
+  color: var(--text);
+  border-color: var(--accent-line);
+  background: var(--accent-wash);
+}
+
+.report-radio {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  transition: border-color 0.16s ease;
+}
+
+.report-reason.selected .report-radio {
+  border-color: var(--accent);
+}
+
+.report-reason.selected .report-radio::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.report-note {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.report-note .textarea {
+  font-weight: 400;
+}

@@ -26,7 +26,11 @@ from ..models import (
     Media,
     Notification,
     Post,
+    PostReport,
+    PostView,
+    Tag,
     User,
+    post_tags,
     utcnow,
 )
 from ..realtime import manager
@@ -38,6 +42,8 @@ from ..schemas import (
     PostOut,
     PostTranslation,
     PostUpdate,
+    ReportCreate,
+    ReportOut,
     UserPublic,
 )
 from ..tagging import extract_tag_names, resolve_tags
@@ -53,6 +59,20 @@ MAX_ATTACHMENTS = 4
 # slower with every post ever written. A few hundred is enough to feel varied
 # while keeping the cost of a feed request flat as the site grows.
 FEED_POOL_SIZE = 300
+
+# Ranking constants, named so the shape of the ordering stays legible. The
+# freshness term halves a post's pull roughly every `FEED_HALF_LIFE_HOURS`; the
+# three engagement terms are added to a base of 1.0, so none of them can lift a
+# stale post on its own.
+FEED_HALF_LIFE_HOURS = 16.0
+FEED_ENGAGEMENT_WEIGHT = 1.0
+FEED_CONVERSION_WEIGHT = 2.4
+FEED_VELOCITY_WEIGHT = 0.7
+# Affinity multiplies the score, so it tips a close call instead of overriding
+# freshness or reach. A followed author is the strongest of the three.
+FEED_FOLLOW_BOOST = 1.35
+FEED_AUTHOR_BOOST = 1.12
+FEED_TAG_BOOST = 1.18
 
 # Namespaces whose cached reads a post write invalidates. `users` carries the
 # post counts and `trending`/`search`/`comments` the aggregates and lists that a
@@ -192,17 +212,125 @@ def _age_hours(created_at: datetime, now: datetime) -> float:
     return max(0.0, (now - created_at).total_seconds() / 3600.0)
 
 
-def _feed_weight(post: Post, like_counts: dict[int, int], comment_counts: dict[int, int], now: datetime) -> float:
+def _feed_weight(
+    post: Post,
+    *,
+    like_counts: dict[int, int],
+    comment_counts: dict[int, int],
+    repost_counts: dict[int, int],
+    view_counts: dict[int, int],
+    followed: set[int],
+    liked_authors: set[int],
+    liked_tags: set[str],
+    now: datetime,
+) -> float:
     """How strongly a post should be pulled toward the top of the feed.
 
-    Recency dominates — it halves over a day — and engagement only nudges, so a
-    month-old post with a lot of likes cannot outrank something from this
-    morning. Engagement is damped logarithmically so a single very popular post
-    does not monopolise the top of every feed.
+    Four signals, in the order they matter:
+
+    * freshness — decays with age, so the feed stays a feed;
+    * engagement — likes, replies and reposts, damped logarithmically so one
+      very popular post cannot pin itself to the top of every visit;
+    * conversion — engagement per view. This is the "it is going around" signal:
+      a post most of its readers replied to beats one with more raw likes that
+      most readers scrolled past. Views are the only impression count the site
+      has, so they are the denominator;
+    * velocity — engagement per hour, so a post climbing right now outranks an
+      older one that has already peaked.
+
+    A repost row is ranked by the content it shares, not by its own zeroed
+    counters, and the affinity terms make the ordering personal: a followed
+    author, an author this reader has liked before, or a tag they engage with.
     """
-    recency = 1.0 / (1.0 + _age_hours(post.created_at, now) / 24.0)
-    engagement = like_counts.get(post.id, 0) + 2 * comment_counts.get(post.id, 0)
-    return recency * (1.0 + math.log1p(engagement))
+    # The content a reader engages with; for a repost that is the original.
+    content_id = post.repost_of.id if post.repost_of is not None else post.id
+    engagement = (
+        like_counts.get(content_id, 0)
+        + 2 * comment_counts.get(content_id, 0)
+        + 3 * repost_counts.get(content_id, 0)
+    )
+    views = view_counts.get(content_id, 0)
+    # Clamped at 1.0: views are recorded when a page is served, so a burst of
+    # likes can briefly outrun them, and a ratio above one is not a signal.
+    conversion = min(1.0, engagement / views) if views else 0.0
+    age = _age_hours(post.created_at, now)
+    velocity = engagement / max(age, 1.0)
+    freshness = 1.0 / (1.0 + (age / FEED_HALF_LIFE_HOURS) ** 1.25)
+
+    score = freshness * (
+        1.0
+        + FEED_ENGAGEMENT_WEIGHT * math.log1p(engagement)
+        + FEED_CONVERSION_WEIGHT * conversion
+        + FEED_VELOCITY_WEIGHT * math.log1p(velocity)
+    )
+
+    affinity = 1.0
+    if post.author_id in followed:
+        affinity *= FEED_FOLLOW_BOOST
+    elif post.author_id in liked_authors:
+        affinity *= FEED_AUTHOR_BOOST
+    if liked_tags and any(tag.name in liked_tags for tag in post.tags):
+        affinity *= FEED_TAG_BOOST
+    return score * affinity
+
+
+def _viewer_affinity(db: DbSession, viewer: User) -> tuple[set[int], set[int], set[str]]:
+    """The authors and tags this reader has engaged with recently.
+
+    Three bounded queries — follows, the authors of posts they liked, and the
+    tags on those posts — rather than a scoring pass over history. Bounded by
+    recency and by count so the profile reflects current taste: liking one post
+    about a topic a year ago should not steer today's feed.
+    """
+    followed = {
+        row[0] for row in db.execute(select(Follow.following_id).where(Follow.follower_id == viewer.id)).all()
+    }
+    liked_authors = {
+        row[0]
+        for row in db.execute(
+            select(Post.author_id)
+            .join(Like, Like.post_id == Post.id)
+            .where(Like.user_id == viewer.id)
+            .group_by(Post.author_id)
+            .order_by(func.count(Like.id).desc())
+            .limit(30)
+        ).all()
+    }
+    liked_tags = {
+        row[0]
+        for row in db.execute(
+            select(Tag.name)
+            .join(post_tags, post_tags.c.tag_id == Tag.id)
+            .join(Like, Like.post_id == post_tags.c.post_id)
+            .where(Like.user_id == viewer.id)
+            .group_by(Tag.name)
+            .order_by(func.count(Like.id).desc())
+            .limit(12)
+        ).all()
+    }
+    return followed, liked_authors, liked_tags
+
+
+def _spread_authors(ordered: list[Post]) -> list[Post]:
+    """Stop one account from owning a stretch of the feed.
+
+    A burst of posts from one author is legitimately the most relevant thing in
+    the pool, but three in a row reads as a broken timeline. The weighted order
+    is otherwise preserved: the first post that is not a third repeat of the
+    same author is pulled forward, and everything else keeps its place.
+    """
+    pending = list(ordered)
+    out: list[Post] = []
+    while pending:
+        chosen = 0
+        for index, candidate in enumerate(pending):
+            if len(out) < 2 or not (
+                out[-1].author_id == candidate.author_id == out[-2].author_id
+            ):
+                chosen = index
+                break
+        out.append(pending.pop(chosen))
+    return out
 
 
 def _unit_interval(seed: int, post_id: int) -> float:
@@ -272,6 +400,25 @@ def _ordered_feed(
         ).all()
     )
 
+    # The two remaining engagement signals. Reposts are the strongest
+    # endorsement a post can get, and views are the denominator of the
+    # conversion term, so both are worth one grouped query each over the pool.
+    repost_counts = dict(
+        db.execute(
+            select(Post.repost_of_id, func.count(Post.id))
+            .where(Post.repost_of_id.in_(ids))
+            .group_by(Post.repost_of_id)
+        ).all()
+    )
+    view_counts = dict(
+        db.execute(
+            select(PostView.post_id, func.count(PostView.id))
+            .where(PostView.post_id.in_(ids))
+            .group_by(PostView.post_id)
+        ).all()
+    )
+
+    followed, liked_authors, liked_tags = _viewer_affinity(db, viewer)
     feed_seed = _feed_seed(seed, viewer)
     now = utcnow()
 
@@ -280,17 +427,31 @@ def _ordered_feed(
         # rate `weight`: the smallest key is the post most likely to be drawn
         # first, in proportion to its weight.
         return -math.log(_unit_interval(feed_seed, post.id)) / _feed_weight(
-            post, like_counts, comment_counts, now
+            post,
+            like_counts=like_counts,
+            comment_counts=comment_counts,
+            repost_counts=repost_counts,
+            view_counts=view_counts,
+            followed=followed,
+            liked_authors=liked_authors,
+            liked_tags=liked_tags,
+            now=now,
         )
 
-    ordered = sorted(pool, key=draw_key)
+    ordered = _spread_authors(sorted(pool, key=draw_key))
 
     window = ordered[(page - 1) * page_size : page * page_size]
     # The counts above already cover every pool post, and the window is drawn
     # from that pool, so hand them over rather than making `serialize_posts`
-    # repeat the same two grouped queries.
+    # repeat the same four grouped queries.
     items = serialize_posts(
-        db, window, viewer, like_counts=like_counts, comment_counts=comment_counts
+        db,
+        window,
+        viewer,
+        like_counts=like_counts,
+        comment_counts=comment_counts,
+        repost_counts=repost_counts,
+        view_counts=view_counts,
     )
     return Page(
         items=items,
@@ -499,6 +660,53 @@ async def like_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
     record_post_views(db, [post.id], user, include_author=True)
     invalidate_post_reads()
     return serialize_posts(db, [post], user)[0]
+
+
+@router.post("/posts/{post_id}/report", response_model=ReportOut, status_code=status.HTTP_201_CREATED)
+def report_post(post_id: int, payload: ReportCreate, db: DbSession, user: CurrentUser) -> ReportOut:
+    """File a complaint about a post.
+
+    Reporting is deliberately quiet: no notification goes to the author (telling
+    someone they were reported invites retaliation), and a second report of the
+    same post by the same account returns the first one instead of adding a
+    duplicate row to the queue.
+
+    A repost is a wrapper, so a complaint about it lands on the post it shares —
+    that is the content a moderator can act on, and the author they can reach.
+    """
+    post = _get_post_or_404(db, post_id)
+    target = post.repost_of or post
+    if target.author_id == user.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot report your own post")
+
+    existing = db.scalar(
+        select(PostReport).where(PostReport.post_id == target.id, PostReport.reporter_id == user.id)
+    )
+    if existing is not None:
+        return existing
+
+    report = PostReport(
+        post_id=target.id,
+        reporter_id=user.id,
+        reason=payload.reason,
+        details=payload.details.strip(),
+    )
+    db.add(report)
+    try:
+        db.commit()
+    except IntegrityError:
+        # A second tab raced this one; the row it wrote is the answer.
+        db.rollback()
+        existing = db.scalar(
+            select(PostReport).where(
+                PostReport.post_id == target.id, PostReport.reporter_id == user.id
+            )
+        )
+        if existing is None:
+            raise
+        return existing
+    db.refresh(report)
+    return report
 
 
 @router.delete("/posts/{post_id}/like", response_model=PostOut)

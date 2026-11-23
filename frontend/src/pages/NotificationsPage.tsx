@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Avatar, DisplayName } from '../components/Avatar'
 import { EmptyState, ErrorState, FeedSkeleton, RelativeTime } from '../components/UI'
@@ -7,6 +7,7 @@ import { useRealtime } from '../context/RealtimeContext'
 import { api } from '../lib/api'
 import * as queryCache from '../lib/queryCache'
 import { decrement, setCount } from '../lib/unread'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 import type { Notification } from '../lib/types'
 
 const CACHE_KEY = 'notifications'
@@ -47,23 +48,24 @@ export function NotificationsPage() {
   const navigate = useNavigate()
   const { subscribe } = useRealtime()
 
-  useEffect(() => {
-    let active = true
-    queryCache
-      .load(CACHE_KEY, () => api.notifications())
-      .then((data) => {
-        if (active) setItems(data)
-      })
-      .catch((caught) => {
-        if (active) setError(caught instanceof Error ? caught.message : 'Could not load notifications')
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => {
-      active = false
+  /** Fetch the list, or revalidate the copy already on screen. */
+  const refresh = useCallback(async (force = false) => {
+    setError(null)
+    try {
+      const data = await queryCache.load(CACHE_KEY, () => api.notifications(), undefined, force)
+      setItems(data)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not load notifications')
+    } finally {
+      setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  usePullToRefresh(() => refresh(true))
 
   // A live event carries only ids, so refetch to get the actor's profile.
   useEffect(

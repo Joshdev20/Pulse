@@ -230,6 +230,17 @@ export const api = {
 
   reposts: (id: number) => request<User[]>(`/api/posts/${id}/reposts`),
 
+  /**
+   * Flag a post for moderation. Reporting twice is not an error: the server
+   * returns the complaint it already has, so the client can treat both
+   * outcomes as "received".
+   */
+  reportPost: (id: number, reason: string, details = '') =>
+    request<{ id: number; post_id: number; reason: string; status: string }>(
+      `/api/posts/${id}/report`,
+      { method: 'POST', body: JSON.stringify({ reason, details }) },
+    ),
+
   comments: (postId: number) => request<Comment[]>(`/api/posts/${postId}/comments`),
 
   addComment: (postId: number, body: string, parentId?: number) =>

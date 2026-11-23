@@ -1,8 +1,20 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, DisplayName } from './Avatar'
-import { CommentIcon, EyeIcon, HeartIcon, MoreIcon, RepostIcon, TrashIcon, EditIcon, LinkIcon } from './Icons'
+import {
+  CommentIcon,
+  EyeIcon,
+  HeartIcon,
+  MoreIcon,
+  RepostIcon,
+  ShareIcon,
+  TrashIcon,
+  EditIcon,
+  LinkIcon,
+  WarningIcon,
+} from './Icons'
 import { MediaGallery } from './MediaGallery'
+import { ReportDialog } from './ReportDialog'
 import { TranslatedText } from './TranslatedText'
 import { Dropdown, RelativeTime } from './UI'
 import { api } from '../lib/api'
@@ -62,6 +74,7 @@ export function PostCard({
   const { pathname } = useLocation()
   const [busy, setBusy] = useState(false)
   const [pop, setPop] = useState(false)
+  const [reporting, setReporting] = useState(false)
 
   // A repost row is an envelope: it carries who shared and when, while the
   // content, author and every interaction belong to the original it wraps. So
@@ -127,13 +140,33 @@ export function PostCard({
     }
   }
 
+  const postUrl = `${window.location.origin}/p/${content.id}`
+
   const copyLink = async () => {
-    const url = `${window.location.origin}/p/${content.id}`
     try {
-      await navigator.clipboard.writeText(url)
+      await navigator.clipboard.writeText(postUrl)
     } catch {
-      window.prompt('Copy this link:', url)
+      window.prompt('Copy this link:', postUrl)
     }
+  }
+
+  /**
+   * Share through the OS sheet when the browser has one — on a phone that is
+   * the whole point of the button — and fall back to the link otherwise.
+   */
+  async function share(event: React.MouseEvent) {
+    event.stopPropagation()
+    const data = { title: content.author.display_name, text: content.body.slice(0, 140), url: postUrl }
+    if (navigator.share) {
+      try {
+        await navigator.share(data)
+        return
+      } catch {
+        // The reader dismissed the sheet, or the share failed; the link is
+        // still useful, so fall through to copying it.
+      }
+    }
+    await copyLink()
   }
 
   async function remove() {
@@ -213,6 +246,21 @@ export function PostCard({
                     >
                       <LinkIcon size={16} /> Copy link
                     </button>
+                    {/* Reporting someone else's content. Your own post is
+                        offered edit and delete instead, because complaining
+                        about yourself is not a moderation case. */}
+                    {!isOwnPost && !readOnly && (
+                      <button
+                        type="button"
+                        className="menu-item danger"
+                        onClick={() => {
+                          close()
+                          setReporting(true)
+                        }}
+                      >
+                        <WarningIcon size={16} /> Report post
+                      </button>
+                    )}
                     {/* Editing and deleting act on the row itself, so a repost
                         can be removed but not rewritten. */}
                     {isOwnPost && (
@@ -251,63 +299,79 @@ export function PostCard({
 
           <MediaGallery items={content.media} />
 
+          {/* One bar, two groups: what a reader can do on the left, how far
+              the post has travelled on the right. Keeping the reach readout
+              apart is what stops it reading as a fourth button. */}
           <div className="post-actions">
-            <button
-              type="button"
-              className="action comment"
-              onClick={(event) => {
-                event.stopPropagation()
-                navigate(`/p/${content.id}`)
-              }}
-              aria-label="View comments"
-            >
-              <CommentIcon size={17} />
-              {content.comment_count > 0 && <span>{formatCount(content.comment_count)}</span>}
-            </button>
-
-            <button
-              type="button"
-              className={`action like${content.liked_by_me ? ' liked' : ''}`}
-              onClick={toggleLike}
-              aria-pressed={content.liked_by_me}
-              aria-label={content.liked_by_me ? 'Unlike' : 'Like'}
-            >
-              <span className={pop ? 'heart-pop' : undefined} style={{ display: 'grid' }}>
-                <HeartIcon size={17} filled={content.liked_by_me} />
-              </span>
-              {content.like_count > 0 && <span>{formatCount(content.like_count)}</span>}
-            </button>
-
-            {/* Reposting your own post is rejected by the API, so the button is
-                omitted rather than offered and then refused. */}
-            {!isOwn && (
+            <div className="action-group">
               <button
                 type="button"
-                className={`action repost${content.reposted_by_me ? ' reposted' : ''}`}
-                onClick={toggleRepost}
-                aria-pressed={content.reposted_by_me}
-                aria-label={content.reposted_by_me ? 'Undo repost' : 'Repost'}
-                title={content.reposted_by_me ? 'Undo repost' : 'Repost'}
+                className="action comment"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  navigate(`/p/${content.id}`)
+                }}
+                aria-label={
+                  content.comment_count > 0
+                    ? `View ${content.comment_count} comments`
+                    : 'View comments'
+                }
               >
-                <RepostIcon size={17} active={content.reposted_by_me} />
-                {content.repost_count > 0 && <span>{formatCount(content.repost_count)}</span>}
+                <CommentIcon size={17} />
+                {content.comment_count > 0 && <span>{formatCount(content.comment_count)}</span>}
               </button>
-            )}
 
-            {/* No share action here: the same link is already one tap away in the
-                overflow menu ("Copy link"), and a second button that only did the
-                same thing read as a broken control. */}
+              <button
+                type="button"
+                className={`action like${content.liked_by_me ? ' liked' : ''}`}
+                onClick={toggleLike}
+                aria-pressed={content.liked_by_me}
+                aria-label={content.liked_by_me ? 'Unlike' : 'Like'}
+              >
+                <span className={pop ? 'heart-pop' : undefined} style={{ display: 'grid' }}>
+                  <HeartIcon size={17} filled={content.liked_by_me} />
+                </span>
+                {content.like_count > 0 && <span>{formatCount(content.like_count)}</span>}
+              </button>
 
-            {/* The view count sits in the action row with the other counts,
-                right after the repost control, and reads even at zero so a
-                fresh post still shows a number rather than a gap. */}
+              {/* Reposting your own post is rejected by the API, so the button
+                  is omitted rather than offered and then refused. */}
+              {!isOwn && (
+                <button
+                  type="button"
+                  className={`action repost${content.reposted_by_me ? ' reposted' : ''}`}
+                  onClick={toggleRepost}
+                  aria-pressed={content.reposted_by_me}
+                  aria-label={content.reposted_by_me ? 'Undo repost' : 'Repost'}
+                  title={content.reposted_by_me ? 'Undo repost' : 'Repost'}
+                >
+                  <RepostIcon size={17} active={content.reposted_by_me} />
+                  {content.repost_count > 0 && <span>{formatCount(content.repost_count)}</span>}
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="action share"
+                onClick={share}
+                aria-label="Share post"
+                title="Share"
+              >
+                <ShareIcon size={17} />
+              </button>
+            </div>
+
+            {/* Reach. It reads at zero so a fresh post shows a number rather
+                than a gap, and it is not a control, so it never lights up. */}
             <span className="action views" aria-label={`${content.view_count} views`}>
-              <EyeIcon size={17} />
+              <EyeIcon size={16} />
               <span>{formatCount(content.view_count)}</span>
             </span>
           </div>
         </div>
       </div>
+
+      {reporting && <ReportDialog postId={content.id} onClose={() => setReporting(false)} />}
     </article>
   )
 }

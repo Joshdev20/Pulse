@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Composer } from '../components/Composer'
 import { InfiniteFeed } from '../components/InfiniteFeed'
@@ -8,6 +8,7 @@ import { UsersIcon, SparkIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { usePostFeed } from '../lib/usePostFeed'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 import type { Post } from '../lib/types'
 import { EditPostModal } from '../components/EditPostModal'
 
@@ -52,14 +53,36 @@ export function HomePage() {
   // which is how a reader asks for a fresh arrangement.
   const [seed, setSeed] = useState(() => feedSeed())
 
+  // The loader reads the seed from a ref so a pull-to-refresh can swap it and
+  // reload in one step, without waiting for the new state to render first.
+  const seedRef = useRef(seed)
+  seedRef.current = seed
+
   const feed = usePostFeed(
-    (page) => api.feed(scope, page, 20, seed),
+    (page) => api.feed(scope, page, 20, seedRef.current),
     [scope, user?.id, seed],
     // Keyed by the ordering, not the seed alone: a restored feed must be the
     // same arrangement the reader left. `chooseScope` draws a new seed, so a
     // deliberate reshuffle still lands on a different key.
     `feed:${user?.id}:${scope}:${seed}`,
   )
+
+  /**
+   * Pulling down asks for a fresh arrangement, not the same page again: the
+   * server caches a feed by seed, so a reload of the same seed would return
+   * exactly what is already on screen.
+   */
+  usePullToRefresh(async () => {
+    const fresh = Math.random().toString(36).slice(2, 10)
+    seedRef.current = fresh
+    setSeed(fresh)
+    try {
+      sessionStorage.setItem(FEED_SEED_KEY, fresh)
+    } catch {
+      // See feedSeed: persistence is an optimisation.
+    }
+    await feed.reload()
+  })
 
   const chooseScope = (next: 'following' | 'all') => {
     setScope(next)

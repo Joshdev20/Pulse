@@ -8,6 +8,7 @@ import { CloseIcon, SearchIcon, SparkIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 import type { Post, User } from '../lib/types'
 
 export function SearchPage() {
@@ -45,6 +46,11 @@ export function SearchPage() {
   )
 
   const [posts, people] = results.data ?? [[], []]
+
+  // Only a query has something to re-read; an empty search is a blank page.
+  usePullToRefresh(() => {
+    if (debounced) results.refresh()
+  }, Boolean(debounced))
 
   return (
     <>

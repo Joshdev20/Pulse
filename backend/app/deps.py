@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from .config import settings
 from .database import get_db
@@ -137,7 +138,11 @@ def touch_last_seen(db: Session, user: User) -> None:
     # we do not want to leave a dirty object on the session.
     db.execute(update(User).where(User.id == user.id).values(last_seen_at=stamp))
     db.commit()
-    user.last_seen_at = stamp
+    # Written as committed rather than assigned: a plain assignment leaves the
+    # attribute dirty, so the handler's own commit flushed the same UPDATE a
+    # second time. On a database across an ocean from the app that duplicate
+    # was a whole extra round trip on every request.
+    set_committed_value(user, "last_seen_at", stamp)
 
 
 def get_current_user(
@@ -256,6 +261,18 @@ def presence_of(user: User, include: bool) -> dict[str, object]:
 def serialize_user(
     db: Session, user: User, viewer: User | None = None, *, with_presence: bool = False
 ) -> UserPublic:
+    # Serializing the same person more than once in a request is common — a
+    # sent message is shaped once for the sender and once per other
+    # participant, and each shape embeds the same author — so the counts are
+    # memoized on the session. The database sits far from the app; repeating
+    # these four statements per copy was most of the latency of sending a
+    # message.
+    memo: dict[tuple[int, int | None, bool], UserPublic] = db.info.setdefault("_serialized_users", {})
+    key = (user.id, viewer.id if viewer is not None else None, with_presence)
+    hit = memo.get(key)
+    if hit is not None:
+        return hit.model_copy()
+
     # One round trip for all three aggregates. Counting with scalar queries
     # rather than `len(user.followers)` matters: the relationship loads every
     # Follow row just to take its length, so a popular account paid for its
@@ -284,7 +301,7 @@ def serialize_user(
             )
             is not None
         )
-    return UserPublic(
+    public = UserPublic(
         id=user.id,
         username=user.username,
         display_name=user.display_name,
@@ -303,6 +320,8 @@ def serialize_user(
         is_verified=user.is_verified,
         **presence_of(user, with_presence),
     )
+    memo[key] = public
+    return public.model_copy()
 
 
 def serialize_users(
@@ -312,6 +331,13 @@ def serialize_users(
     if not users:
         return {}
     ids = [user.id for user in users]
+    # Memoized per session like `serialize_user`: one sent message is shaped
+    # once per participant, and each shape re-serialized the same author.
+    memo: dict[tuple, dict[int, UserPublic]] = db.info.setdefault("_serialized_user_batches", {})
+    batch_key = (tuple(sorted(set(ids))), viewer.id if viewer is not None else None, with_presence)
+    cached = memo.get(batch_key)
+    if cached is not None:
+        return {user_id: cached[user_id].model_copy() for user_id in ids}
 
     post_counts = dict(
         db.execute(
@@ -346,7 +372,7 @@ def serialize_users(
 
     # Presence is read once for the whole batch, and only when the caller asked
     # for it, so a follower list does not fan out a lookup per user.
-    return {
+    result = {
         user.id: UserPublic(
             id=user.id,
             username=user.username,
@@ -368,6 +394,8 @@ def serialize_users(
         )
         for user in users
     }
+    memo[batch_key] = result
+    return {user_id: result[user_id].model_copy() for user_id in ids}
 
 
 def record_post_views(
@@ -446,6 +474,8 @@ def serialize_posts(
     *,
     like_counts: dict[int, int] | None = None,
     comment_counts: dict[int, int] | None = None,
+    repost_counts: dict[int, int] | None = None,
+    view_counts: dict[int, int] | None = None,
 ) -> list[PostOut]:
     """Serialize posts, batching like/comment/repost counts and viewer state.
 
@@ -454,10 +484,11 @@ def serialize_posts(
     included in every batched count query, so a repost and the original it
     points at agree on their like and comment totals.
 
-    ``like_counts`` and ``comment_counts`` let a caller that has already counted
-    a wider pool — the feed ranks its whole candidate pool before slicing a
-    page — pass those totals in instead of paying for the same two grouped
-    queries twice. They must cover every post being serialized.
+    ``like_counts``, ``comment_counts``, ``repost_counts`` and ``view_counts``
+    let a caller that has already counted a wider pool — the feed ranks its whole
+    candidate pool before slicing a page — pass those totals in instead of
+    paying for the same grouped queries twice. They must cover every post being
+    serialized.
     """
     if not posts:
         return []
@@ -488,24 +519,26 @@ def serialize_posts(
             ).all()
         )
     # How many times each of these posts has been shared.
-    repost_counts = dict(
-        db.execute(
-            select(Post.repost_of_id, func.count(Post.id))
-            .where(Post.repost_of_id.in_(post_ids))
-            .group_by(Post.repost_of_id)
-        ).all()
-    )
+    if repost_counts is None:
+        repost_counts = dict(
+            db.execute(
+                select(Post.repost_of_id, func.count(Post.id))
+                .where(Post.repost_of_id.in_(post_ids))
+                .group_by(Post.repost_of_id)
+            ).all()
+        )
     # Distinct accounts that have seen each post. One row per (post, viewer) in
     # `post_views` makes this a plain count.
     from .models import PostView
 
-    view_counts = dict(
-        db.execute(
-            select(PostView.post_id, func.count(PostView.id))
-            .where(PostView.post_id.in_(post_ids))
-            .group_by(PostView.post_id)
-        ).all()
-    )
+    if view_counts is None:
+        view_counts = dict(
+            db.execute(
+                select(PostView.post_id, func.count(PostView.id))
+                .where(PostView.post_id.in_(post_ids))
+                .group_by(PostView.post_id)
+            ).all()
+        )
 
     liked_ids: set[int] = set()
     reposted_ids: set[int] = set()

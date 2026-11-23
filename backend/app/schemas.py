@@ -504,3 +504,67 @@ class AdminCommentPage(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+# The complaint codes a report can carry. Codes rather than free text, so the
+# moderation queue can be grouped, filtered and counted without parsing what the
+# reporter typed.
+REPORT_REASONS = ("spam", "harassment", "misleading", "explicit", "other")
+
+
+class ReportCreate(BaseModel):
+    reason: str = Field(max_length=32)
+    details: str = Field(default="", max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _known_reason(cls, value: str) -> str:
+        code = value.strip().lower()
+        if code not in REPORT_REASONS:
+            raise ValueError(f"reason must be one of: {', '.join(REPORT_REASONS)}")
+        return code
+
+
+class ReportOut(BaseModel):
+    """What the reporter is told: their complaint exists, and in what state."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    post_id: int
+    reason: str
+    details: str
+    status: str
+    created_at: UTCDatetime
+
+
+class AdminReport(BaseModel):
+    """One row of the moderation queue, flattened so the client needs no joins."""
+
+    id: int
+    post_id: int
+    post_body: str
+    post_created_at: UTCDatetime
+    post_deleted: bool
+    author_username: str
+    author_display_name: str
+    reporter_username: str
+    reporter_display_name: str
+    reason: str
+    details: str
+    status: str
+    created_at: UTCDatetime
+
+
+class AdminReportPage(BaseModel):
+    items: list[AdminReport]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
+class ReportResolve(BaseModel):
+    """``dismiss`` clears the complaint; ``remove`` deletes the post as well."""
+
+    action: Literal["dismiss", "remove"]

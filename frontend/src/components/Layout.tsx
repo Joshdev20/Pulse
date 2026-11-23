@@ -347,9 +347,10 @@ export function AppShell({
 }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  // An open conversation owns the bottom-right corner: the thread's send button
-  // lives there, so the floating compose button would sit on top of it.
-  const inThread = /^\/messages\/\d+/.test(pathname)
+  // An open conversation or a post's own page owns the bottom-right corner: the
+  // thread's send button and the reply form both live there, so the floating
+  // compose button would sit on top of them.
+  const inThread = /^\/(messages|p)\/\d+/.test(pathname)
 
   return (
     <div className="app">

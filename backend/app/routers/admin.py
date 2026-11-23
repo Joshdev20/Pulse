@@ -22,6 +22,7 @@ from ..models import (
     Message,
     Notification,
     Post,
+    PostReport,
     Tag,
     User,
     utcnow,
@@ -34,6 +35,8 @@ from ..schemas import (
     AdminFlagUpdate,
     AdminPost,
     AdminPostPage,
+    AdminReport,
+    AdminReportPage,
     AdminStats,
     AdminUser,
     AdminUserPage,
@@ -41,6 +44,7 @@ from ..schemas import (
     AnnouncementBroadcast,
     AnnouncementBroadcastResult,
     PostUpdate,
+    ReportResolve,
     UserModeration,
 )
 from ..tagging import extract_tag_names, resolve_tags
@@ -534,6 +538,101 @@ def delete_post(post_id: int, db: DbSession, _admin: CurrentAdmin) -> None:
     _invalidate()
     for name in stored_names:
         storage.delete(name)
+
+
+@router.get("/reports", response_model=AdminReportPage)
+def list_reports(
+    db: DbSession,
+    _admin: CurrentAdmin,
+    status_filter: str = Query("open", alias="status", pattern="^(open|dismissed|actioned|all)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> AdminReportPage:
+    """The report queue, newest first.
+
+    ``open`` is the default because that is the work; the other states exist so a
+    moderator can see what was already handled and by whom it was dismissed.
+    """
+    query = select(PostReport)
+    if status_filter != "all":
+        query = query.where(PostReport.status == status_filter)
+
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    reports = list(
+        db.scalars(
+            query.order_by(PostReport.created_at.desc(), PostReport.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+    )
+    return AdminReportPage(
+        items=[_serialize_report(report) for report in reports],
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=page * page_size < total,
+    )
+
+
+def _serialize_report(report: PostReport) -> AdminReport:
+    post = report.post
+    return AdminReport(
+        id=report.id,
+        post_id=report.post_id,
+        post_body=post.body if post is not None else "",
+        post_created_at=post.created_at if post is not None else report.created_at,
+        post_deleted=post is None,
+        author_username=post.author.username if post is not None else "",
+        author_display_name=post.author.display_name if post is not None else "",
+        reporter_username=report.reporter.username,
+        reporter_display_name=report.reporter.display_name,
+        reason=report.reason,
+        details=report.details,
+        status=report.status,
+        created_at=report.created_at,
+    )
+
+
+@router.post("/reports/{report_id}/resolve", response_model=AdminReport)
+def resolve_report(
+    report_id: int, payload: ReportResolve, db: DbSession, admin: CurrentAdmin
+) -> AdminReport:
+    """Close a report, optionally removing the post it is about.
+
+    ``remove`` deletes the post and closes every other open report about it in
+    the same pass, so one decision clears the whole queue entry rather than
+    leaving duplicates for the next moderator to re-decide.
+    """
+    report = db.get(PostReport, report_id)
+    if report is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+
+    post = db.get(Post, report.post_id)
+    if payload.action == "remove" and post is not None:
+        stored_names = [
+            row[0] for row in db.execute(select(Media.stored_name).where(Media.post_id == post.id)).all()
+        ]
+        db.delete(post)
+        db.flush()
+        for other in db.scalars(
+            select(PostReport).where(PostReport.post_id == report.post_id, PostReport.status == "open")
+        ).all():
+            other.status = "actioned"
+            other.resolved_at = utcnow()
+            other.resolved_by_id = admin.id
+        db.commit()
+        _invalidate()
+        for name in stored_names:
+            storage.delete(name)
+        db.refresh(report)
+        return _serialize_report(report)
+
+    report.status = "dismissed"
+    report.resolved_at = utcnow()
+    report.resolved_by_id = admin.id
+    db.commit()
+    db.refresh(report)
+    return _serialize_report(report)
 
 
 @router.get("/comments", response_model=AdminCommentPage)

@@ -316,6 +316,38 @@ class PostView(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class PostReport(Base):
+    """One account's complaint about one post.
+
+    Unique per (post, reporter): reporting twice is the same complaint, so the
+    second insert is treated as "already reported" rather than as a new row the
+    moderator has to read again.
+    """
+
+    __tablename__ = "post_reports"
+    __table_args__ = (UniqueConstraint("post_id", "reporter_id", name="uq_post_report"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), index=True)
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # A code from REPORT_REASONS, so the queue can be counted and filtered
+    # without parsing what the reporter typed.
+    reason: Mapped[str] = mapped_column(String(32))
+    details: Mapped[str] = mapped_column(Text, default="")
+    # open | dismissed | actioned
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Both are read by the moderation queue, which shows the post and who
+    # complained. `selectin` keeps a page of reports to one query per side.
+    post: Mapped[Post] = relationship(lazy="selectin")
+    reporter: Mapped[User] = relationship(foreign_keys=[reporter_id], lazy="selectin")
+
+
 class Media(Base):
     """An uploaded file. ``stored_name`` is server-generated, never client input."""
 
