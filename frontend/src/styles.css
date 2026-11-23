@@ -777,6 +777,11 @@ h4 {
   border-top: 1px solid var(--border);
 }
 
+/* Off reads as off: the icon loses its accent and the button says so. */
+.autoplay-toggle[aria-pressed='false'] {
+  color: var(--text-faint);
+}
+
 .sidebar-foot-label {
   font-size: 12.5px;
   color: var(--text-faint);

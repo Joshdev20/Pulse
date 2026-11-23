@@ -4,6 +4,7 @@ import { AccountList } from './AccountList'
 import { Avatar, DisplayName } from './Avatar'
 import { PulseMark } from './PulseLogo'
 import { ThemeToggle } from './ThemeToggle'
+import { AutoplayToggle } from './AutoplayToggle'
 import {
   BellIcon,
   CompassIcon,
@@ -191,7 +192,8 @@ export function Sidebar({ onCompose }: { onCompose: () => void }) {
       )}
       <div className="sidebar-foot">
         <ThemeToggle />
-        <span className="sidebar-foot-label">Appearance</span>
+        <AutoplayToggle />
+        <span className="sidebar-foot-label">Preferences</span>
       </div>
     </aside>
   )
