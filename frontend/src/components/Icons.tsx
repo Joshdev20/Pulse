@@ -461,6 +461,21 @@ export const VideoOffIcon = (p: IconProps) => (
   </Base>
 )
 
+export const VolumeIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 9.4h3.1L12 5.4v13.2l-4.9-4H4z" />
+    <path d="M15.4 9.2a4 4 0 0 1 0 5.6" />
+    <path d="M18 6.7a7.6 7.6 0 0 1 0 10.6" />
+  </Base>
+)
+
+export const VolumeOffIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 9.4h3.1L12 5.4v13.2l-4.9-4H4z" />
+    <path d="m15.8 9.8 4.4 4.4M20.2 9.8l-4.4 4.4" />
+  </Base>
+)
+
 export const CameraFlipIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M4 9V7.5A2.5 2.5 0 0 1 6.5 5H12" />

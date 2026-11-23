@@ -2539,6 +2539,7 @@ h4 {
 .media-cell {
   position: relative;
   display: block;
+  width: 100%;
   padding: 0;
   border: 0;
   background: var(--surface-3);
@@ -2546,6 +2547,11 @@ h4 {
   overflow: hidden;
   min-height: 120px;
   max-height: 420px;
+}
+
+.media-cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
 }
 
 .media-count-1 .media-cell {
@@ -2575,6 +2581,36 @@ h4 {
 
 .media-cell:hover .media-el {
   transform: scale(1.025);
+}
+
+/* Sound for the clip playing in this tile. Sits opposite the duration badge
+   so neither hides the other. */
+.media-sound {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(4, 5, 8, 0.62);
+  color: #fff;
+  backdrop-filter: blur(6px);
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.media-sound:hover {
+  background: rgba(4, 5, 8, 0.82);
+}
+
+.media-sound.on {
+  background: #fff;
+  color: #0b0d12;
+  border-color: #fff;
 }
 
 /* A clip playing in its tile. It covers the poster frame and lets the click
@@ -6224,6 +6260,10 @@ body {
   inset: 0;
   z-index: 220;
   display: grid;
+  /* An implicit column is sized by its widest item, so one long unbroken
+     caption used to widen the track past the screen and carry the close
+     button off the right edge. A floored 1fr cannot do that. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: radial-gradient(circle at 50% 26%, rgba(24, 28, 40, 0.94), rgba(3, 4, 7, 0.975) 68%);
   backdrop-filter: blur(18px);
@@ -6248,6 +6288,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
   padding: max(14px, env(safe-area-inset-top)) 16px 6px;
 }
 
@@ -6395,13 +6436,17 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  min-width: 0;
   padding: 8px 22px max(18px, env(safe-area-inset-bottom));
   text-align: center;
 }
 
 .viewer-caption {
   margin: 0;
-  max-width: 62ch;
+  /* `62ch` is wider than a phone, and an uploaded file name has no spaces to
+     wrap at, so both a cap and a break rule are needed. */
+  max-width: min(62ch, 100%);
+  overflow-wrap: anywhere;
   color: var(--viewer-fg);
   font-size: 14px;
   line-height: 1.5;

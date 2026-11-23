@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { DownloadIcon, FileIcon, PlayIcon } from './Icons'
+import { DownloadIcon, FileIcon, PlayIcon, VolumeIcon, VolumeOffIcon } from './Icons'
 import { MediaViewer } from './MediaViewer'
 import { VoiceNotePlayer } from './VoiceNotePlayer'
 import { useMediaStatus, useMediaUrl } from '../lib/useMediaUrl'
-import { useAutoplay } from '../lib/preferences'
+import { setInlineSoundOwner, useAutoplay, useInlineSound } from '../lib/preferences'
 import { primeMedia } from '../lib/mediaCache'
 import { useMediaReady } from '../lib/useMediaReady'
 import { useVideoPoster } from '../lib/videoPoster'
@@ -74,7 +74,8 @@ function MediaCell({
   // reader turned that off. It is always muted: sound on an unattended
   // autoplay is the one thing every browser blocks and every reader hates.
   const autoplay = useAutoplay()
-  const cellRef = useRef<HTMLButtonElement | null>(null)
+  const sound = useInlineSound(item.id)
+  const cellRef = useRef<HTMLDivElement | null>(null)
   const [inView, setInView] = useState(false)
   const [nearby, setNearby] = useState(false)
   const playing = item.kind === 'video' && autoplay && inView && !paused
@@ -85,6 +86,13 @@ function MediaCell({
   const { asset: clip } = useMediaStatus(
     item.kind === 'video' && autoplay && (playing || nearby) ? item.url : null,
   )
+
+  // Sound is handed back when the tile stops playing: a clip that starts
+  // again after a scroll cannot legally start unmuted, so holding the grant
+  // would only leave a paused tile behind a speaker icon.
+  useEffect(() => {
+    if (!playing && sound) setInlineSoundOwner(null)
+  }, [playing, sound])
 
   useEffect(() => {
     if (item.kind !== 'video' || !autoplay) {
@@ -131,12 +139,18 @@ function MediaCell({
   const warm = () => primeMedia(item.url)
 
   return (
-    <button
+    <div
       ref={cellRef}
-      type="button"
+      role="button"
+      tabIndex={0}
       className="media-cell"
       onClick={(event) => {
         event.stopPropagation()
+        onOpen()
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
         onOpen()
       }}
       onPointerEnter={warm}
@@ -150,7 +164,7 @@ function MediaCell({
             ref={mediaRef}
             className={`media-el${ready ? ' ready' : ''}${failed ? ' failed' : ''}`}
             src={asset?.url}
-            muted
+            muted={!sound}
             playsInline
             autoPlay={playing}
             loop
@@ -193,7 +207,7 @@ function MediaCell({
             <video
               className="media-el media-inline ready"
               src={clip.url}
-              muted
+              muted={!sound}
               loop
               playsInline
               autoPlay
@@ -219,7 +233,22 @@ function MediaCell({
           </>
         )
       )}
-    </button>
+      {playing && (
+        <button
+          type="button"
+          className={`media-sound${sound ? ' on' : ''}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            setInlineSoundOwner(sound ? null : item.id)
+          }}
+          aria-label={sound ? 'Mute this clip' : 'Unmute this clip'}
+          aria-pressed={sound}
+          title={sound ? 'Mute' : 'Unmute'}
+        >
+          {sound ? <VolumeIcon size={16} /> : <VolumeOffIcon size={16} />}
+        </button>
+      )}
+    </div>
   )
 }
 

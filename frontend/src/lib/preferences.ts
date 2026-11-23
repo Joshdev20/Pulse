@@ -54,6 +54,40 @@ export function useAutoplay(): boolean {
   return useSyncExternalStore(subscribe, isAutoplayEnabled, () => true)
 }
 
+/**
+ * Which inline clip, if any, is allowed to make noise.
+ *
+ * Autoplay is silent by default and every browser refuses to start an
+ * unmuted clip without a gesture, so sound is granted one clip at a time by
+ * the reader tapping its speaker. A single owner also means two tiles can
+ * never talk over each other.
+ */
+let soundOwner: number | null = null
+const soundListeners = new Set<() => void>()
+
+export function setInlineSoundOwner(mediaId: number | null): void {
+  if (soundOwner === mediaId) return
+  soundOwner = mediaId
+  for (const listener of soundListeners) listener()
+}
+
+export function inlineSoundOwner(): number | null {
+  return soundOwner
+}
+
+export function useInlineSound(mediaId: number): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      soundListeners.add(listener)
+      return () => {
+        soundListeners.delete(listener)
+      }
+    },
+    () => soundOwner === mediaId,
+    () => false,
+  )
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
     if (event.key !== AUTOPLAY_KEY) return
