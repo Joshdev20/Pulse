@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronLeftIcon, CloseIcon, DownloadIcon, PlayIcon } from './Icons'
+import { ChevronLeftIcon, CloseIcon, DownloadIcon } from './Icons'
 import { useMediaStatus } from '../lib/useMediaUrl'
 import { primeMedia } from '../lib/mediaCache'
 import { useMediaReady } from '../lib/useMediaReady'
@@ -38,6 +38,10 @@ export function MediaViewer({
   const item = items[index]
   const many = items.length > 1
   const autoplay = useAutoplay()
+  // The download link needs a blob URL (the media endpoint wants the auth
+  // header, which a plain `href` cannot send). The stage holds the same
+  // subscription, and the cache dedupes, so this is one download.
+  const { asset: currentAsset } = useMediaStatus(item.poster_url ?? item.url)
   // Where the media sits while a gesture is in progress. Kept apart from the
   // committed state so a cancelled drag snaps back with a transition.
   const [drag, setDrag] = useState({ x: 0, y: 0, active: false })
@@ -186,8 +190,24 @@ export function MediaViewer({
       <div className="viewer-bar" onClick={(event) => event.stopPropagation()}>
         <span className="viewer-count">
           {many ? `${index + 1} / ${items.length}` : item.kind === 'video' ? 'Video' : 'Photo'}
+          {item.kind === 'video' && item.duration_ms != null && (
+            <span className="viewer-count-dur">
+              {formatDuration(item.duration_ms / 1000)}
+            </span>
+          )}
         </span>
         <div className="viewer-bar-actions">
+          {item.kind === 'image' && currentAsset && (
+            <a
+              className="viewer-btn"
+              href={currentAsset.url}
+              download={currentAsset.filename ?? undefined}
+              aria-label="Download"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <DownloadIcon size={18} />
+            </a>
+          )}
           <button type="button" className="viewer-btn" onClick={close} aria-label="Close viewer">
             <CloseIcon size={20} />
           </button>
@@ -282,11 +302,6 @@ function ViewerStage({
           onLoadedData={markReady}
           onError={markReady}
         />
-        {item.duration_ms != null && (
-          <span className="viewer-duration">
-            <PlayIcon size={12} /> {formatDuration(item.duration_ms / 1000)}
-          </span>
-        )}
       </div>
     )
   }
@@ -304,15 +319,6 @@ function ViewerStage({
         onLoad={markReady}
         onError={markReady}
       />
-      <a
-        className="viewer-download"
-        href={asset?.url}
-        download={asset?.filename ?? undefined}
-        onClick={(event) => event.stopPropagation()}
-        aria-label="Download"
-      >
-        <DownloadIcon size={16} />
-      </a>
     </div>
   )
 }
