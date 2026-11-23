@@ -6212,6 +6212,9 @@ body {
   backdrop-filter: blur(18px);
   touch-action: none;
   animation: viewer-in 0.22s ease both;
+  /* Nothing may escape the overlay: a clip wider than the stage used to run
+     off the right edge and drag the whole page sideways with it. */
+  overflow: hidden;
 }
 
 @keyframes viewer-in {
@@ -6269,6 +6272,9 @@ body {
 .viewer-stage {
   display: grid;
   place-items: center;
+  /* A grid item refuses to shrink below its content unless told to, so a wide
+     clip widened the column past the viewport instead of being scaled down. */
+  min-width: 0;
   min-height: 0;
   padding: 0 14px;
   will-change: transform;
@@ -6289,9 +6295,16 @@ body {
 
 .viewer-media {
   display: block;
-  max-width: 100%;
+  width: auto;
+  height: auto;
+  /* The width cap is a viewport length, not a percentage of the wrapper. A
+     percentage would be circular — the wrapper is only as wide as the clip —
+     and WebKit resolves that circle by letting the clip's intrinsic width win,
+     which is how a landscape video ended up wider than the screen. */
+  max-width: min(100%, calc(100vw - 28px));
   max-height: calc(100vh - 190px);
   max-height: calc(100dvh - 190px);
+  object-fit: contain;
   border-radius: 18px;
   background: #000;
   box-shadow: 0 34px 90px rgba(0, 0, 0, 0.6);
